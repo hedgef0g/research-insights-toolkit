@@ -49,6 +49,7 @@ import {
   LABEL_SCAN_COLUMNS_LEFT,
   detectMetricRowsFromLeftLabels,
   formatMetricDetectionDiagnostics,
+  buildAutoCalculationPlan,
 } from "../core/metric-detector";
 
 /**
@@ -146,6 +147,18 @@ async function runSignificanceFromSelection() {
 
     const outputElement = document.getElementById("significance-result"); // Result block in task pane.
 
+        const leftLabelValues = await loadLeftLabelsForSelectedRange(
+      context,
+      selectedRange
+    );
+
+    const detectionResult = detectMetricRowsFromLeftLabels(
+      selectedValues,
+      leftLabelValues
+    );
+
+    const autoPlan = buildAutoCalculationPlan(detectionResult);
+
     if (
       !selectedValues ||
       selectedValues.length < 2 ||
@@ -155,6 +168,48 @@ async function runSignificanceFromSelection() {
         "Please select at least 2 columns and 2 rows. Last row must contain bases.";
       return;
     }
+
+    if (autoPlan.metricType === "mean") {
+  const allResults = compareMeansUsingSpreadAndBaseRows(
+    cleanedValues,
+    autoPlan.spreadType
+  );
+
+  const markerMatrix = buildSignificanceMarkerMatrix(allResults, 1);
+
+  const columnCount = selectedValues[0].length;
+
+  for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+    const markers = markerMatrix[0][columnIndex];
+
+    if (!markers) {
+      continue;
+    }
+
+    const currentCell = selectedRange.getCell(0, columnIndex);
+
+    const displayedValueWithoutMarkers =
+      removeSignificanceMarkersFromText(
+        selectedText[0][columnIndex]
+      );
+
+    currentCell.values = [
+      [`${displayedValueWithoutMarkers} ${markers}`.trim()],
+    ];
+
+    currentCell.format.font.bold = true;
+    currentCell.format.fill.color = "#E2F0D9";
+  }
+
+  await context.sync();
+
+  outputElement.textContent =
+    autoPlan.spreadType === "standardDeviation"
+      ? "Auto detected: Mean + SD"
+      : "Auto detected: Mean + Variance";
+
+  return;
+}
 
     const allResults = compareAllRowsUsingBottomBases(cleanedValues);
 
@@ -608,4 +663,45 @@ async function runMetricDetectionDiagnostics() {
     outputElement.textContent =
       formatMetricDetectionDiagnostics(detectionResult);
   });
+}
+
+/**
+ * Reads left-side labels for selected range.
+ *
+ * PURPOSE:
+ * Shared helper for auto metric detection.
+ */
+async function loadLeftLabelsForSelectedRange(context, selectedRange) {
+  selectedRange.load(["rowIndex", "columnIndex", "rowCount"]);
+
+  await context.sync();
+
+  const selectedStartRowIndex = selectedRange.rowIndex;
+  const selectedStartColumnIndex = selectedRange.columnIndex;
+  const selectedRowCount = selectedRange.rowCount;
+
+  if (selectedStartColumnIndex === 0) {
+    return [];
+  }
+
+  const labelColumnCount = Math.min(
+    LABEL_SCAN_COLUMNS_LEFT,
+    selectedStartColumnIndex
+  );
+
+  const labelStartColumnIndex =
+    selectedStartColumnIndex - labelColumnCount;
+
+  const leftLabelRange = selectedRange.worksheet.getRangeByIndexes(
+    selectedStartRowIndex,
+    labelStartColumnIndex,
+    selectedRowCount,
+    labelColumnCount
+  );
+
+  leftLabelRange.load("values");
+
+  await context.sync();
+
+  return leftLabelRange.values;
 }

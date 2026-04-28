@@ -288,3 +288,52 @@ export function formatMetricDetectionDiagnostics(detectionResult) {
 
   return outputLines.join("\n");
 }
+
+/**
+ * Builds auto-calculation plan from detected row labels.
+ *
+ * PURPOSE:
+ * First supported smart mode:
+ * Mean + SD/Variance + Base
+ *
+ * If pattern is not found, fallback to proportions.
+ */
+export function buildAutoCalculationPlan(detectionResult) {
+  const detectedRows = detectionResult.rowDiagnostics; // All classified rows.
+
+  if (detectedRows.length >= 3) {
+    const firstRowType = detectedRows[0].rowType;
+    const secondRowType = detectedRows[1].rowType;
+    const thirdRowType = detectedRows[2].rowType;
+
+    const isMeanWithStandardDeviation =
+      firstRowType === "mean" &&
+      secondRowType === "standardDeviation" &&
+      thirdRowType === "base";
+
+    if (isMeanWithStandardDeviation) {
+      return {
+        metricType: "mean",
+        spreadType: "standardDeviation",
+        baseRowIndex: 2,
+      };
+    }
+
+    const isMeanWithVariance =
+      firstRowType === "mean" &&
+      secondRowType === "variance" &&
+      thirdRowType === "base";
+
+    if (isMeanWithVariance) {
+      return {
+        metricType: "mean",
+        spreadType: "variance",
+        baseRowIndex: 2,
+      };
+    }
+  }
+
+  return {
+    metricType: "proportion",
+  };
+}
