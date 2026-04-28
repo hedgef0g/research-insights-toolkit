@@ -55,6 +55,10 @@ async function runSignificanceFromSelection() {
 
     selectedRange.load(["values", "text", "rowCount", "columnCount"]); // Load raw and displayed cell content.
 
+    // Center all cells in the selected range after macro execution.
+    selectedRange.format.horizontalAlignment = "Center";
+    selectedRange.format.verticalAlignment = "Center";
+
     await context.sync();
 
     const selectedValues = selectedRange.values; // Raw values used for calculations.
@@ -96,6 +100,10 @@ async function runSignificanceFromSelection() {
         const displayedValue = selectedText[rowIndex][columnIndex]; // Current visible cell text.
 
         currentCell.values = [[`${displayedValue}${markers}`]];
+
+        // Format cells where the value is significantly higher than at least one other column.
+        currentCell.format.font.bold = true; // Make the whole cell text bold.
+        currentCell.format.fill.color = "#E2F0D9"; // Pale green fill.
       }
     }
 
