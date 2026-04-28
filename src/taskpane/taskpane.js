@@ -5,41 +5,17 @@
 
 /* global console, document, Excel, Office */
 
-Office.onReady((info) => {
-  if (info.host === Office.HostType.Excel) {
-    document.getElementById("sideload-msg").style.display = "none";
-    document.getElementById("app-body").style.display = "flex";
-    document.getElementById("run").onclick = run;
-  }
-});
-
-export async function run() {
-  try {
-    await Excel.run(async (context) => {
-      /**
-       * Insert your Excel code here
-       */
-      const range = context.workbook.getSelectedRange();
-
-      // Read the range address
-      range.load("address");
-
-      // Update the fill color
-      range.format.fill.color = "yellow";
-
-      await context.sync();
-      console.log(`The range address was ${range.address}.`);
-    });
-  } catch (error) {
-    console.error(error);
-  }
-}
-
 import {
-  compareAllRowsUsingBottomBases,
+  createEmptyMarkerMatrix,
+  applyComparisonResultsToFullMarkerMatrix,
+  keepMarkersOnlyInAllowedRows,
+  compareProportionRowsUsingBaseRow,
+  compareMeanBlockByRowIndexes,
+  compareNpsStructureBlockByRowIndexes,
+  compareNpsSpreadBlockByRowIndexes,
+  removeSignificanceMarkersFromMatrix,
   buildSignificanceMarkerMatrix,
   removeSignificanceMarkersFromText,
-  removeSignificanceMarkersFromMatrix,
   compareMeansUsingSpreadAndBaseRows,
   compareNpsUsingStructureRows,
   compareNpsUsingSpreadAndBaseRows,
@@ -49,80 +25,115 @@ import {
   LABEL_SCAN_COLUMNS_LEFT,
   detectMetricRowsFromLeftLabels,
   formatMetricDetectionDiagnostics,
-  buildAutoCalculationPlan,
+  buildCalculationBlocks,
+  getAllowedMarkerRowIndexes,
 } from "../core/metric-detector";
 
 /**
  * Initializes task pane events after Office is ready.
  *
  * PURPOSE:
- * Connect the visible button in the Excel panel with our calculation logic.
+ * Connect visible task pane buttons with calculation and utility logic.
  */
-Office.onReady(() => {
-  const calculateButton = document.getElementById("calculate-significance");
-  const clearButton = document.getElementById("clear-significance");
+Office.onReady((info) => {
+  if (info.host === Office.HostType.Excel) {
+    const sideloadMessage = document.getElementById("sideload-msg"); // Default Office template loading message.
+    const appBody = document.getElementById("app-body"); // Main task pane body.
+
+    if (sideloadMessage) {
+      sideloadMessage.style.display = "none";
+    }
+
+    if (appBody) {
+      appBody.style.display = "flex";
+    }
+  }
+
+  const calculateButton = document.getElementById("calculate-significance"); // Unified auto-detection button.
+  const clearButton = document.getElementById("clear-significance"); // Button for removing markers.
 
   const calculateMeanSignificanceSdButton = document.getElementById(
     "calculate-mean-significance-sd"
-  );
+  ); // Explicit mean + SD button.
 
   const calculateMeanSignificanceVarianceButton = document.getElementById(
     "calculate-mean-significance-variance"
-  );
-
-  calculateButton.addEventListener("click", runSignificanceFromSelection);
-
-  clearButton.addEventListener("click", clearSignificanceFromSelection);
-
-  calculateMeanSignificanceSdButton.addEventListener("click", () =>
-    runMeanSignificanceFromSelection("standardDeviation")
-  );
-
-  calculateMeanSignificanceVarianceButton.addEventListener("click", () =>
-    runMeanSignificanceFromSelection("variance")
-  );
+  ); // Explicit mean + variance button.
 
   const calculateNpsStructureButton = document.getElementById(
     "calculate-nps-significance-structure"
-  );
-  
+  ); // Explicit NPS + promoters/detractors button.
+
   const calculateNpsSdButton = document.getElementById(
     "calculate-nps-significance-sd"
-  );
-  
+  ); // Explicit NPS + SD button.
+
   const calculateNpsVarianceButton = document.getElementById(
     "calculate-nps-significance-variance"
-  );
-  
-  calculateNpsStructureButton.addEventListener(
-    "click",
-    runNpsSignificanceFromStructureSelection
-  );
-  
-  calculateNpsSdButton.addEventListener("click", () =>
-    runNpsSignificanceFromSpreadSelection("standardDeviation")
-  );
+  ); // Explicit NPS + variance button.
 
-  calculateNpsVarianceButton.addEventListener("click", () =>
-    runNpsSignificanceFromSpreadSelection("variance")
-  );
+  const detectMetricTypeButton = document.getElementById("detect-metric-type"); // Diagnostic detector button.
 
-  const detectMetricTypeButton = document.getElementById("detect-metric-type");
+  if (calculateButton) {
+    calculateButton.addEventListener("click", runSignificanceFromSelection);
+  }
 
-  detectMetricTypeButton.addEventListener(
-    "click",
-    runMetricDetectionDiagnostics
-  );
+  if (clearButton) {
+    clearButton.addEventListener("click", clearSignificanceFromSelection);
+  }
+
+  if (calculateMeanSignificanceSdButton) {
+    calculateMeanSignificanceSdButton.addEventListener("click", () =>
+      runMeanSignificanceFromSelection("standardDeviation")
+    );
+  }
+
+  if (calculateMeanSignificanceVarianceButton) {
+    calculateMeanSignificanceVarianceButton.addEventListener("click", () =>
+      runMeanSignificanceFromSelection("variance")
+    );
+  }
+
+  if (calculateNpsStructureButton) {
+    calculateNpsStructureButton.addEventListener(
+      "click",
+      runNpsSignificanceFromStructureSelection
+    );
+  }
+
+  if (calculateNpsSdButton) {
+    calculateNpsSdButton.addEventListener("click", () =>
+      runNpsSignificanceFromSpreadSelection("standardDeviation")
+    );
+  }
+
+  if (calculateNpsVarianceButton) {
+    calculateNpsVarianceButton.addEventListener("click", () =>
+      runNpsSignificanceFromSpreadSelection("variance")
+    );
+  }
+
+  if (detectMetricTypeButton) {
+    detectMetricTypeButton.addEventListener(
+      "click",
+      runMetricDetectionDiagnostics
+    );
+  }
 });
 
 /**
- * Reads selected Excel range, calculates pairwise significance,
- * and writes significance letters directly into value cells.
+ * Reads selected Excel range, detects metric blocks, calculates pairwise significance,
+ * and writes significance letters only into actual value rows.
  *
- * MVP v0.3:
- * - Last selected row is treated as bases.
- * - All rows above are treated as values.
- * - Significant higher values receive labels of lower columns.
+ * PURPOSE:
+ * Unified auto mode for complex tables.
+ * One selected range may contain proportions, means, and NPS blocks.
+ *
+ * SUPPORTED BLOCKS:
+ * - Proportions + Base
+ * - Mean + SD/Variance + Base
+ * - NPS + Promoters + Detractors + Base
+ * - NPS + SD/Variance + Base
  */
 async function runSignificanceFromSelection() {
   await Excel.run(async (context) => {
@@ -136,28 +147,9 @@ async function runSignificanceFromSelection() {
 
     await context.sync();
 
-    const selectedValues = selectedRange.values; // Raw values used for calculations.
-    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
-
-    // Remove old significance markers before running a new calculation.
-    selectedRange.values = cleanedValues;
-
-    await context.sync();
-    const selectedText = selectedRange.text; // Displayed values used for visible output.
-
+    const selectedValues = selectedRange.values; // Raw values used for initial validation and cleanup.
+    const selectedText = selectedRange.text; // Displayed values used for preserving visible formatting.
     const outputElement = document.getElementById("significance-result"); // Result block in task pane.
-
-        const leftLabelValues = await loadLeftLabelsForSelectedRange(
-      context,
-      selectedRange
-    );
-
-    const detectionResult = detectMetricRowsFromLeftLabels(
-      selectedValues,
-      leftLabelValues
-    );
-
-    const autoPlan = buildAutoCalculationPlan(detectionResult);
 
     if (
       !selectedValues ||
@@ -165,231 +157,117 @@ async function runSignificanceFromSelection() {
       selectedValues[0].length < 2
     ) {
       outputElement.textContent =
-        "Please select at least 2 columns and 2 rows. Last row must contain bases.";
+        "Please select at least 2 columns and 2 rows.";
       return;
     }
 
-    // Ветка mean
-    if (autoPlan.metricType === "mean") {
-  const allResults = compareMeansUsingSpreadAndBaseRows(
-    cleanedValues,
-    autoPlan.spreadType
-  );
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues); // Values without old significance letters.
 
-  const markerMatrix = buildSignificanceMarkerMatrix(allResults, 1);
-
-  const columnCount = selectedValues[0].length;
-
-  for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
-    const markers = markerMatrix[0][columnIndex];
-
-    if (!markers) {
-      continue;
-    }
-
-    const currentCell = selectedRange.getCell(0, columnIndex);
-
-    const displayedValueWithoutMarkers =
-      removeSignificanceMarkersFromText(
-        selectedText[0][columnIndex]
-      );
-
-    currentCell.values = [
-      [`${displayedValueWithoutMarkers} ${markers}`.trim()],
-    ];
-
-    currentCell.format.font.bold = true;
-    currentCell.format.fill.color = "#E2F0D9";
-  }
-
-  await context.sync();
-
-  outputElement.textContent =
-    autoPlan.spreadType === "standardDeviation"
-      ? "Auto detected: Mean + SD"
-      : "Auto detected: Mean + Variance";
-
-  return;
-  }
-      // Ветка NPS
-  if (autoPlan.metricType === "npsStructure") {
-  const allResults = compareNpsUsingStructureRows(cleanedValues);
-
-  if (allResults === null) {
-    outputElement.textContent =
-      "Auto detected NPS structure, but could not calculate significance.";
-    return;
-  }
-
-  // Only the first row, the NPS row, should receive markers.
-  const markerMatrix = buildSignificanceMarkerMatrix(allResults, 1);
-
-  const columnCount = selectedValues[0].length;
-
-  for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
-    const markers = markerMatrix[0][columnIndex];
-
-    if (!markers) {
-      continue;
-    }
-
-    const currentCell = selectedRange.getCell(0, columnIndex);
-
-    const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
-      selectedText[0][columnIndex]
-    );
-
-    currentCell.values = [
-      [`${displayedValueWithoutMarkers} ${markers}`.trim()],
-    ];
-
-    currentCell.format.font.bold = true;
-    currentCell.format.fill.color = "#E2F0D9";
-  }
-
-  await context.sync();
-
-  outputElement.textContent =
-    "Auto detected: NPS + Promoters/Detractors";
-
-  return;
-  }
-  // Ветка NPS - с отклонением/дисперсией
-  if (autoPlan.metricType === "npsSpread") {
-  const allResults = compareNpsUsingSpreadAndBaseRows(
-    cleanedValues,
-    autoPlan.spreadType
-  );
-
-  if (allResults === null) {
-    outputElement.textContent =
-      "Auto detected NPS spread structure, but could not calculate significance.";
-    return;
-  }
-
-  const markerMatrix = buildSignificanceMarkerMatrix(allResults, 1);
-
-  const columnCount = selectedValues[0].length;
-
-  for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
-    const markers = markerMatrix[0][columnIndex];
-
-    if (!markers) {
-      continue;
-    }
-
-    const currentCell = selectedRange.getCell(0, columnIndex);
-
-    const displayedValueWithoutMarkers =
-      removeSignificanceMarkersFromText(
-        selectedText[0][columnIndex]
-      );
-
-    currentCell.values = [
-      [`${displayedValueWithoutMarkers} ${markers}`.trim()],
-    ];
-
-    currentCell.format.font.bold = true;
-    currentCell.format.fill.color = "#E2F0D9";
-  }
-
-  await context.sync();
-
-  outputElement.textContent =
-    autoPlan.spreadType === "standardDeviation"
-      ? "Auto detected: NPS + SD"
-      : "Auto detected: NPS + Variance";
-
-  return;
-}
-  
-    const allResults = compareAllRowsUsingBottomBases(cleanedValues);
-
-    if (allResults === null) {
-      outputElement.textContent = "Could not process selected range.";
-      return;
-    }
-
-    const markerMatrix = buildSignificanceMarkerMatrix(allResults);
-
-    const valueRowCount = allResults.baseRowIndex; // Number of rows above base row.
-    const columnCount = selectedValues[0].length; // Number of selected columns.
-
-    for (let rowIndex = 0; rowIndex < valueRowCount; rowIndex++) {
-      for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
-        const markers = markerMatrix[rowIndex][columnIndex]; // Letters to add to current cell.
-
-        if (!markers) {
-          continue;
-        }
-
-        const currentCell = selectedRange.getCell(rowIndex, columnIndex); // Cell that receives significance letters.
-        const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
-          selectedText[rowIndex][columnIndex]
-        );
-        
-        currentCell.values = [[`${displayedValueWithoutMarkers} ${markers}`.trim()]];
-
-        // Format cells where the value is significantly higher than at least one other column.
-        currentCell.format.font.bold = true; // Make the whole cell text bold.
-        currentCell.format.fill.color = "#E2F0D9"; // Pale green fill.
-      }
-    }
+    // Remove old significance markers before running a new calculation.
+    selectedRange.values = cleanedValues;
 
     await context.sync();
 
-    outputElement.textContent = "Significance markers added to selected cells.";
+    const leftLabelValues = await loadLeftLabelsForSelectedRange(
+      context,
+      selectedRange
+    ); // Labels located 1-2 columns to the left of the selected data.
+
+    const detectionResult = detectMetricRowsFromLeftLabels(
+      cleanedValues,
+      leftLabelValues
+    ); // Row type diagnostics based on left-side labels.
+
+    const calculationBlocks = buildCalculationBlocks(detectionResult); // List of metric blocks to calculate.
+
+    if (!calculationBlocks || calculationBlocks.length === 0) {
+      outputElement.textContent = "Could not detect any calculation blocks.";
+      return;
+    }
+
+    const fullMarkerMatrix = createEmptyMarkerMatrix(
+      cleanedValues.length,
+      cleanedValues[0].length
+    ); // Full-size marker storage matching the selected range.
+
+    for (const calculationBlock of calculationBlocks) {
+      const blockResults = calculateBlockResults(
+        cleanedValues,
+        calculationBlock
+      ); // Calculation result for current block.
+
+      if (!blockResults) {
+        continue;
+      }
+
+      // Add markers only to comparisonRows.valueRowIndex rows returned by the block calculation.
+      applyComparisonResultsToFullMarkerMatrix(
+        blockResults,
+        fullMarkerMatrix
+      );
+    }
+
+    const allowedMarkerRows = getAllowedMarkerRowIndexes(calculationBlocks); // Rows where marker letters are allowed.
+
+    // Defensive cleanup: service rows must never receive significance markers.
+    keepMarkersOnlyInAllowedRows(fullMarkerMatrix, allowedMarkerRows);
+
+    // Write markers once, through one shared writer.
+    writeMarkersToSelectedRange(selectedRange, selectedText, fullMarkerMatrix);
+
+    await context.sync();
+
+    outputElement.textContent = `Significance calculated for ${calculationBlocks.length} detected block(s).`;
   });
 }
 
 /**
- * Formats all pairwise comparison results into readable text for the task pane.
+ * Calculates one detected metric block.
  *
  * PURPOSE:
- * Temporary MVP output.
- * Later we will replace this with table markers, colors, or letters.
- *
- * INPUT:
- * allResults - object returned by compareAllRowsUsingBottomBases().
- *
- * OUTPUT:
- * Multiline text for display in the Excel task pane.
+ * Keeps dispatcher logic out of runSignificanceFromSelection().
+ * Each block type is routed to the correct core calculation function.
  */
-function formatAllComparisonsForDisplay(allResults) {
-  const outputLines = []; // Final text lines for the task pane.
-
-  outputLines.push("Pairwise significance results");
-  outputLines.push(`Base row: ${allResults.baseRowIndex + 1}`);
-  outputLines.push("");
-
-  for (const comparisonRow of allResults.comparisonRows) {
-    const displayedRowNumber = comparisonRow.valueRowIndex + 1; // Human-readable row number inside selection.
-
-    outputLines.push(`Value row ${displayedRowNumber}:`);
-
-    for (const comparison of comparisonRow.rowComparisons) {
-      const firstColumnNumber = comparison.firstColumnIndex + 1; // Human-readable column number inside selection.
-      const secondColumnNumber = comparison.secondColumnIndex + 1; // Human-readable column number inside selection.
-
-      if (comparison.result === null) {
-        outputLines.push(
-          `  Col ${firstColumnNumber} vs Col ${secondColumnNumber}: skipped`
-        );
-        continue;
-      }
-
-      outputLines.push(
-        `  Col ${firstColumnNumber} vs Col ${secondColumnNumber}: ` +
-          `z=${comparison.result.zScore.toFixed(3)}, ` +
-          `sig=${comparison.result.isSignificant ? "YES" : "NO"}, ` +
-          `direction=${comparison.result.direction}`
-      );
-    }
-
-    outputLines.push("");
+function calculateBlockResults(cleanedValues, calculationBlock) {
+  if (calculationBlock.metricType === "proportion") {
+    return compareProportionRowsUsingBaseRow(
+      cleanedValues,
+      calculationBlock.valueRowIndexes,
+      calculationBlock.baseRowIndex
+    );
   }
 
-  return outputLines.join("\n");
+  if (calculationBlock.metricType === "mean") {
+    return compareMeanBlockByRowIndexes(
+      cleanedValues,
+      calculationBlock.valueRowIndex,
+      calculationBlock.spreadRowIndex,
+      calculationBlock.baseRowIndex,
+      calculationBlock.spreadType
+    );
+  }
+
+  if (calculationBlock.metricType === "npsStructure") {
+    return compareNpsStructureBlockByRowIndexes(
+      cleanedValues,
+      calculationBlock.valueRowIndex,
+      calculationBlock.promotersRowIndex,
+      calculationBlock.detractorsRowIndex,
+      calculationBlock.baseRowIndex
+    );
+  }
+
+  if (calculationBlock.metricType === "npsSpread") {
+    return compareNpsSpreadBlockByRowIndexes(
+      cleanedValues,
+      calculationBlock.valueRowIndex,
+      calculationBlock.spreadRowIndex,
+      calculationBlock.baseRowIndex,
+      calculationBlock.spreadType
+    );
+  }
+
+  return null;
 }
 
 /**
@@ -426,7 +304,8 @@ async function clearSignificanceFromSelection() {
  * Reads selected Excel range and calculates pairwise significance for means.
  *
  * PURPOSE:
- * Excel-specific wrapper for mean significance MVP.
+ * Explicit mean calculation button.
+ * This legacy explicit mode remains useful for testing and manual override.
  *
  * EXPECTED SELECTION:
  * Row 1: means
@@ -446,7 +325,6 @@ async function runMeanSignificanceFromSelection(spreadType) {
 
     const selectedValues = selectedRange.values; // Raw selected values.
     const selectedText = selectedRange.text; // Displayed selected values.
-
     const outputElement = document.getElementById("significance-result"); // Task pane output.
 
     if (
@@ -480,30 +358,7 @@ async function runMeanSignificanceFromSelection(spreadType) {
 
     const markerMatrix = buildSignificanceMarkerMatrix(allResults, 1); // Significance letters for mean row.
 
-    const valueRowCount = 1; // For mean MVP, only first row receives markers.
-    const columnCount = selectedValues[0].length; // Number of selected columns.
-
-    for (let rowIndex = 0; rowIndex < valueRowCount; rowIndex++) {
-      for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
-        const markers = markerMatrix[rowIndex][columnIndex]; // Marker letters for current mean cell.
-
-        if (!markers) {
-          continue;
-        }
-
-        const currentCell = selectedRange.getCell(rowIndex, columnIndex); // Mean cell receiving markers.
-
-        const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
-          selectedText[rowIndex][columnIndex]
-        );
-
-        currentCell.values = [[`${displayedValueWithoutMarkers} ${markers}`.trim()]];
-
-        // Highlight significant winners only.
-        currentCell.format.font.bold = true;
-        currentCell.format.fill.color = "#E2F0D9";
-      }
-    }
+    writeMarkersToSelectedRange(selectedRange, selectedText, markerMatrix);
 
     await context.sync();
 
@@ -516,6 +371,9 @@ async function runMeanSignificanceFromSelection(spreadType) {
 
 /**
  * Reads selected Excel range and calculates NPS significance from structure.
+ *
+ * PURPOSE:
+ * Explicit NPS structure calculation button.
  *
  * EXPECTED SELECTION:
  * Row 1: NPS
@@ -533,7 +391,7 @@ async function runNpsSignificanceFromStructureSelection() {
 
     const selectedValues = selectedRange.values; // Raw selected values.
     const selectedText = selectedRange.text; // Displayed selected values.
-    const outputElement = document.getElementById("significance-result");
+    const outputElement = document.getElementById("significance-result"); // Task pane output.
 
     if (
       !selectedValues ||
@@ -563,31 +421,7 @@ async function runNpsSignificanceFromStructureSelection() {
 
     const markerMatrix = buildSignificanceMarkerMatrix(allResults, 1);
 
-    const valueRowCount = 1; // Only NPS row receives markers.
-    const columnCount = selectedValues[0].length;
-
-    for (let rowIndex = 0; rowIndex < valueRowCount; rowIndex++) {
-      for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
-        const markers = markerMatrix[rowIndex][columnIndex];
-
-        if (!markers) {
-          continue;
-        }
-
-        const currentCell = selectedRange.getCell(rowIndex, columnIndex);
-
-        const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
-          selectedText[rowIndex][columnIndex]
-        );
-
-        currentCell.values = [
-          [`${displayedValueWithoutMarkers} ${markers}`.trim()],
-        ];
-
-        currentCell.format.font.bold = true;
-        currentCell.format.fill.color = "#E2F0D9";
-      }
-    }
+    writeMarkersToSelectedRange(selectedRange, selectedText, markerMatrix);
 
     await context.sync();
 
@@ -600,8 +434,8 @@ async function runNpsSignificanceFromStructureSelection() {
  * Reads selected Excel range and calculates NPS significance using SD or variance.
  *
  * PURPOSE:
- * This is NOT the same as mean significance.
- * NPS values must be normalized:
+ * Explicit NPS spread calculation button.
+ * This is NOT the same as mean significance because NPS values must be normalized:
  * - 40 becomes 0.40
  * - 0.40 stays 0.40
  *
@@ -620,7 +454,7 @@ async function runNpsSignificanceFromSpreadSelection(spreadType) {
 
     const selectedValues = selectedRange.values; // Raw selected values.
     const selectedText = selectedRange.text; // Displayed selected values.
-    const outputElement = document.getElementById("significance-result");
+    const outputElement = document.getElementById("significance-result"); // Task pane output.
 
     if (
       !selectedValues ||
@@ -634,10 +468,8 @@ async function runNpsSignificanceFromSpreadSelection(spreadType) {
 
     const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
 
-    // Remove old significance markers before recalculation.
     selectedRange.values = cleanedValues;
 
-    // Center the entire selected range after macro execution.
     selectedRange.format.horizontalAlignment = "Center";
     selectedRange.format.verticalAlignment = "Center";
 
@@ -653,32 +485,9 @@ async function runNpsSignificanceFromSpreadSelection(spreadType) {
       return;
     }
 
-    // Only the first row, the NPS row, should receive markers.
     const markerMatrix = buildSignificanceMarkerMatrix(allResults, 1);
 
-    const columnCount = selectedValues[0].length; // Number of selected columns.
-
-    for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
-      const markers = markerMatrix[0][columnIndex]; // Marker letters for current NPS cell.
-
-      if (!markers) {
-        continue;
-      }
-
-      const currentCell = selectedRange.getCell(0, columnIndex); // NPS cell receiving markers.
-
-      const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
-        selectedText[0][columnIndex]
-      );
-
-      currentCell.values = [
-        [`${displayedValueWithoutMarkers} ${markers}`.trim()],
-      ];
-
-      // Highlight significant winners only.
-      currentCell.format.font.bold = true;
-      currentCell.format.fill.color = "#E2F0D9";
-    }
+    writeMarkersToSelectedRange(selectedRange, selectedText, markerMatrix);
 
     await context.sync();
 
@@ -729,8 +538,7 @@ async function runMetricDetectionDiagnostics() {
       selectedStartColumnIndex
     ); // Scan up to 2 columns left, but not beyond sheet boundary.
 
-    const labelStartColumnIndex =
-      selectedStartColumnIndex - labelColumnCount; // First scanned label column.
+    const labelStartColumnIndex = selectedStartColumnIndex - labelColumnCount; // First scanned label column.
 
     const worksheet = selectedRange.worksheet; // Worksheet containing selected range.
 
@@ -768,9 +576,9 @@ async function loadLeftLabelsForSelectedRange(context, selectedRange) {
 
   await context.sync();
 
-  const selectedStartRowIndex = selectedRange.rowIndex;
-  const selectedStartColumnIndex = selectedRange.columnIndex;
-  const selectedRowCount = selectedRange.rowCount;
+  const selectedStartRowIndex = selectedRange.rowIndex; // First selected row index, zero-based.
+  const selectedStartColumnIndex = selectedRange.columnIndex; // First selected column index, zero-based.
+  const selectedRowCount = selectedRange.rowCount; // Number of selected rows.
 
   if (selectedStartColumnIndex === 0) {
     return [];
@@ -779,21 +587,60 @@ async function loadLeftLabelsForSelectedRange(context, selectedRange) {
   const labelColumnCount = Math.min(
     LABEL_SCAN_COLUMNS_LEFT,
     selectedStartColumnIndex
-  );
+  ); // Scan up to configured number of columns left, but not beyond sheet boundary.
 
-  const labelStartColumnIndex =
-    selectedStartColumnIndex - labelColumnCount;
+  const labelStartColumnIndex = selectedStartColumnIndex - labelColumnCount; // First scanned label column.
 
   const leftLabelRange = selectedRange.worksheet.getRangeByIndexes(
     selectedStartRowIndex,
     labelStartColumnIndex,
     selectedRowCount,
     labelColumnCount
-  );
+  ); // Cells left of selected range.
 
   leftLabelRange.load("values");
 
   await context.sync();
 
   return leftLabelRange.values;
+}
+
+/**
+ * Writes significance markers into selected range.
+ *
+ * PURPOSE:
+ * Shared writer for proportions, means, and NPS blocks.
+ * It also protects cells from Excel auto-formatting values as time.
+ */
+function writeMarkersToSelectedRange(
+  selectedRange,
+  selectedText,
+  markerMatrix
+) {
+  const rowCount = markerMatrix.length; // Number of rows in marker matrix.
+  const columnCount = markerMatrix[0] ? markerMatrix[0].length : 0; // Number of columns.
+
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+      const markers = markerMatrix[rowIndex][columnIndex]; // Marker letters for current cell.
+
+      if (!markers) {
+        continue;
+      }
+
+      const currentCell = selectedRange.getCell(rowIndex, columnIndex); // Target cell.
+      const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
+        selectedText[rowIndex][columnIndex]
+      );
+
+      currentCell.numberFormat = [["@"]]; // Force text format to prevent Excel time conversion.
+
+      currentCell.values = [
+        [`${displayedValueWithoutMarkers} ${markers}`.trim()],
+      ];
+
+      currentCell.format.font.bold = true;
+      currentCell.format.fill.color = "#E2F0D9";
+    }
+  }
 }

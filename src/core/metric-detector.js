@@ -379,3 +379,256 @@ export function buildAutoCalculationPlan(detectionResult) {
     metricType: "proportion",
   };
 }
+
+/**
+ * Finds the nearest base row below a given row.
+ *
+ * PURPOSE:
+ * In complex tables, a base row may be shared across several metrics.
+ * Example:
+ * % row
+ * % row
+ * Mean row
+ * SD row
+ * Base row
+ *
+ * In this case, the same base may apply both to proportions and means.
+ */
+function findNextBaseRowIndex(rowDiagnostics, startRowIndex) {
+  for (
+    let rowIndex = startRowIndex + 1;
+    rowIndex < rowDiagnostics.length;
+    rowIndex++
+  ) {
+    if (rowDiagnostics[rowIndex].rowType === "base") {
+      return rowIndex;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Builds calculation blocks from detected row labels.
+ *
+ * PURPOSE:
+ * Support complex tables where proportions, means, and NPS can appear
+ * in one selected range in different combinations.
+ *
+ * OUTPUT:
+ * Array of calculation blocks.
+ */
+export function buildCalculationBlocks(detectionResult) {
+  const rowDiagnostics = detectionResult.rowDiagnostics; // Classified rows.
+  const calculationBlocks = []; // Final list of calculation blocks.
+
+  let rowIndex = 0; // Current row scanner position.
+
+  while (rowIndex < rowDiagnostics.length) {
+    const currentRowType = rowDiagnostics[rowIndex].rowType; // Current detected row type.
+
+    /**
+     * Mean block:
+     * Mean
+     * SD or Variance
+     * Base
+     */
+    if (
+      currentRowType === "mean" &&
+      rowIndex + 1 < rowDiagnostics.length &&
+      (rowDiagnostics[rowIndex + 1].rowType === "standardDeviation" ||
+        rowDiagnostics[rowIndex + 1].rowType === "variance")
+    ) {
+      const spreadRowIndex = rowIndex + 1; // Row with SD or variance.
+      const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, spreadRowIndex); // Nearest base below spread row.
+
+      if (baseRowIndex !== null) {
+        calculationBlocks.push({
+          metricType: "mean",
+          valueRowIndex: rowIndex,
+          spreadRowIndex,
+          spreadType: rowDiagnostics[spreadRowIndex].rowType,
+          baseRowIndex,
+        });
+
+        rowIndex = baseRowIndex + 1;
+        continue;
+      }
+    }
+
+    /**
+     * NPS structure block:
+     * NPS
+     * Promoters
+     * Detractors
+     * Base
+     */
+    if (
+      currentRowType === "nps" &&
+      rowIndex + 2 < rowDiagnostics.length &&
+      rowDiagnostics[rowIndex + 1].rowType === "promoters" &&
+      rowDiagnostics[rowIndex + 2].rowType === "detractors"
+    ) {
+      const promotersRowIndex = rowIndex + 1; // Promoter share row.
+      const detractorsRowIndex = rowIndex + 2; // Detractor share row.
+      const baseRowIndex = findNextBaseRowIndex(
+        rowDiagnostics,
+        detractorsRowIndex
+      );
+
+      if (baseRowIndex !== null) {
+        calculationBlocks.push({
+          metricType: "npsStructure",
+          valueRowIndex: rowIndex,
+          promotersRowIndex,
+          detractorsRowIndex,
+          baseRowIndex,
+        });
+
+        rowIndex = baseRowIndex + 1;
+        continue;
+      }
+    }
+
+    /**
+     * NPS spread block:
+     * NPS
+     * SD or Variance
+     * Base
+     */
+    if (
+      currentRowType === "nps" &&
+      rowIndex + 1 < rowDiagnostics.length &&
+      (rowDiagnostics[rowIndex + 1].rowType === "standardDeviation" ||
+        rowDiagnostics[rowIndex + 1].rowType === "variance")
+    ) {
+      const spreadRowIndex = rowIndex + 1; // Row with NPS SD or variance.
+      const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, spreadRowIndex); // Nearest base below spread row.
+
+      if (baseRowIndex !== null) {
+        calculationBlocks.push({
+          metricType: "npsSpread",
+          valueRowIndex: rowIndex,
+          spreadRowIndex,
+          spreadType: rowDiagnostics[spreadRowIndex].rowType,
+          baseRowIndex,
+        });
+
+        rowIndex = baseRowIndex + 1;
+        continue;
+      }
+    }
+
+    /**
+     * Proportion block:
+     * One or more proportion rows followed by a base row somewhere below.
+     *
+     * We collect rows labelled as proportions, plus unknown text/empty rows
+     * only if they appear before a base and are not special rows.
+     */
+    if (isProportionValueRowType(currentRowType)) {
+      const proportionValueRowIndexes = []; // Rows to be treated as proportions.
+      let scannerRowIndex = rowIndex; // Local scanner for consecutive proportion-like rows.
+
+      while (scannerRowIndex < rowDiagnostics.length) {
+        const scannerRowType = rowDiagnostics[scannerRowIndex].rowType;
+
+        if (isProportionValueRowType(scannerRowType)) {
+          proportionValueRowIndexes.push(scannerRowIndex);
+          scannerRowIndex++;
+          continue;
+        }
+
+        break;
+      }
+
+      const baseRowIndex = findNextBaseRowIndex(
+        rowDiagnostics,
+        scannerRowIndex - 1
+      );
+
+      if (proportionValueRowIndexes.length > 0 && baseRowIndex !== null) {
+        calculationBlocks.push({
+          metricType: "proportion",
+          valueRowIndexes: proportionValueRowIndexes,
+          baseRowIndex,
+        });
+
+        rowIndex = baseRowIndex + 1;
+        continue;
+      }
+    }
+
+    rowIndex++;
+  }
+
+  /**
+   * If no labelled blocks were detected, fallback to the old assumption:
+   * all rows except the last one are proportions, last row is base.
+   */
+  if (calculationBlocks.length === 0 && rowDiagnostics.length >= 2) {
+    calculationBlocks.push({
+      metricType: "proportion",
+      valueRowIndexes: Array.from(
+        { length: rowDiagnostics.length - 1 },
+        (_, index) => index
+      ),
+      baseRowIndex: rowDiagnostics.length - 1,
+    });
+  }
+
+  return calculationBlocks;
+}
+
+/**
+ * Checks whether row can be treated as a proportion value row.
+ *
+ * PURPOSE:
+ * Prevent service rows like Promoters, Detractors, SD, Variance, and Base
+ * from being calculated as ordinary proportions.
+ */
+function isProportionValueRowType(rowType) {
+  return (
+    rowType === "proportion" ||
+    rowType === "empty" ||
+    rowType === "unknownText"
+  );
+}
+
+/**
+ * Returns row indexes where significance markers are allowed.
+ *
+ * PURPOSE:
+ * Prevent service rows from receiving significance letters.
+ *
+ * Markers are allowed only in actual metric value rows:
+ * - proportion value rows
+ * - mean row
+ * - NPS row
+ *
+ * Markers are NOT allowed in:
+ * - base rows
+ * - SD / variance rows
+ * - promoters / detractors rows
+ */
+export function getAllowedMarkerRowIndexes(calculationBlocks) {
+  const allowedMarkerRows = new Set(); // Rows where marker letters may be written.
+
+  for (const calculationBlock of calculationBlocks) {
+    if (calculationBlock.metricType === "proportion") {
+      for (const valueRowIndex of calculationBlock.valueRowIndexes) {
+        allowedMarkerRows.add(valueRowIndex);
+      }
+    }
+
+    if (
+      calculationBlock.metricType === "mean" ||
+      calculationBlock.metricType === "npsStructure" ||
+      calculationBlock.metricType === "npsSpread"
+    ) {
+      allowedMarkerRows.add(calculationBlock.valueRowIndex);
+    }
+  }
+
+  return allowedMarkerRows;
+}

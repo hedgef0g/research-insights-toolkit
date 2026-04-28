@@ -985,3 +985,253 @@ export function compareNpsUsingStructureRows(selectedValues) {
     ],
   };
 }
+
+/**
+ * Compares selected proportion rows against a specific base row.
+ *
+ * PURPOSE:
+ * Complex tables may contain proportions, means, and NPS in one range.
+ * This function calculates only selected proportion value rows.
+ */
+export function compareProportionRowsUsingBaseRow(
+  selectedValues,
+  valueRowIndexes,
+  baseRowIndex
+) {
+  const baseRow = selectedValues[baseRowIndex]; // Base row for these proportion rows.
+  const comparisonRows = []; // Results for each proportion row.
+
+  for (const valueRowIndex of valueRowIndexes) {
+    const valueRow = selectedValues[valueRowIndex]; // Current proportion row.
+
+    const rowComparisons = compareAllProportionsInRow(valueRow, baseRow);
+
+    comparisonRows.push({
+      valueRowIndex,
+      rowComparisons,
+    });
+  }
+
+  return {
+    baseRowIndex,
+    baseRow,
+    comparisonRows,
+  };
+}
+
+/**
+ * Compares one mean row using explicitly provided spread and base rows.
+ *
+ * PURPOSE:
+ * Supports complex tables where mean block can be located anywhere
+ * inside selected range.
+ */
+export function compareMeanBlockByRowIndexes(
+  selectedValues,
+  valueRowIndex,
+  spreadRowIndex,
+  baseRowIndex,
+  spreadType
+) {
+  const meanRow = selectedValues[valueRowIndex]; // Mean values.
+  const spreadRow = selectedValues[spreadRowIndex]; // SD or variance values.
+  const baseRow = selectedValues[baseRowIndex]; // Bases.
+
+  const rowComparisons = compareAllMeansInRow(
+    meanRow,
+    spreadRow,
+    baseRow,
+    spreadType
+  );
+
+  return {
+    baseRowIndex,
+    baseRow,
+    comparisonRows: [
+      {
+        valueRowIndex,
+        rowComparisons,
+      },
+    ],
+  };
+}
+
+/**
+ * Compares one NPS structure block using explicitly provided rows.
+ *
+ * PURPOSE:
+ * Supports complex tables where NPS structure block can be located anywhere.
+ */
+export function compareNpsStructureBlockByRowIndexes(
+  selectedValues,
+  valueRowIndex,
+  promotersRowIndex,
+  detractorsRowIndex,
+  baseRowIndex
+) {
+  const npsRow = selectedValues[valueRowIndex]; // Visible NPS row.
+  const promotersRow = selectedValues[promotersRowIndex]; // Promoter shares.
+  const detractorsRow = selectedValues[detractorsRowIndex]; // Detractor shares.
+  const baseRow = selectedValues[baseRowIndex]; // Bases.
+
+  const rowComparisons = []; // Pairwise NPS comparisons.
+
+  for (let firstColumnIndex = 0; firstColumnIndex < npsRow.length; firstColumnIndex++) {
+    for (
+      let secondColumnIndex = firstColumnIndex + 1;
+      secondColumnIndex < npsRow.length;
+      secondColumnIndex++
+    ) {
+      const significanceResult = calculateNpsSignificanceFromStructure(
+        npsRow[firstColumnIndex],
+        promotersRow[firstColumnIndex],
+        detractorsRow[firstColumnIndex],
+        baseRow[firstColumnIndex],
+        npsRow[secondColumnIndex],
+        promotersRow[secondColumnIndex],
+        detractorsRow[secondColumnIndex],
+        baseRow[secondColumnIndex]
+      );
+
+      rowComparisons.push({
+        firstColumnIndex,
+        secondColumnIndex,
+        result: significanceResult,
+      });
+    }
+  }
+
+  return {
+    baseRowIndex,
+    baseRow,
+    comparisonRows: [
+      {
+        valueRowIndex,
+        rowComparisons,
+      },
+    ],
+  };
+}
+
+/**
+ * Compares one NPS spread block using explicitly provided rows.
+ *
+ * PURPOSE:
+ * Supports complex tables where NPS spread block can be located anywhere.
+ */
+export function compareNpsSpreadBlockByRowIndexes(
+  selectedValues,
+  valueRowIndex,
+  spreadRowIndex,
+  baseRowIndex,
+  spreadType
+) {
+  const npsRow = selectedValues[valueRowIndex]; // NPS values.
+  const spreadRow = selectedValues[spreadRowIndex]; // SD or variance.
+  const baseRow = selectedValues[baseRowIndex]; // Bases.
+
+  const rowComparisons = []; // Pairwise NPS comparisons.
+
+  for (let firstColumnIndex = 0; firstColumnIndex < npsRow.length; firstColumnIndex++) {
+    for (
+      let secondColumnIndex = firstColumnIndex + 1;
+      secondColumnIndex < npsRow.length;
+      secondColumnIndex++
+    ) {
+      const significanceResult = calculateNpsSignificanceFromSpread(
+        npsRow[firstColumnIndex],
+        spreadRow[firstColumnIndex],
+        baseRow[firstColumnIndex],
+        npsRow[secondColumnIndex],
+        spreadRow[secondColumnIndex],
+        baseRow[secondColumnIndex],
+        spreadType
+      );
+
+      rowComparisons.push({
+        firstColumnIndex,
+        secondColumnIndex,
+        result: significanceResult,
+      });
+    }
+  }
+
+  return {
+    baseRowIndex,
+    baseRow,
+    comparisonRows: [
+      {
+        valueRowIndex,
+        rowComparisons,
+      },
+    ],
+  };
+}
+
+/**
+ * Adds significance letters from comparison results
+ * directly into full marker matrix.
+ *
+ * PURPOSE:
+ * Used for block-plan mode where different metric blocks
+ * occupy arbitrary rows inside one selected range.
+ */
+export function applyComparisonResultsToFullMarkerMatrix(
+  blockResults,
+  fullMarkerMatrix
+) {
+  const columnLabels = generateSignificanceLabels();
+
+  for (const comparisonRow of blockResults.comparisonRows) {
+    const valueRowIndex = comparisonRow.valueRowIndex;
+
+    for (const comparison of comparisonRow.rowComparisons) {
+      if (
+        !comparison.result ||
+        !comparison.result.isSignificant
+      ) {
+        continue;
+      }
+
+      const firstColumnIndex = comparison.firstColumnIndex;
+      const secondColumnIndex = comparison.secondColumnIndex;
+
+      const firstLabel = columnLabels[firstColumnIndex];
+      const secondLabel = columnLabels[secondColumnIndex];
+
+      if (comparison.result.direction === "first_higher") {
+        fullMarkerMatrix[valueRowIndex][firstColumnIndex] += secondLabel;
+      }
+
+      if (comparison.result.direction === "second_higher") {
+        fullMarkerMatrix[valueRowIndex][secondColumnIndex] += firstLabel;
+      }
+    }
+  }
+}
+
+/**
+ * Clears marker matrix rows that are not allowed to receive markers.
+ *
+ * PURPOSE:
+ * Defensive protection for complex tables.
+ * Even if some calculation accidentally creates markers for service rows,
+ * this function removes them before writing to Excel.
+ */
+export function keepMarkersOnlyInAllowedRows(markerMatrix, allowedMarkerRows) {
+  for (let rowIndex = 0; rowIndex < markerMatrix.length; rowIndex++) {
+    if (allowedMarkerRows.has(rowIndex)) {
+      continue;
+    }
+
+    for (
+      let columnIndex = 0;
+      columnIndex < markerMatrix[rowIndex].length;
+      columnIndex++
+    ) {
+      markerMatrix[rowIndex][columnIndex] = "";
+    }
+  }
+
+  return markerMatrix;
+}
