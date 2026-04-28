@@ -41,7 +41,65 @@ import {
   removeSignificanceMarkersFromText,
   removeSignificanceMarkersFromMatrix,
   compareMeansUsingSpreadAndBaseRows,
+  compareNpsUsingStructureRows,
+  compareNpsUsingSpreadAndBaseRows,
 } from "../core/significance";
+
+/**
+ * Initializes task pane events after Office is ready.
+ *
+ * PURPOSE:
+ * Connect the visible button in the Excel panel with our calculation logic.
+ */
+Office.onReady(() => {
+  const calculateButton = document.getElementById("calculate-significance");
+  const clearButton = document.getElementById("clear-significance");
+
+  const calculateMeanSignificanceSdButton = document.getElementById(
+    "calculate-mean-significance-sd"
+  );
+
+  const calculateMeanSignificanceVarianceButton = document.getElementById(
+    "calculate-mean-significance-variance"
+  );
+
+  calculateButton.addEventListener("click", runSignificanceFromSelection);
+
+  clearButton.addEventListener("click", clearSignificanceFromSelection);
+
+  calculateMeanSignificanceSdButton.addEventListener("click", () =>
+    runMeanSignificanceFromSelection("standardDeviation")
+  );
+
+  calculateMeanSignificanceVarianceButton.addEventListener("click", () =>
+    runMeanSignificanceFromSelection("variance")
+  );
+
+  const calculateNpsStructureButton = document.getElementById(
+    "calculate-nps-significance-structure"
+  );
+  
+  const calculateNpsSdButton = document.getElementById(
+    "calculate-nps-significance-sd"
+  );
+  
+  const calculateNpsVarianceButton = document.getElementById(
+    "calculate-nps-significance-variance"
+  );
+  
+  calculateNpsStructureButton.addEventListener(
+    "click",
+    runNpsSignificanceFromStructureSelection
+  );
+  
+  calculateNpsSdButton.addEventListener("click", () =>
+    runNpsSignificanceFromSpreadSelection("standardDeviation")
+  );
+
+  calculateNpsVarianceButton.addEventListener("click", () =>
+    runNpsSignificanceFromSpreadSelection("variance")
+  );
+});
 
 /**
  * Reads selected Excel range, calculates pairwise significance,
@@ -123,37 +181,6 @@ async function runSignificanceFromSelection() {
     outputElement.textContent = "Significance markers added to selected cells.";
   });
 }
-
-/**
- * Initializes task pane events after Office is ready.
- *
- * PURPOSE:
- * Connect the visible button in the Excel panel with our calculation logic.
- */
-Office.onReady(() => {
-  const calculateButton = document.getElementById("calculate-significance");
-  const clearButton = document.getElementById("clear-significance");
-
-  const calculateMeanSignificanceSdButton = document.getElementById(
-    "calculate-mean-significance-sd"
-  );
-
-  const calculateMeanSignificanceVarianceButton = document.getElementById(
-    "calculate-mean-significance-variance"
-  );
-
-  calculateButton.addEventListener("click", runSignificanceFromSelection);
-
-  clearButton.addEventListener("click", clearSignificanceFromSelection);
-
-  calculateMeanSignificanceSdButton.addEventListener("click", () =>
-    runMeanSignificanceFromSelection("standardDeviation")
-  );
-
-  calculateMeanSignificanceVarianceButton.addEventListener("click", () =>
-    runMeanSignificanceFromSelection("variance")
-  );
-});
 
 /**
  * Formats all pairwise comparison results into readable text for the task pane.
@@ -291,7 +318,7 @@ async function runMeanSignificanceFromSelection(spreadType) {
       return;
     }
 
-    const markerMatrix = buildSignificanceMarkerMatrix(allResults); // Significance letters for mean row.
+    const markerMatrix = buildSignificanceMarkerMatrix(allResults, 1); // Significance letters for mean row.
 
     const valueRowCount = 1; // For mean MVP, only first row receives markers.
     const columnCount = selectedValues[0].length; // Number of selected columns.
@@ -324,5 +351,180 @@ async function runMeanSignificanceFromSelection(spreadType) {
       spreadType === "standardDeviation"
         ? "Mean significance calculated using standard deviations."
         : "Mean significance calculated using variances.";
+  });
+}
+
+/**
+ * Reads selected Excel range and calculates NPS significance from structure.
+ *
+ * EXPECTED SELECTION:
+ * Row 1: NPS
+ * Row 2: Promoters %
+ * Row 3: Detractors %
+ * Row 4: Base
+ */
+async function runNpsSignificanceFromStructureSelection() {
+  await Excel.run(async (context) => {
+    const selectedRange = context.workbook.getSelectedRange(); // Current selected Excel range.
+
+    selectedRange.load(["values", "text", "rowCount", "columnCount"]);
+
+    await context.sync();
+
+    const selectedValues = selectedRange.values; // Raw selected values.
+    const selectedText = selectedRange.text; // Displayed selected values.
+    const outputElement = document.getElementById("significance-result");
+
+    if (
+      !selectedValues ||
+      selectedValues.length < 4 ||
+      selectedValues[0].length < 2
+    ) {
+      outputElement.textContent =
+        "Please select at least 4 rows and 2 columns: NPS, Promoters, Detractors, Base.";
+      return;
+    }
+
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
+
+    selectedRange.values = cleanedValues;
+
+    selectedRange.format.horizontalAlignment = "Center";
+    selectedRange.format.verticalAlignment = "Center";
+
+    await context.sync();
+
+    const allResults = compareNpsUsingStructureRows(cleanedValues);
+
+    if (allResults === null) {
+      outputElement.textContent = "Could not process selected NPS range.";
+      return;
+    }
+
+    const markerMatrix = buildSignificanceMarkerMatrix(allResults, 1);
+
+    const valueRowCount = 1; // Only NPS row receives markers.
+    const columnCount = selectedValues[0].length;
+
+    for (let rowIndex = 0; rowIndex < valueRowCount; rowIndex++) {
+      for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+        const markers = markerMatrix[rowIndex][columnIndex];
+
+        if (!markers) {
+          continue;
+        }
+
+        const currentCell = selectedRange.getCell(rowIndex, columnIndex);
+
+        const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
+          selectedText[rowIndex][columnIndex]
+        );
+
+        currentCell.values = [
+          [`${displayedValueWithoutMarkers} ${markers}`.trim()],
+        ];
+
+        currentCell.format.font.bold = true;
+        currentCell.format.fill.color = "#E2F0D9";
+      }
+    }
+
+    await context.sync();
+
+    outputElement.textContent =
+      "NPS significance calculated using promoters and detractors.";
+  });
+}
+
+/**
+ * Reads selected Excel range and calculates NPS significance using SD or variance.
+ *
+ * PURPOSE:
+ * This is NOT the same as mean significance.
+ * NPS values must be normalized:
+ * - 40 becomes 0.40
+ * - 0.40 stays 0.40
+ *
+ * EXPECTED SELECTION:
+ * Row 1: NPS
+ * Row 2: SD or variance
+ * Row 3: Base
+ */
+async function runNpsSignificanceFromSpreadSelection(spreadType) {
+  await Excel.run(async (context) => {
+    const selectedRange = context.workbook.getSelectedRange(); // Current selected Excel range.
+
+    selectedRange.load(["values", "text", "rowCount", "columnCount"]);
+
+    await context.sync();
+
+    const selectedValues = selectedRange.values; // Raw selected values.
+    const selectedText = selectedRange.text; // Displayed selected values.
+    const outputElement = document.getElementById("significance-result");
+
+    if (
+      !selectedValues ||
+      selectedValues.length < 3 ||
+      selectedValues[0].length < 2
+    ) {
+      outputElement.textContent =
+        "Please select at least 3 rows and 2 columns: NPS, SD/variance, Base.";
+      return;
+    }
+
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
+
+    // Remove old significance markers before recalculation.
+    selectedRange.values = cleanedValues;
+
+    // Center the entire selected range after macro execution.
+    selectedRange.format.horizontalAlignment = "Center";
+    selectedRange.format.verticalAlignment = "Center";
+
+    await context.sync();
+
+    const allResults = compareNpsUsingSpreadAndBaseRows(
+      cleanedValues,
+      spreadType
+    );
+
+    if (allResults === null) {
+      outputElement.textContent = "Could not process selected NPS range.";
+      return;
+    }
+
+    // Only the first row, the NPS row, should receive markers.
+    const markerMatrix = buildSignificanceMarkerMatrix(allResults, 1);
+
+    const columnCount = selectedValues[0].length; // Number of selected columns.
+
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+      const markers = markerMatrix[0][columnIndex]; // Marker letters for current NPS cell.
+
+      if (!markers) {
+        continue;
+      }
+
+      const currentCell = selectedRange.getCell(0, columnIndex); // NPS cell receiving markers.
+
+      const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
+        selectedText[0][columnIndex]
+      );
+
+      currentCell.values = [
+        [`${displayedValueWithoutMarkers} ${markers}`.trim()],
+      ];
+
+      // Highlight significant winners only.
+      currentCell.format.font.bold = true;
+      currentCell.format.fill.color = "#E2F0D9";
+    }
+
+    await context.sync();
+
+    outputElement.textContent =
+      spreadType === "standardDeviation"
+        ? "NPS significance calculated using standard deviations."
+        : "NPS significance calculated using variances.";
   });
 }

@@ -309,25 +309,30 @@ export function createEmptyMarkerMatrix(rowCount, columnCount) {
  * If one column is significantly higher than another column,
  * add the lower column's label to the higher value cell.
  *
- * EXAMPLE:
- * If column 1 is significantly higher than column 2,
- * column 1 receives marker "b".
- *
  * INPUT:
- * allResults - result of compareAllRowsUsingBottomBases().
+ * allResults - calculation result object with comparisonRows.
+ * markerRowCount - how many rows should receive markers.
  *
- * OUTPUT:
- * 2D marker matrix for value rows only.
+ * WHY markerRowCount EXISTS:
+ * For proportions, all rows above the base row may receive markers.
+ * For means and NPS, only the first row should receive markers.
  */
-export function buildSignificanceMarkerMatrix(allResults) {
-  const valueRowCount = allResults.baseRowIndex; // Number of rows above the base row.
+export function buildSignificanceMarkerMatrix(allResults, markerRowCount = null) {
+  const valueRowCount =
+    markerRowCount === null ? allResults.baseRowIndex : markerRowCount;
+
   const columnCount = allResults.baseRow.length; // Number of selected columns.
 
   const significanceLabels = generateSignificanceLabels(); // Labels assigned to selected columns.
   const markerMatrix = createEmptyMarkerMatrix(valueRowCount, columnCount); // Output marker storage.
 
   for (const comparisonRow of allResults.comparisonRows) {
-    const valueRowIndex = comparisonRow.valueRowIndex; // Row where markers will be applied.
+    const valueRowIndex = comparisonRow.valueRowIndex; // Row where markers should be applied.
+
+    // Skip rows that are not intended to receive markers.
+    if (valueRowIndex >= valueRowCount) {
+      continue;
+    }
 
     for (const comparison of comparisonRow.rowComparisons) {
       if (comparison.result === null) {
@@ -676,6 +681,305 @@ export function compareMeansUsingSpreadAndBaseRows(selectedValues, spreadType) {
     comparisonRows: [
       {
         valueRowIndex: meanRowIndex,
+        rowComparisons,
+      },
+    ],
+  };
+}
+
+/**
+ * Converts NPS value into -1..1 scale.
+ *
+ * PURPOSE:
+ * Users may enter NPS as:
+ * - 40 meaning 40 NPS points
+ * - 0.40 meaning the same value on -1..1 scale
+ */
+export function normalizeNpsValue(rawValue) {
+  const numericValue = Number(String(rawValue).replace(",", "."));
+
+  if (Number.isNaN(numericValue)) {
+    return null;
+  }
+
+  return Math.abs(numericValue) > 1 ? numericValue / 100 : numericValue;
+}
+
+/**
+ * Normalizes NPS spread value: SD or variance.
+ *
+ * PURPOSE:
+ * Keep NPS and spread values in the same -1..1 scale.
+ *
+ * Examples:
+ * SD:
+ * - 0.80 stays 0.80
+ * - 80 becomes 0.80
+ *
+ * Variance:
+ * - 0.64 stays 0.64
+ * - 6400 becomes 0.64
+ */
+export function normalizeNpsSpread(rawSpread, spreadType) {
+  const numericSpread = Number(String(rawSpread).replace(",", "."));
+
+  if (Number.isNaN(numericSpread) || numericSpread < 0) {
+    return null;
+  }
+
+  if (spreadType === "standardDeviation") {
+    return numericSpread > 1 ? numericSpread / 100 : numericSpread;
+  }
+
+  if (spreadType === "variance") {
+    return numericSpread > 1 ? numericSpread / 10000 : numericSpread;
+  }
+
+  return null;
+}
+
+/**
+ * Calculates significance between two NPS values using promoter/detractor structure.
+ *
+ * NPS is treated as mean of:
+ * promoter = +1
+ * passive = 0
+ * detractor = -1
+ *
+ * Variance = P(promoter) + P(detractor) - NPS²
+ */
+/**
+ * Calculates significance between two NPS values using promoter/detractor structure.
+ *
+ * IMPORTANT:
+ * We do NOT trust the displayed NPS row for calculation.
+ * Instead, NPS is recalculated from:
+ * NPS = promoters share - detractors share
+ *
+ * NPS is treated as mean of:
+ * promoter = +1
+ * passive = 0
+ * detractor = -1
+ *
+ * Variance = P(promoter) + P(detractor) - NPS²
+ */
+export function calculateNpsSignificanceFromStructure(
+  firstRawNps,
+  firstRawPromoters,
+  firstRawDetractors,
+  firstRawBase,
+  secondRawNps,
+  secondRawPromoters,
+  secondRawDetractors,
+  secondRawBase
+) {
+  const firstPromoters = normalizeShare(firstRawPromoters); // First promoter share.
+  const secondPromoters = normalizeShare(secondRawPromoters); // Second promoter share.
+
+  const firstDetractors = normalizeShare(firstRawDetractors); // First detractor share.
+  const secondDetractors = normalizeShare(secondRawDetractors); // Second detractor share.
+
+  const firstBase = Number(firstRawBase); // First base size.
+  const secondBase = Number(secondRawBase); // Second base size.
+
+  if (
+    firstPromoters === null ||
+    secondPromoters === null ||
+    firstDetractors === null ||
+    secondDetractors === null
+  ) {
+    return null;
+  }
+
+  if (firstBase <= 1 || secondBase <= 1) {
+    return null;
+  }
+
+  if (
+    firstPromoters < 0 ||
+    firstPromoters > 1 ||
+    secondPromoters < 0 ||
+    secondPromoters > 1 ||
+    firstDetractors < 0 ||
+    firstDetractors > 1 ||
+    secondDetractors < 0 ||
+    secondDetractors > 1
+  ) {
+    return null;
+  }
+
+  // Promoters + detractors cannot logically exceed 100%.
+  if (
+    firstPromoters + firstDetractors > 1 ||
+    secondPromoters + secondDetractors > 1
+  ) {
+    return null;
+  }
+
+  // Recalculate NPS from structure instead of trusting the visible NPS row.
+  const firstNps = firstPromoters - firstDetractors;
+  const secondNps = secondPromoters - secondDetractors;
+
+  // Variance of NPS score where promoter = +1, passive = 0, detractor = -1.
+  const firstVariance =
+    firstPromoters + firstDetractors - firstNps * firstNps;
+
+  const secondVariance =
+    secondPromoters + secondDetractors - secondNps * secondNps;
+
+  if (firstVariance < 0 || secondVariance < 0) {
+    return null;
+  }
+
+  return calculateMeanSignificance(
+    firstNps,
+    firstVariance,
+    firstBase,
+    secondNps,
+    secondVariance,
+    secondBase,
+    "variance"
+  );
+}
+
+export function calculateNpsSignificanceFromSpread(
+  firstRawNps,
+  firstRawSpread,
+  firstRawBase,
+  secondRawNps,
+  secondRawSpread,
+  secondRawBase,
+  spreadType
+) {
+  const firstNps = normalizeNpsValue(firstRawNps); // First NPS on -1..1 scale.
+  const secondNps = normalizeNpsValue(secondRawNps); // Second NPS on -1..1 scale.
+
+  const firstSpread = normalizeNpsSpread(firstRawSpread, spreadType); // First SD/variance on -1..1 scale.
+  const secondSpread = normalizeNpsSpread(secondRawSpread, spreadType); // Second SD/variance on -1..1 scale.
+
+  if (
+    firstNps === null ||
+    secondNps === null ||
+    firstSpread === null ||
+    secondSpread === null
+  ) {
+    return null;
+  }
+
+  return calculateMeanSignificance(
+    firstNps,
+    firstSpread,
+    firstRawBase,
+    secondNps,
+    secondSpread,
+    secondRawBase,
+    spreadType
+  );
+}
+
+/**
+ * Compares NPS values using rows:
+ * Row 1: NPS
+ * Row 2: SD or variance
+ * Row 3: Base
+ */
+export function compareNpsUsingSpreadAndBaseRows(selectedValues, spreadType) {
+  if (!selectedValues || selectedValues.length < 3) {
+    return null;
+  }
+
+  const npsRow = selectedValues[0]; // NPS values.
+  const spreadRow = selectedValues[1]; // SD or variance values.
+  const baseRow = selectedValues[2]; // Bases.
+
+  const rowComparisons = []; // Pairwise NPS comparisons.
+
+  for (let firstColumnIndex = 0; firstColumnIndex < npsRow.length; firstColumnIndex++) {
+    for (
+      let secondColumnIndex = firstColumnIndex + 1;
+      secondColumnIndex < npsRow.length;
+      secondColumnIndex++
+    ) {
+      const significanceResult = calculateNpsSignificanceFromSpread(
+        npsRow[firstColumnIndex],
+        spreadRow[firstColumnIndex],
+        baseRow[firstColumnIndex],
+        npsRow[secondColumnIndex],
+        spreadRow[secondColumnIndex],
+        baseRow[secondColumnIndex],
+        spreadType
+      );
+
+      rowComparisons.push({
+        firstColumnIndex,
+        secondColumnIndex,
+        result: significanceResult,
+      });
+    }
+  }
+
+  return {
+    baseRowIndex: 2,
+    baseRow,
+    comparisonRows: [
+      {
+        valueRowIndex: 0,
+        rowComparisons,
+      },
+    ],
+  };
+}
+
+/**
+ * Compares all NPS columns using rows:
+ * Row 1: NPS
+ * Row 2: Promoters %
+ * Row 3: Detractors %
+ * Row 4: Base
+ */
+export function compareNpsUsingStructureRows(selectedValues) {
+  if (!selectedValues || selectedValues.length < 4) {
+    return null;
+  }
+
+  const npsRow = selectedValues[0]; // NPS values.
+  const promotersRow = selectedValues[1]; // Promoter shares.
+  const detractorsRow = selectedValues[2]; // Detractor shares.
+  const baseRow = selectedValues[3]; // Bases.
+
+  const rowComparisons = []; // Pairwise NPS comparisons.
+
+  for (let firstColumnIndex = 0; firstColumnIndex < npsRow.length; firstColumnIndex++) {
+    for (
+      let secondColumnIndex = firstColumnIndex + 1;
+      secondColumnIndex < npsRow.length;
+      secondColumnIndex++
+    ) {
+      const significanceResult = calculateNpsSignificanceFromStructure(
+        npsRow[firstColumnIndex],
+        promotersRow[firstColumnIndex],
+        detractorsRow[firstColumnIndex],
+        baseRow[firstColumnIndex],
+        npsRow[secondColumnIndex],
+        promotersRow[secondColumnIndex],
+        detractorsRow[secondColumnIndex],
+        baseRow[secondColumnIndex]
+      );
+
+      rowComparisons.push({
+        firstColumnIndex,
+        secondColumnIndex,
+        result: significanceResult,
+      });
+    }
+  }
+
+  return {
+    baseRowIndex: 3,
+    baseRow,
+    comparisonRows: [
+      {
+        valueRowIndex: 0,
         rowComparisons,
       },
     ],
