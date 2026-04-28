@@ -254,7 +254,55 @@ async function runSignificanceFromSelection() {
 
   return;
   }
+  // Ветка NPS - с отклонением/дисперсией
+  if (autoPlan.metricType === "npsSpread") {
+  const allResults = compareNpsUsingSpreadAndBaseRows(
+    cleanedValues,
+    autoPlan.spreadType
+  );
 
+  if (allResults === null) {
+    outputElement.textContent =
+      "Auto detected NPS spread structure, but could not calculate significance.";
+    return;
+  }
+
+  const markerMatrix = buildSignificanceMarkerMatrix(allResults, 1);
+
+  const columnCount = selectedValues[0].length;
+
+  for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+    const markers = markerMatrix[0][columnIndex];
+
+    if (!markers) {
+      continue;
+    }
+
+    const currentCell = selectedRange.getCell(0, columnIndex);
+
+    const displayedValueWithoutMarkers =
+      removeSignificanceMarkersFromText(
+        selectedText[0][columnIndex]
+      );
+
+    currentCell.values = [
+      [`${displayedValueWithoutMarkers} ${markers}`.trim()],
+    ];
+
+    currentCell.format.font.bold = true;
+    currentCell.format.fill.color = "#E2F0D9";
+  }
+
+  await context.sync();
+
+  outputElement.textContent =
+    autoPlan.spreadType === "standardDeviation"
+      ? "Auto detected: NPS + SD"
+      : "Auto detected: NPS + Variance";
+
+  return;
+}
+  
     const allResults = compareAllRowsUsingBottomBases(cleanedValues);
 
     if (allResults === null) {

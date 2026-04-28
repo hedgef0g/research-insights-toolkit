@@ -347,6 +347,34 @@ export function buildAutoCalculationPlan(detectionResult) {
     };
   }
 
+    const isNpsWithStandardDeviation =
+    detectedRows.length >= 3 &&
+    detectedRows[0].rowType === "nps" &&
+    detectedRows[1].rowType === "standardDeviation" &&
+    detectedRows[2].rowType === "base";
+
+  if (isNpsWithStandardDeviation) {
+    return {
+      metricType: "npsSpread",
+      spreadType: "standardDeviation",
+      baseRowIndex: 2,
+    };
+  }
+
+  const isNpsWithVariance =
+    detectedRows.length >= 3 &&
+    detectedRows[0].rowType === "nps" &&
+    detectedRows[1].rowType === "variance" &&
+    detectedRows[2].rowType === "base";
+
+  if (isNpsWithVariance) {
+    return {
+      metricType: "npsSpread",
+      spreadType: "variance",
+      baseRowIndex: 2,
+    };
+  }
+
   return {
     metricType: "proportion",
   };
