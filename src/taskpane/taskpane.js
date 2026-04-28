@@ -45,6 +45,12 @@ import {
   compareNpsUsingSpreadAndBaseRows,
 } from "../core/significance";
 
+import {
+  LABEL_SCAN_COLUMNS_LEFT,
+  detectMetricRowsFromLeftLabels,
+  formatMetricDetectionDiagnostics,
+} from "../core/metric-detector";
+
 /**
  * Initializes task pane events after Office is ready.
  *
@@ -98,6 +104,13 @@ Office.onReady(() => {
 
   calculateNpsVarianceButton.addEventListener("click", () =>
     runNpsSignificanceFromSpreadSelection("variance")
+  );
+
+  const detectMetricTypeButton = document.getElementById("detect-metric-type");
+
+  detectMetricTypeButton.addEventListener(
+    "click",
+    runMetricDetectionDiagnostics
   );
 });
 
@@ -526,5 +539,73 @@ async function runNpsSignificanceFromSpreadSelection(spreadType) {
       spreadType === "standardDeviation"
         ? "NPS significance calculated using standard deviations."
         : "NPS significance calculated using variances.";
+  });
+}
+
+/**
+ * Reads selected Excel range and scans labels to the left of it.
+ *
+ * PURPOSE:
+ * Diagnostic-only step for auto metric detection.
+ * This function does not calculate significance and does not change the sheet.
+ */
+async function runMetricDetectionDiagnostics() {
+  await Excel.run(async (context) => {
+    const selectedRange = context.workbook.getSelectedRange(); // User-selected data range.
+
+    selectedRange.load(["values", "rowIndex", "columnIndex", "rowCount"]);
+
+    await context.sync();
+
+    const selectedValues = selectedRange.values; // Selected data values.
+    const selectedStartRowIndex = selectedRange.rowIndex; // Zero-based first row of selected range.
+    const selectedStartColumnIndex = selectedRange.columnIndex; // Zero-based first column of selected range.
+    const selectedRowCount = selectedRange.rowCount; // Number of selected rows.
+
+    const outputElement = document.getElementById("significance-result"); // Task pane output area.
+
+    if (selectedStartColumnIndex === 0) {
+      const detectionResult = detectMetricRowsFromLeftLabels(
+        selectedValues,
+        []
+      );
+
+      outputElement.textContent =
+        formatMetricDetectionDiagnostics(detectionResult) +
+        "\n\nNo columns exist to the left of the selected range. Default would be proportions.";
+
+      return;
+    }
+
+    const labelColumnCount = Math.min(
+      LABEL_SCAN_COLUMNS_LEFT,
+      selectedStartColumnIndex
+    ); // Scan up to 2 columns left, but not beyond sheet boundary.
+
+    const labelStartColumnIndex =
+      selectedStartColumnIndex - labelColumnCount; // First scanned label column.
+
+    const worksheet = selectedRange.worksheet; // Worksheet containing selected range.
+
+    const leftLabelRange = worksheet.getRangeByIndexes(
+      selectedStartRowIndex,
+      labelStartColumnIndex,
+      selectedRowCount,
+      labelColumnCount
+    ); // Cells to the left of selected data.
+
+    leftLabelRange.load("values");
+
+    await context.sync();
+
+    const leftLabelValues = leftLabelRange.values; // 2D array of left-side label values.
+
+    const detectionResult = detectMetricRowsFromLeftLabels(
+      selectedValues,
+      leftLabelValues
+    );
+
+    outputElement.textContent =
+      formatMetricDetectionDiagnostics(detectionResult);
   });
 }
