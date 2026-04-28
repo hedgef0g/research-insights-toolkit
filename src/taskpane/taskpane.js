@@ -40,6 +40,7 @@ import {
   buildSignificanceMarkerMatrix,
   removeSignificanceMarkersFromText,
   removeSignificanceMarkersFromMatrix,
+  compareMeansUsingSpreadAndBaseRows,
 } from "../core/significance";
 
 /**
@@ -109,7 +110,7 @@ async function runSignificanceFromSelection() {
           selectedText[rowIndex][columnIndex]
         );
         
-        currentCell.values = [[`${displayedValueWithoutMarkers}${markers}`]];
+        currentCell.values = [[`${displayedValueWithoutMarkers} ${markers}`.trim()]];
 
         // Format cells where the value is significantly higher than at least one other column.
         currentCell.format.font.bold = true; // Make the whole cell text bold.
@@ -133,8 +134,25 @@ Office.onReady(() => {
   const calculateButton = document.getElementById("calculate-significance");
   const clearButton = document.getElementById("clear-significance");
 
+  const calculateMeanSignificanceSdButton = document.getElementById(
+    "calculate-mean-significance-sd"
+  );
+
+  const calculateMeanSignificanceVarianceButton = document.getElementById(
+    "calculate-mean-significance-variance"
+  );
+
   calculateButton.addEventListener("click", runSignificanceFromSelection);
+
   clearButton.addEventListener("click", clearSignificanceFromSelection);
+
+  calculateMeanSignificanceSdButton.addEventListener("click", () =>
+    runMeanSignificanceFromSelection("standardDeviation")
+  );
+
+  calculateMeanSignificanceVarianceButton.addEventListener("click", () =>
+    runMeanSignificanceFromSelection("variance")
+  );
 });
 
 /**
@@ -214,5 +232,97 @@ async function clearSignificanceFromSelection() {
 
     const outputElement = document.getElementById("significance-result");
     outputElement.textContent = "Significance markers removed.";
+  });
+}
+
+/**
+ * Reads selected Excel range and calculates pairwise significance for means.
+ *
+ * PURPOSE:
+ * Excel-specific wrapper for mean significance MVP.
+ *
+ * EXPECTED SELECTION:
+ * Row 1: means
+ * Row 2: standard deviations OR variances
+ * Row 3: bases
+ *
+ * INPUT:
+ * spreadType - "standardDeviation" or "variance".
+ */
+async function runMeanSignificanceFromSelection(spreadType) {
+  await Excel.run(async (context) => {
+    const selectedRange = context.workbook.getSelectedRange(); // Current selected Excel range.
+
+    selectedRange.load(["values", "text", "rowCount", "columnCount"]); // Load values and displayed text.
+
+    await context.sync();
+
+    const selectedValues = selectedRange.values; // Raw selected values.
+    const selectedText = selectedRange.text; // Displayed selected values.
+
+    const outputElement = document.getElementById("significance-result"); // Task pane output.
+
+    if (
+      !selectedValues ||
+      selectedValues.length < 3 ||
+      selectedValues[0].length < 2
+    ) {
+      outputElement.textContent =
+        "Please select at least 3 rows and 2 columns: means, SD/variance, bases.";
+      return;
+    }
+
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues); // Remove old markers before recalculation.
+
+    selectedRange.values = cleanedValues;
+
+    selectedRange.format.horizontalAlignment = "Center";
+    selectedRange.format.verticalAlignment = "Center";
+
+    await context.sync();
+
+    const allResults = compareMeansUsingSpreadAndBaseRows(
+      cleanedValues,
+      spreadType
+    );
+
+    if (allResults === null) {
+      outputElement.textContent = "Could not process selected mean range.";
+      return;
+    }
+
+    const markerMatrix = buildSignificanceMarkerMatrix(allResults); // Significance letters for mean row.
+
+    const valueRowCount = 1; // For mean MVP, only first row receives markers.
+    const columnCount = selectedValues[0].length; // Number of selected columns.
+
+    for (let rowIndex = 0; rowIndex < valueRowCount; rowIndex++) {
+      for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+        const markers = markerMatrix[rowIndex][columnIndex]; // Marker letters for current mean cell.
+
+        if (!markers) {
+          continue;
+        }
+
+        const currentCell = selectedRange.getCell(rowIndex, columnIndex); // Mean cell receiving markers.
+
+        const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
+          selectedText[rowIndex][columnIndex]
+        );
+
+        currentCell.values = [[`${displayedValueWithoutMarkers} ${markers}`.trim()]];
+
+        // Highlight significant winners only.
+        currentCell.format.font.bold = true;
+        currentCell.format.fill.color = "#E2F0D9";
+      }
+    }
+
+    await context.sync();
+
+    outputElement.textContent =
+      spreadType === "standardDeviation"
+        ? "Mean significance calculated using standard deviations."
+        : "Mean significance calculated using variances.";
   });
 }
