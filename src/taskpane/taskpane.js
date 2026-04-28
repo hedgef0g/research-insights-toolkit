@@ -35,36 +35,33 @@ export async function run() {
   }
 }
 
-import { calculateProportionSignificance } from "../core/significance";
+import { compareAllRowsUsingBottomBases } from "../core/significance";
 
 /**
- * Reads selected Excel range and runs significance calculation.
+ * Reads selected Excel range and compares all columns pairwise for each value row.
  *
  * PURPOSE:
- * This is the Excel-specific wrapper.
- * It knows how to read Excel selection and send values to the shared core.
+ * Excel-specific wrapper for MVP v0.2.
  *
- * MVP EXPECTED SELECTION:
- * Row 1: value 1, value 2
- * Row 2: base 1,  base 2
+ * EXPECTED SELECTION:
+ * Row 1..N-1: values
+ * Last row: bases
  *
- * FUTURE EXTENSIONS:
- * - Detect bases above values.
- * - Support weighted base row.
- * - Ignore text cells intelligently.
- * - Support more than 2 comparison points.
+ * Example:
+ * 42   35   50
+ * 30   33   29
+ * 200  180  210
  */
 async function runSignificanceFromSelection() {
   await Excel.run(async (context) => {
     const selectedRange = context.workbook.getSelectedRange(); // Current selected Excel range.
 
-    selectedRange.load("values"); // Ask Excel to load cell values from selected range.
+    selectedRange.load("values"); // Load cell values from Excel.
 
-    await context.sync(); // Execute pending Excel API commands.
+    await context.sync(); // Execute Excel API request.
 
-    const selectedValues = selectedRange.values; // Two-dimensional array from Excel.
-
-    const outputElement = document.getElementById("significance-result"); // Result block in the task pane.
+    const selectedValues = selectedRange.values; // 2D array of selected cell values.
+    const outputElement = document.getElementById("significance-result"); // Output block in task pane.
 
     if (
       !selectedValues ||
@@ -72,39 +69,18 @@ async function runSignificanceFromSelection() {
       selectedValues[0].length < 2
     ) {
       outputElement.textContent =
-        "Please select at least 4 cells: two values above two bases.";
+        "Please select at least 2 columns and 2 rows. Last row must contain bases.";
       return;
     }
 
-    const firstValue = selectedValues[0][0]; // First value, top-left cell.
-    const secondValue = selectedValues[0][1]; // Second value, top-right cell.
+    const allResults = compareAllRowsUsingBottomBases(selectedValues);
 
-    const firstBase = selectedValues[1][0]; // First base, bottom-left cell.
-    const secondBase = selectedValues[1][1]; // Second base, bottom-right cell.
-
-    const significanceResult = calculateProportionSignificance(
-      firstValue,
-      firstBase,
-      secondValue,
-      secondBase
-    );
-
-    if (significanceResult === null) {
-      outputElement.textContent =
-        "Could not calculate significance. Check that values and bases are numeric.";
+    if (allResults === null) {
+      outputElement.textContent = "Could not process selected range.";
       return;
     }
 
-    outputElement.textContent =
-      `First value: ${significanceResult.firstProportion}\n` +
-      `Second value: ${significanceResult.secondProportion}\n` +
-      `First base: ${significanceResult.firstBase}\n` +
-      `Second base: ${significanceResult.secondBase}\n` +
-      `z-score: ${significanceResult.zScore.toFixed(3)}\n` +
-      `Significant at 95%: ${
-        significanceResult.isSignificant ? "YES" : "NO"
-      }\n` +
-      `Direction: ${significanceResult.direction}`;
+    outputElement.textContent = formatAllComparisonsForDisplay(allResults);
   });
 }
 
@@ -119,3 +95,53 @@ Office.onReady(() => {
 
   calculateButton.addEventListener("click", runSignificanceFromSelection);
 });
+
+/**
+ * Formats all pairwise comparison results into readable text for the task pane.
+ *
+ * PURPOSE:
+ * Temporary MVP output.
+ * Later we will replace this with table markers, colors, or letters.
+ *
+ * INPUT:
+ * allResults - object returned by compareAllRowsUsingBottomBases().
+ *
+ * OUTPUT:
+ * Multiline text for display in the Excel task pane.
+ */
+function formatAllComparisonsForDisplay(allResults) {
+  const outputLines = []; // Final text lines for the task pane.
+
+  outputLines.push("Pairwise significance results");
+  outputLines.push(`Base row: ${allResults.baseRowIndex + 1}`);
+  outputLines.push("");
+
+  for (const comparisonRow of allResults.comparisonRows) {
+    const displayedRowNumber = comparisonRow.valueRowIndex + 1; // Human-readable row number inside selection.
+
+    outputLines.push(`Value row ${displayedRowNumber}:`);
+
+    for (const comparison of comparisonRow.rowComparisons) {
+      const firstColumnNumber = comparison.firstColumnIndex + 1; // Human-readable column number inside selection.
+      const secondColumnNumber = comparison.secondColumnIndex + 1; // Human-readable column number inside selection.
+
+      if (comparison.result === null) {
+        outputLines.push(
+          `  Col ${firstColumnNumber} vs Col ${secondColumnNumber}: skipped`
+        );
+        continue;
+      }
+
+      outputLines.push(
+        `  Col ${firstColumnNumber} vs Col ${secondColumnNumber}: ` +
+          `z=${comparison.result.zScore.toFixed(3)}, ` +
+          `sig=${comparison.result.isSignificant ? "YES" : "NO"}, ` +
+          `direction=${comparison.result.direction}`
+      );
+    }
+
+    outputLines.push("");
+  }
+
+  return outputLines.join("\n");
+}

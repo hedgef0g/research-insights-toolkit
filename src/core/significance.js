@@ -134,3 +134,108 @@ export function calculateProportionSignificance(
     zThreshold: DEFAULT_Z_THRESHOLD_95,
   };
 }
+
+/**
+ * Compares all column pairs inside one row of proportions.
+ *
+ * PURPOSE:
+ * For one row of values, compare every column with every other column.
+ * Example: columns A, B, C produce comparisons:
+ * A vs B, A vs C, B vs C.
+ *
+ * INPUT:
+ * valueRow - array of values from one spreadsheet row.
+ * baseRow  - array of bases, usually from the bottom row of selected range.
+ *
+ * OUTPUT:
+ * Array of comparison result objects.
+ */
+export function compareAllProportionsInRow(valueRow, baseRow) {
+  const rowComparisons = []; // Stores all pairwise comparisons for this row.
+
+  for (let firstColumnIndex = 0; firstColumnIndex < valueRow.length; firstColumnIndex++) {
+    for (
+      let secondColumnIndex = firstColumnIndex + 1;
+      secondColumnIndex < valueRow.length;
+      secondColumnIndex++
+    ) {
+      const firstValue = valueRow[firstColumnIndex]; // Value from the first compared column.
+      const secondValue = valueRow[secondColumnIndex]; // Value from the second compared column.
+
+      const firstBase = baseRow[firstColumnIndex]; // Base for the first compared column.
+      const secondBase = baseRow[secondColumnIndex]; // Base for the second compared column.
+
+      const significanceResult = calculateProportionSignificance(
+        firstValue,
+        firstBase,
+        secondValue,
+        secondBase
+      );
+
+      rowComparisons.push({
+        firstColumnIndex,
+        secondColumnIndex,
+        firstValue,
+        secondValue,
+        firstBase,
+        secondBase,
+        result: significanceResult,
+      });
+    }
+  }
+
+  return rowComparisons;
+}
+
+/**
+ * Compares all rows of selected table data using the last row as bases.
+ *
+ * PURPOSE:
+ * This is the main parser/calculation function for MVP v0.2.
+ * It assumes:
+ * - selected range contains multiple columns;
+ * - last row contains bases;
+ * - all rows above the last row contain values;
+ * - values are proportions/percentages;
+ * - each value row is compared column-by-column, all pairs.
+ *
+ * INPUT:
+ * selectedValues - 2D array from Excel or Google Sheets.
+ *
+ * OUTPUT:
+ * Object with base row and comparison results for every value row.
+ *
+ * MVP LIMITATIONS:
+ * - Bases must be in the last selected row.
+ * - Does not yet auto-detect weighted bases.
+ * - Does not yet use text labels.
+ * - Does not yet write significance markers back to the table.
+ */
+export function compareAllRowsUsingBottomBases(selectedValues) {
+  if (!selectedValues || selectedValues.length < 2) {
+    return null;
+  }
+
+  const totalRows = selectedValues.length; // Number of selected spreadsheet rows.
+  const baseRowIndex = totalRows - 1; // Last row is treated as the base row.
+  const baseRow = selectedValues[baseRowIndex]; // Bases for all columns.
+
+  const comparisonRows = []; // Stores results for each value row.
+
+  for (let valueRowIndex = 0; valueRowIndex < baseRowIndex; valueRowIndex++) {
+    const valueRow = selectedValues[valueRowIndex]; // Current row of percentages/shares.
+
+    const rowComparisons = compareAllProportionsInRow(valueRow, baseRow);
+
+    comparisonRows.push({
+      valueRowIndex,
+      rowComparisons,
+    });
+  }
+
+  return {
+    baseRowIndex,
+    baseRow,
+    comparisonRows,
+  };
+}
