@@ -35,33 +35,32 @@ export async function run() {
   }
 }
 
-import { compareAllRowsUsingBottomBases } from "../core/significance";
+import {
+  compareAllRowsUsingBottomBases,
+  buildSignificanceMarkerMatrix,
+} from "../core/significance";
 
 /**
- * Reads selected Excel range and compares all columns pairwise for each value row.
+ * Reads selected Excel range, calculates pairwise significance,
+ * and writes significance letters directly into value cells.
  *
- * PURPOSE:
- * Excel-specific wrapper for MVP v0.2.
- *
- * EXPECTED SELECTION:
- * Row 1..N-1: values
- * Last row: bases
- *
- * Example:
- * 42   35   50
- * 30   33   29
- * 200  180  210
+ * MVP v0.3:
+ * - Last selected row is treated as bases.
+ * - All rows above are treated as values.
+ * - Significant higher values receive labels of lower columns.
  */
 async function runSignificanceFromSelection() {
   await Excel.run(async (context) => {
     const selectedRange = context.workbook.getSelectedRange(); // Current selected Excel range.
 
-    selectedRange.load("values"); // Load cell values from Excel.
+    selectedRange.load(["values", "text", "rowCount", "columnCount"]); // Load raw and displayed cell content.
 
-    await context.sync(); // Execute Excel API request.
+    await context.sync();
 
-    const selectedValues = selectedRange.values; // 2D array of selected cell values.
-    const outputElement = document.getElementById("significance-result"); // Output block in task pane.
+    const selectedValues = selectedRange.values; // Raw values used for calculations.
+    const selectedText = selectedRange.text; // Displayed values used for visible output.
+
+    const outputElement = document.getElementById("significance-result"); // Result block in task pane.
 
     if (
       !selectedValues ||
@@ -80,7 +79,29 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    outputElement.textContent = formatAllComparisonsForDisplay(allResults);
+    const markerMatrix = buildSignificanceMarkerMatrix(allResults);
+
+    const valueRowCount = allResults.baseRowIndex; // Number of rows above base row.
+    const columnCount = selectedValues[0].length; // Number of selected columns.
+
+    for (let rowIndex = 0; rowIndex < valueRowCount; rowIndex++) {
+      for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+        const markers = markerMatrix[rowIndex][columnIndex]; // Letters to add to current cell.
+
+        if (!markers) {
+          continue;
+        }
+
+        const currentCell = selectedRange.getCell(rowIndex, columnIndex); // Cell that receives significance letters.
+        const displayedValue = selectedText[rowIndex][columnIndex]; // Current visible cell text.
+
+        currentCell.values = [[`${displayedValue}${markers}`]];
+      }
+    }
+
+    await context.sync();
+
+    outputElement.textContent = "Significance markers added to selected cells.";
   });
 }
 

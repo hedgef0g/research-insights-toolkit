@@ -239,3 +239,111 @@ export function compareAllRowsUsingBottomBases(selectedValues) {
     comparisonRows,
   };
 }
+
+/**
+ * Generates column significance labels.
+ *
+ * PURPOSE:
+ * Create readable column labels for significance notation:
+ * a-z, A-Z, а-я, А-Я.
+ *
+ * IMPORTANT:
+ * Excludes:
+ * - Latin t / T
+ * - Cyrillic т / Т
+ *
+ * OUTPUT:
+ * Array of labels.
+ */
+export function generateSignificanceLabels() {
+  const latinLowercaseLabels = "abcdefghijklmnopqrsuvwxyz".split(""); // Latin a-z without t.
+  const latinUppercaseLabels = "ABCDEFGHIJKLMNOPQRSUVWXYZ".split(""); // Latin A-Z without T.
+
+  const cyrillicLowercaseLabels = "абвгдежзийклмнопрсуфхцчшщъыьэюя".split(""); // Cyrillic а-я without т.
+  const cyrillicUppercaseLabels = "АБВГДЕЖЗИЙКЛМНОПРСУФХЦЧШЩЪЫЬЭЮЯ".split(""); // Cyrillic А-Я without Т.
+
+  return [
+    ...latinLowercaseLabels,
+    ...latinUppercaseLabels,
+    ...cyrillicLowercaseLabels,
+    ...cyrillicUppercaseLabels,
+  ];
+}
+
+/**
+ * Builds empty marker storage for each value cell.
+ *
+ * PURPOSE:
+ * For every value row and column, prepare a place where significance letters
+ * will be collected before writing them back to Excel.
+ */
+export function createEmptyMarkerMatrix(rowCount, columnCount) {
+  const markerMatrix = []; // 2D array: row -> column -> marker letters.
+
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
+    const markerRow = []; // Marker letters for one value row.
+
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+      markerRow.push(""); // Empty string means no significance markers yet.
+    }
+
+    markerMatrix.push(markerRow);
+  }
+
+  return markerMatrix;
+}
+
+/**
+ * Converts pairwise comparison results into cell markers.
+ *
+ * PURPOSE:
+ * If one column is significantly higher than another column,
+ * add the lower column's label to the higher value cell.
+ *
+ * EXAMPLE:
+ * If column 1 is significantly higher than column 2,
+ * column 1 receives marker "b".
+ *
+ * INPUT:
+ * allResults - result of compareAllRowsUsingBottomBases().
+ *
+ * OUTPUT:
+ * 2D marker matrix for value rows only.
+ */
+export function buildSignificanceMarkerMatrix(allResults) {
+  const valueRowCount = allResults.baseRowIndex; // Number of rows above the base row.
+  const columnCount = allResults.baseRow.length; // Number of selected columns.
+
+  const significanceLabels = generateSignificanceLabels(); // Labels assigned to selected columns.
+  const markerMatrix = createEmptyMarkerMatrix(valueRowCount, columnCount); // Output marker storage.
+
+  for (const comparisonRow of allResults.comparisonRows) {
+    const valueRowIndex = comparisonRow.valueRowIndex; // Row where markers will be applied.
+
+    for (const comparison of comparisonRow.rowComparisons) {
+      if (comparison.result === null) {
+        continue;
+      }
+
+      if (!comparison.result.isSignificant) {
+        continue;
+      }
+
+      const firstColumnIndex = comparison.firstColumnIndex; // First compared column.
+      const secondColumnIndex = comparison.secondColumnIndex; // Second compared column.
+
+      const firstColumnLabel = significanceLabels[firstColumnIndex]; // Label for first column.
+      const secondColumnLabel = significanceLabels[secondColumnIndex]; // Label for second column.
+
+      if (comparison.result.direction === "first_higher") {
+        markerMatrix[valueRowIndex][firstColumnIndex] += secondColumnLabel;
+      }
+
+      if (comparison.result.direction === "second_higher") {
+        markerMatrix[valueRowIndex][secondColumnIndex] += firstColumnLabel;
+      }
+    }
+  }
+
+  return markerMatrix;
+}
