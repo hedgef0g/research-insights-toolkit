@@ -38,6 +38,8 @@ export async function run() {
 import {
   compareAllRowsUsingBottomBases,
   buildSignificanceMarkerMatrix,
+  removeSignificanceMarkersFromText,
+  removeSignificanceMarkersFromMatrix,
 } from "../core/significance";
 
 /**
@@ -62,6 +64,12 @@ async function runSignificanceFromSelection() {
     await context.sync();
 
     const selectedValues = selectedRange.values; // Raw values used for calculations.
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
+
+    // Remove old significance markers before running a new calculation.
+    selectedRange.values = cleanedValues;
+
+    await context.sync();
     const selectedText = selectedRange.text; // Displayed values used for visible output.
 
     const outputElement = document.getElementById("significance-result"); // Result block in task pane.
@@ -76,7 +84,7 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    const allResults = compareAllRowsUsingBottomBases(selectedValues);
+    const allResults = compareAllRowsUsingBottomBases(cleanedValues);
 
     if (allResults === null) {
       outputElement.textContent = "Could not process selected range.";
@@ -97,9 +105,11 @@ async function runSignificanceFromSelection() {
         }
 
         const currentCell = selectedRange.getCell(rowIndex, columnIndex); // Cell that receives significance letters.
-        const displayedValue = selectedText[rowIndex][columnIndex]; // Current visible cell text.
-
-        currentCell.values = [[`${displayedValue}${markers}`]];
+        const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
+          selectedText[rowIndex][columnIndex]
+        );
+        
+        currentCell.values = [[`${displayedValueWithoutMarkers}${markers}`]];
 
         // Format cells where the value is significantly higher than at least one other column.
         currentCell.format.font.bold = true; // Make the whole cell text bold.
@@ -120,9 +130,11 @@ async function runSignificanceFromSelection() {
  * Connect the visible button in the Excel panel with our calculation logic.
  */
 Office.onReady(() => {
-  const calculateButton = document.getElementById("calculate-significance"); // Button in taskpane.html.
+  const calculateButton = document.getElementById("calculate-significance");
+  const clearButton = document.getElementById("clear-significance");
 
   calculateButton.addEventListener("click", runSignificanceFromSelection);
+  clearButton.addEventListener("click", clearSignificanceFromSelection);
 });
 
 /**
@@ -173,4 +185,34 @@ function formatAllComparisonsForDisplay(allResults) {
   }
 
   return outputLines.join("\n");
+}
+
+/**
+ * Removes significance markers and formatting from the selected range.
+ *
+ * PURPOSE:
+ * User-facing cleanup button.
+ */
+async function clearSignificanceFromSelection() {
+  await Excel.run(async (context) => {
+    const selectedRange = context.workbook.getSelectedRange(); // Current selected Excel range.
+
+    selectedRange.load("values"); // Load current cell values.
+
+    await context.sync();
+
+    const selectedValues = selectedRange.values; // Current values, possibly with markers.
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues); // Values without markers.
+
+    selectedRange.values = cleanedValues;
+
+    // Reset formatting applied by significance macro.
+    selectedRange.format.font.bold = false;
+    selectedRange.format.fill.clear();
+
+    await context.sync();
+
+    const outputElement = document.getElementById("significance-result");
+    outputElement.textContent = "Significance markers removed.";
+  });
 }

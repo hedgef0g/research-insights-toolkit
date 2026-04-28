@@ -24,20 +24,29 @@ export const DEFAULT_Z_THRESHOLD_95 = 1.96;
  * Number between 0 and 1, or null if the value cannot be used.
  */
 export function normalizeShare(rawValue) {
-  const numericValue = Number(rawValue); // Numeric version of the spreadsheet cell value.
+  if (rawValue === null || rawValue === undefined || rawValue === "") {
+    return null;
+  }
+
+  const textValue = String(rawValue).trim(); // Spreadsheet value as text.
+
+  const isPercentText = textValue.endsWith("%"); // Example: "42%".
+
+  const cleanedTextValue = isPercentText
+    ? textValue.replace("%", "").trim()
+    : textValue;
+
+  const numericValue = Number(cleanedTextValue.replace(",", "."));
 
   if (Number.isNaN(numericValue)) {
     return null;
   }
 
-  // If value is greater than 1, assume it was entered as a percentage.
-  // Example: 42 becomes 0.42.
-  if (numericValue > 1) {
+  if (isPercentText) {
     return numericValue / 100;
   }
 
-  // If value is already between 0 and 1, treat it as a decimal share.
-  return numericValue;
+  return numericValue > 1 ? numericValue / 100 : numericValue;
 }
 
 /**
@@ -346,4 +355,44 @@ export function buildSignificanceMarkerMatrix(allResults) {
   }
 
   return markerMatrix;
+}
+
+/**
+ * Removes significance marker letters from the end of a cell text.
+ *
+ * PURPOSE:
+ * If a previous macro run changed "42bC" into a marked value,
+ * this function restores visible value text back to "42".
+ *
+ * IMPORTANT:
+ * This only removes marker characters from the END of the text.
+ */
+export function removeSignificanceMarkersFromText(rawText) {
+  if (rawText === null || rawText === undefined) {
+    return rawText;
+  }
+
+  const textValue = String(rawText); // Cell value converted to text.
+
+  const markerCharacters =
+    "abcdefghijklmnopqrsuvwxyz" +
+    "ABCDEFGHIJKLMNOPQRSUVWXYZ" +
+    "абвгдежзийклмнопрсуфхцчшщъыьэюя" +
+    "АБВГДЕЖЗИЙКЛМНОПРСУФХЦЧШЩЪЫЬЭЮЯ";
+
+  const markerSuffixPattern = new RegExp(`[${markerCharacters}]+$`);
+
+  return textValue.replace(markerSuffixPattern, "");
+}
+
+/**
+ * Removes significance markers from a 2D spreadsheet values array.
+ *
+ * PURPOSE:
+ * Clean the selected range before recalculating significance.
+ */
+export function removeSignificanceMarkersFromMatrix(valuesMatrix) {
+  return valuesMatrix.map((row) =>
+    row.map((cellValue) => removeSignificanceMarkersFromText(cellValue))
+  );
 }
