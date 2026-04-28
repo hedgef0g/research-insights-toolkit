@@ -415,17 +415,48 @@ function findNextBaseRowIndex(rowDiagnostics, startRowIndex) {
  * Support complex tables where proportions, means, and NPS can appear
  * in one selected range in different combinations.
  *
- * OUTPUT:
- * Array of calculation blocks.
+ * KEY LOGIC:
+ * Proportion rows may not have their own immediate Base row.
+ * If a proportion block is followed by Mean or NPS, the next Base row may be shared.
  */
 export function buildCalculationBlocks(detectionResult) {
   const rowDiagnostics = detectionResult.rowDiagnostics; // Classified rows.
   const calculationBlocks = []; // Final list of calculation blocks.
+  const pendingProportionRows = []; // Proportion rows waiting for the next available base.
 
   let rowIndex = 0; // Current row scanner position.
 
   while (rowIndex < rowDiagnostics.length) {
     const currentRowType = rowDiagnostics[rowIndex].rowType; // Current detected row type.
+
+    /**
+     * Proportion-like row:
+     * Store it for later. We will attach it to the next Base row.
+     */
+    if (isProportionValueRowType(currentRowType)) {
+      pendingProportionRows.push(rowIndex);
+      rowIndex++;
+      continue;
+    }
+
+    /**
+     * Base row:
+     * If there are pending proportion rows, close them using this base.
+     */
+    if (currentRowType === "base") {
+      if (pendingProportionRows.length > 0) {
+        calculationBlocks.push({
+          metricType: "proportion",
+          valueRowIndexes: [...pendingProportionRows],
+          baseRowIndex: rowIndex,
+        });
+
+        pendingProportionRows.length = 0;
+      }
+
+      rowIndex++;
+      continue;
+    }
 
     /**
      * Mean block:
@@ -451,6 +482,20 @@ export function buildCalculationBlocks(detectionResult) {
           baseRowIndex,
         });
 
+        /**
+         * If proportion rows appeared before this mean block and had no base yet,
+         * use this same base for them.
+         */
+        if (pendingProportionRows.length > 0) {
+          calculationBlocks.push({
+            metricType: "proportion",
+            valueRowIndexes: [...pendingProportionRows],
+            baseRowIndex,
+          });
+
+          pendingProportionRows.length = 0;
+        }
+
         rowIndex = baseRowIndex + 1;
         continue;
       }
@@ -474,7 +519,7 @@ export function buildCalculationBlocks(detectionResult) {
       const baseRowIndex = findNextBaseRowIndex(
         rowDiagnostics,
         detractorsRowIndex
-      );
+      ); // Nearest base below detractors row.
 
       if (baseRowIndex !== null) {
         calculationBlocks.push({
@@ -484,6 +529,20 @@ export function buildCalculationBlocks(detectionResult) {
           detractorsRowIndex,
           baseRowIndex,
         });
+
+        /**
+         * If proportion rows appeared before this NPS block and had no base yet,
+         * use this same base for them.
+         */
+        if (pendingProportionRows.length > 0) {
+          calculationBlocks.push({
+            metricType: "proportion",
+            valueRowIndexes: [...pendingProportionRows],
+            baseRowIndex,
+          });
+
+          pendingProportionRows.length = 0;
+        }
 
         rowIndex = baseRowIndex + 1;
         continue;
@@ -514,45 +573,19 @@ export function buildCalculationBlocks(detectionResult) {
           baseRowIndex,
         });
 
-        rowIndex = baseRowIndex + 1;
-        continue;
-      }
-    }
+        /**
+         * If proportion rows appeared before this NPS spread block and had no base yet,
+         * use this same base for them.
+         */
+        if (pendingProportionRows.length > 0) {
+          calculationBlocks.push({
+            metricType: "proportion",
+            valueRowIndexes: [...pendingProportionRows],
+            baseRowIndex,
+          });
 
-    /**
-     * Proportion block:
-     * One or more proportion rows followed by a base row somewhere below.
-     *
-     * We collect rows labelled as proportions, plus unknown text/empty rows
-     * only if they appear before a base and are not special rows.
-     */
-    if (isProportionValueRowType(currentRowType)) {
-      const proportionValueRowIndexes = []; // Rows to be treated as proportions.
-      let scannerRowIndex = rowIndex; // Local scanner for consecutive proportion-like rows.
-
-      while (scannerRowIndex < rowDiagnostics.length) {
-        const scannerRowType = rowDiagnostics[scannerRowIndex].rowType;
-
-        if (isProportionValueRowType(scannerRowType)) {
-          proportionValueRowIndexes.push(scannerRowIndex);
-          scannerRowIndex++;
-          continue;
+          pendingProportionRows.length = 0;
         }
-
-        break;
-      }
-
-      const baseRowIndex = findNextBaseRowIndex(
-        rowDiagnostics,
-        scannerRowIndex - 1
-      );
-
-      if (proportionValueRowIndexes.length > 0 && baseRowIndex !== null) {
-        calculationBlocks.push({
-          metricType: "proportion",
-          valueRowIndexes: proportionValueRowIndexes,
-          baseRowIndex,
-        });
 
         rowIndex = baseRowIndex + 1;
         continue;
@@ -563,7 +596,8 @@ export function buildCalculationBlocks(detectionResult) {
   }
 
   /**
-   * If no labelled blocks were detected, fallback to the old assumption:
+   * Fallback:
+   * If no labelled blocks were detected, use the old assumption:
    * all rows except the last one are proportions, last row is base.
    */
   if (calculationBlocks.length === 0 && rowDiagnostics.length >= 2) {
