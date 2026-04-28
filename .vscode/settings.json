@@ -1,0 +1,14 @@
+{
+    "eslint.validate": [
+      "javascript",
+      "javascriptreact",
+      "typescript"
+    ],
+    "editor.formatOnSave": true,
+    "editor.tabSize": 2,
+    "files.autoSave": "afterDelay",
+    "editor.codeActionsOnSave": {
+      "source.fixAll.eslint": "explicit"
+    }
+  }
+  
