@@ -169,6 +169,7 @@ async function runSignificanceFromSelection() {
       return;
     }
 
+    // Ветка mean
     if (autoPlan.metricType === "mean") {
   const allResults = compareMeansUsingSpreadAndBaseRows(
     cleanedValues,
@@ -209,7 +210,50 @@ async function runSignificanceFromSelection() {
       : "Auto detected: Mean + Variance";
 
   return;
-}
+  }
+      // Ветка NPS
+  if (autoPlan.metricType === "npsStructure") {
+  const allResults = compareNpsUsingStructureRows(cleanedValues);
+
+  if (allResults === null) {
+    outputElement.textContent =
+      "Auto detected NPS structure, but could not calculate significance.";
+    return;
+  }
+
+  // Only the first row, the NPS row, should receive markers.
+  const markerMatrix = buildSignificanceMarkerMatrix(allResults, 1);
+
+  const columnCount = selectedValues[0].length;
+
+  for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+    const markers = markerMatrix[0][columnIndex];
+
+    if (!markers) {
+      continue;
+    }
+
+    const currentCell = selectedRange.getCell(0, columnIndex);
+
+    const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
+      selectedText[0][columnIndex]
+    );
+
+    currentCell.values = [
+      [`${displayedValueWithoutMarkers} ${markers}`.trim()],
+    ];
+
+    currentCell.format.font.bold = true;
+    currentCell.format.fill.color = "#E2F0D9";
+  }
+
+  await context.sync();
+
+  outputElement.textContent =
+    "Auto detected: NPS + Promoters/Detractors";
+
+  return;
+  }
 
     const allResults = compareAllRowsUsingBottomBases(cleanedValues);
 

@@ -333,6 +333,20 @@ export function buildAutoCalculationPlan(detectionResult) {
     }
   }
 
+  const isNpsWithPromotersDetractors =
+  detectedRows.length >= 4 &&
+  detectedRows[0].rowType === "nps" &&
+  detectedRows[1].rowType === "promoters" &&
+  detectedRows[2].rowType === "detractors" &&
+  detectedRows[3].rowType === "base";
+
+  if (isNpsWithPromotersDetractors) {
+    return {
+      metricType: "npsStructure",
+      baseRowIndex: 3,
+    };
+  }
+
   return {
     metricType: "proportion",
   };
