@@ -71,19 +71,20 @@ export function extractRowLabelFromLeftCells(leftLabelRowValues) {
     return "";
   }
 
-  /**
-   * We scan from right to left because the closest label to the selected
-   * data range is usually the most relevant one.
-   */
   for (
     let labelColumnIndex = leftLabelRowValues.length - 1;
     labelColumnIndex >= 0;
     labelColumnIndex--
   ) {
-    const currentLabelValue = leftLabelRowValues[labelColumnIndex]; // Candidate label cell value.
-    const normalizedLabel = normalizeLabelText(currentLabelValue); // Normalized candidate.
+    const currentLabelValue = leftLabelRowValues[labelColumnIndex];
 
-    if (normalizedLabel && Number.isNaN(Number(normalizedLabel))) {
+    if (isNumericLikeCellValue(currentLabelValue)) {
+      continue;
+    }
+
+    const normalizedLabel = normalizeLabelText(currentLabelValue);
+
+    if (normalizedLabel) {
       return String(currentLabelValue);
     }
   }
@@ -378,4 +379,29 @@ export function getAllowedMarkerRowIndexes(calculationBlocks) {
   }
 
   return allowedMarkerRows;
+}
+
+/**
+ * Checks whether a cell value looks like a numeric data value.
+ *
+ * PURPOSE:
+ * Prevent numeric columns located between labels and selected range
+ * from being treated as row labels.
+ */
+function isNumericLikeCellValue(rawValue) {
+  if (rawValue === null || rawValue === undefined || rawValue === "") {
+    return false;
+  }
+
+  if (typeof rawValue === "number") {
+    return true;
+  }
+
+  const textValue = String(rawValue).trim().replace("%", "").replace(",", ".");
+
+  if (textValue === "") {
+    return false;
+  }
+
+  return !Number.isNaN(Number(textValue));
 }
