@@ -1,4 +1,4 @@
-import { METRIC_DICTIONARY } from "./dictionary.config"; // Импортируем наш конфиг
+import { METRIC_DICTIONARY } from "./config/dictionary.config"; // Импортируем наш конфиг
 
 export const LABEL_SCAN_COLUMNS_LEFT = 2;
 
@@ -185,10 +185,6 @@ function findNextBaseRowIndex(rowDiagnostics, startRowIndex) {
  * PURPOSE:
  * Support complex tables where proportions, means, and NPS can appear
  * in one selected range in different combinations.
- *
- * KEY LOGIC:
- * Proportion rows may not have their own immediate Base row.
- * If a proportion block is followed by Mean or NPS, the next Base row may be shared.
  */
 export function buildCalculationBlocks(detectionResult) {
   const rowDiagnostics = detectionResult.rowDiagnostics; // Classified rows.
@@ -200,20 +196,14 @@ export function buildCalculationBlocks(detectionResult) {
   while (rowIndex < rowDiagnostics.length) {
     const currentRowType = rowDiagnostics[rowIndex].rowType; // Current detected row type.
 
-    /**
-     * Proportion-like row:
-     * Store it for later. We will attach it to the next Base row.
-     */
+    // 1. Проценты собираем в буфер
     if (isProportionValueRowType(currentRowType)) {
       pendingProportionRows.push(rowIndex);
       rowIndex++;
       continue;
     }
 
-    /**
-     * Base row:
-     * If there are pending proportion rows, close them using this base.
-     */
+    // 2. Строка Базы: закрываем висящие проценты, если они есть
     if (currentRowType === "base") {
       if (pendingProportionRows.length > 0) {
         calculationBlocks.push({
@@ -221,28 +211,21 @@ export function buildCalculationBlocks(detectionResult) {
           valueRowIndexes: [...pendingProportionRows],
           baseRowIndex: rowIndex,
         });
-
         pendingProportionRows.length = 0;
       }
-
       rowIndex++;
       continue;
     }
 
-    /**
-     * Mean block:
-     * Mean
-     * SD or Variance
-     * Base
-     */
+    // 3. Блок Mean (Средние + Разброс)
     if (
       currentRowType === "mean" &&
       rowIndex + 1 < rowDiagnostics.length &&
       (rowDiagnostics[rowIndex + 1].rowType === "standardDeviation" ||
         rowDiagnostics[rowIndex + 1].rowType === "variance")
     ) {
-      const spreadRowIndex = rowIndex + 1; // Row with SD or variance.
-      const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, spreadRowIndex); // Nearest base below spread row.
+      const spreadRowIndex = rowIndex + 1;
+      const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, spreadRowIndex);
 
       if (baseRowIndex !== null) {
         calculationBlocks.push({
@@ -253,44 +236,31 @@ export function buildCalculationBlocks(detectionResult) {
           baseRowIndex,
         });
 
-        /**
-         * If proportion rows appeared before this mean block and had no base yet,
-         * use this same base for them.
-         */
         if (pendingProportionRows.length > 0) {
           calculationBlocks.push({
             metricType: "proportion",
             valueRowIndexes: [...pendingProportionRows],
             baseRowIndex,
           });
-
           pendingProportionRows.length = 0;
         }
 
-        rowIndex = baseRowIndex + 1;
+        // ИСПРАВЛЕНИЕ: Прыгаем только через строки текущего блока (Среднее + Разброс), а не к Базе
+        rowIndex = spreadRowIndex + 1;
         continue;
       }
     }
 
-    /**
-     * NPS structure block:
-     * NPS
-     * Promoters
-     * Detractors
-     * Base
-     */
+    // 4. Блок NPS Структура (NPS + Промоутеры + Детракторы)
     if (
       currentRowType === "nps" &&
       rowIndex + 2 < rowDiagnostics.length &&
       rowDiagnostics[rowIndex + 1].rowType === "promoters" &&
       rowDiagnostics[rowIndex + 2].rowType === "detractors"
     ) {
-      const promotersRowIndex = rowIndex + 1; // Promoter share row.
-      const detractorsRowIndex = rowIndex + 2; // Detractor share row.
-      const baseRowIndex = findNextBaseRowIndex(
-        rowDiagnostics,
-        detractorsRowIndex
-      ); // Nearest base below detractors row.
+      const promotersRowIndex = rowIndex + 1;
+      const detractorsRowIndex = rowIndex + 2;
+      const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, detractorsRowIndex);
 
       if (baseRowIndex !== null) {
         calculationBlocks.push({
@@ -301,39 +271,30 @@ export function buildCalculationBlocks(detectionResult) {
           baseRowIndex,
         });
 
-        /**
-         * If proportion rows appeared before this NPS block and had no base yet,
-         * use this same base for them.
-         */
         if (pendingProportionRows.length > 0) {
           calculationBlocks.push({
             metricType: "proportion",
             valueRowIndexes: [...pendingProportionRows],
             baseRowIndex,
           });
-
           pendingProportionRows.length = 0;
         }
 
-        rowIndex = baseRowIndex + 1;
+        // ИСПРАВЛЕНИЕ: Прыгаем только через строки текущего блока (NPS + Пром + Детр)
+        rowIndex = detractorsRowIndex + 1;
         continue;
       }
     }
 
-    /**
-     * NPS spread block:
-     * NPS
-     * SD or Variance
-     * Base
-     */
+    // 5. Блок NPS Spread (NPS + Разброс)
     if (
       currentRowType === "nps" &&
       rowIndex + 1 < rowDiagnostics.length &&
       (rowDiagnostics[rowIndex + 1].rowType === "standardDeviation" ||
         rowDiagnostics[rowIndex + 1].rowType === "variance")
     ) {
-      const spreadRowIndex = rowIndex + 1; // Row with NPS SD or variance.
-      const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, spreadRowIndex); // Nearest base below spread row.
+      const spreadRowIndex = rowIndex + 1;
+      const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, spreadRowIndex);
 
       if (baseRowIndex !== null) {
         calculationBlocks.push({
@@ -344,21 +305,17 @@ export function buildCalculationBlocks(detectionResult) {
           baseRowIndex,
         });
 
-        /**
-         * If proportion rows appeared before this NPS spread block and had no base yet,
-         * use this same base for them.
-         */
         if (pendingProportionRows.length > 0) {
           calculationBlocks.push({
             metricType: "proportion",
             valueRowIndexes: [...pendingProportionRows],
             baseRowIndex,
           });
-
           pendingProportionRows.length = 0;
         }
 
-        rowIndex = baseRowIndex + 1;
+        // ИСПРАВЛЕНИЕ: Прыгаем только через строки текущего блока
+        rowIndex = spreadRowIndex + 1;
         continue;
       }
     }
@@ -366,11 +323,7 @@ export function buildCalculationBlocks(detectionResult) {
     rowIndex++;
   }
 
-  /**
-   * Fallback:
-   * If no labelled blocks were detected, use the old assumption:
-   * all rows except the last one are proportions, last row is base.
-   */
+  // Fallback
   if (calculationBlocks.length === 0 && rowDiagnostics.length >= 2) {
     calculationBlocks.push({
       metricType: "proportion",

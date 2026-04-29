@@ -106,10 +106,20 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues); // Values without old significance letters.
+    const calculationSettings = readCalculationSettingsFromPanel();
+
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
 
     // Remove old significance markers before running a new calculation.
     selectedRange.values = cleanedValues;
+
+    // Reset previous significance formatting before applying new results.
+    selectedRange.format.font.bold = false;
+    selectedRange.format.fill.clear();
+
+    // Keep general alignment formatting.
+    selectedRange.format.horizontalAlignment = "Center";
+    selectedRange.format.verticalAlignment = "Center";
 
     await context.sync();
 
@@ -138,7 +148,8 @@ async function runSignificanceFromSelection() {
     for (const calculationBlock of calculationBlocks) {
       const blockResults = calculateBlockResults(
         cleanedValues,
-        calculationBlock
+        calculationBlock,
+        calculationSettings
       ); // Calculation result for current block.
 
       if (!blockResults) {
@@ -173,12 +184,13 @@ async function runSignificanceFromSelection() {
  * Keeps dispatcher logic out of runSignificanceFromSelection().
  * Each block type is routed to the correct core calculation function.
  */
-function calculateBlockResults(cleanedValues, calculationBlock) {
+function calculateBlockResults(cleanedValues, calculationBlock, calculationSettings) {
   if (calculationBlock.metricType === "proportion") {
     return compareProportionRowsUsingBaseRow(
       cleanedValues,
       calculationBlock.valueRowIndexes,
-      calculationBlock.baseRowIndex
+      calculationBlock.baseRowIndex,
+      calculationSettings
     );
   }
 
@@ -188,7 +200,8 @@ function calculateBlockResults(cleanedValues, calculationBlock) {
       calculationBlock.valueRowIndex,
       calculationBlock.spreadRowIndex,
       calculationBlock.baseRowIndex,
-      calculationBlock.spreadType
+      calculationBlock.spreadType,
+      calculationSettings
     );
   }
 
@@ -198,7 +211,8 @@ function calculateBlockResults(cleanedValues, calculationBlock) {
       calculationBlock.valueRowIndex,
       calculationBlock.promotersRowIndex,
       calculationBlock.detractorsRowIndex,
-      calculationBlock.baseRowIndex
+      calculationBlock.baseRowIndex,
+      calculationSettings
     );
   }
 
@@ -208,7 +222,8 @@ function calculateBlockResults(cleanedValues, calculationBlock) {
       calculationBlock.valueRowIndex,
       calculationBlock.spreadRowIndex,
       calculationBlock.baseRowIndex,
-      calculationBlock.spreadType
+      calculationBlock.spreadType,
+      calculationSettings
     );
   }
 
@@ -351,3 +366,22 @@ async function loadLeftLabelsForSelectedRange(context, selectedRange) {
 
   return leftLabelRange.values;
 }
+
+/**
+ * Reads user-selected calculation settings from the task pane.
+ *
+ * PURPOSE:
+ * Keep UI-specific settings parsing in taskpane controller layer.
+ */
+function readCalculationSettingsFromPanel() {
+  const confidenceLevelElement = document.getElementById("confidence-level");
+
+  const confidenceLevel = confidenceLevelElement
+    ? confidenceLevelElement.value
+    : "95";
+
+  return {
+    confidenceLevel,
+  };
+}
+

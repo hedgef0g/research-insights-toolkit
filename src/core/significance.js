@@ -40,7 +40,8 @@ export function calculateProportionSignificance(
   firstRawValue,
   firstRawBase,
   secondRawValue,
-  secondRawBase
+  secondRawBase,
+  calculationSettings = { confidenceLevel: "95" }
 ) {
   const firstProportion = normalizeShare(firstRawValue); // First value converted to 0–1 proportion.
   const secondProportion = normalizeShare(secondRawValue); // Second value converted to 0–1 proportion.
@@ -88,8 +89,11 @@ export function calculateProportionSignificance(
   // Absolute z-score is used for a two-tailed test.
   const absoluteZScore = Math.abs(zScore);
 
+  const confidenceLevel = calculationSettings.confidenceLevel;
+  const zThreshold = getZThresholdForConfidence(confidenceLevel);
+
   // Difference is significant if absolute z-score reaches 95% threshold.
-  const isSignificant = absoluteZScore >= DEFAULT_Z_THRESHOLD_95;
+  const isSignificant = absoluteZScore >= zThreshold;
 
   // Direction will later help us decide where to place visual markers.
   const direction =
@@ -106,8 +110,8 @@ export function calculateProportionSignificance(
     absoluteZScore,
     isSignificant,
     direction,
-    confidenceLevel: 0.95,
-    zThreshold: DEFAULT_Z_THRESHOLD_95,
+    confidenceLevel,
+    zThreshold,
   };
 }
 
@@ -126,7 +130,11 @@ export function calculateProportionSignificance(
  * OUTPUT:
  * Array of comparison result objects.
  */
-export function compareAllProportionsInRow(valueRow, baseRow) {
+export function compareAllProportionsInRow(
+  valueRow,
+  baseRow,
+  calculationSettings = { confidenceLevel: "95" }
+  ) {
   const rowComparisons = []; // Stores all pairwise comparisons for this row.
 
   for (let firstColumnIndex = 0; firstColumnIndex < valueRow.length; firstColumnIndex++) {
@@ -145,7 +153,8 @@ export function compareAllProportionsInRow(valueRow, baseRow) {
         firstValue,
         firstBase,
         secondValue,
-        secondBase
+        secondBase,
+        calculationSettings
       );
 
       rowComparisons.push({
@@ -410,7 +419,8 @@ export function calculateMeanSignificance(
   secondRawMean,
   secondRawSpread,
   secondRawBase,
-  spreadType
+  spreadType,
+  calculationSettings = { confidenceLevel: "95" }
 ) {
   const firstMean = Number(String(firstRawMean).replace(",", ".")); // First mean value.
   const secondMean = Number(String(secondRawMean).replace(",", ".")); // Second mean value.
@@ -456,7 +466,11 @@ export function calculateMeanSignificance(
   const degreesOfFreedom =
     degreesOfFreedomNumerator / degreesOfFreedomDenominator;
 
-  const tThreshold = getTwoTailedTCritical95(degreesOfFreedom); // 95% two-tailed threshold.
+  const confidenceLevel = calculationSettings.confidenceLevel;
+  const tThreshold = getTThresholdForConfidence(
+    confidenceLevel,
+    degreesOfFreedom
+  );
   const absoluteTScore = Math.abs(tScore); // Two-tailed comparison uses absolute t.
 
   const isSignificant = absoluteTScore >= tThreshold;
@@ -478,7 +492,7 @@ export function calculateMeanSignificance(
     tThreshold,
     isSignificant,
     direction,
-    confidenceLevel: DEFAULT_CONFIDENCE_LEVEL,
+    confidenceLevel,
     spreadType,
   };
 }
@@ -489,7 +503,7 @@ export function calculateMeanSignificance(
  * PURPOSE:
  * For one row of means, compare every column with every other column.
  */
-export function compareAllMeansInRow(meanRow, spreadRow, baseRow, spreadType) {
+export function compareAllMeansInRow(meanRow, spreadRow, baseRow, spreadType, calculationSettings = { confidenceLevel: "95" }) {
   const rowComparisons = []; // Stores all pairwise comparisons for this mean row.
 
   for (let firstColumnIndex = 0; firstColumnIndex < meanRow.length; firstColumnIndex++) {
@@ -505,7 +519,8 @@ export function compareAllMeansInRow(meanRow, spreadRow, baseRow, spreadType) {
         meanRow[secondColumnIndex],
         spreadRow[secondColumnIndex],
         baseRow[secondColumnIndex],
-        spreadType
+        spreadType,
+        calculationSettings
       );
 
       rowComparisons.push({
@@ -548,7 +563,8 @@ export function calculateNpsSignificanceFromStructure(
   secondRawNps,
   secondRawPromoters,
   secondRawDetractors,
-  secondRawBase
+  secondRawBase,
+  calculationSettings = { confidenceLevel: "95" }
 ) {
   const firstPromoters = normalizeShare(firstRawPromoters); // First promoter share.
   const secondPromoters = normalizeShare(secondRawPromoters); // Second promoter share.
@@ -615,7 +631,8 @@ export function calculateNpsSignificanceFromStructure(
     secondNps,
     secondVariance,
     secondBase,
-    "variance"
+    "variance",
+    calculationSettings
   );
 }
 
@@ -626,7 +643,8 @@ export function calculateNpsSignificanceFromSpread(
   secondRawNps,
   secondRawSpread,
   secondRawBase,
-  spreadType
+  spreadType,
+  calculationSettings = { confidenceLevel: "95" }
 ) {
   const firstNps = normalizeNpsValue(firstRawNps); // First NPS on -1..1 scale.
   const secondNps = normalizeNpsValue(secondRawNps); // Second NPS on -1..1 scale.
@@ -650,7 +668,8 @@ export function calculateNpsSignificanceFromSpread(
     secondNps,
     secondSpread,
     secondRawBase,
-    spreadType
+    spreadType,
+    calculationSettings
   );
 }
 
@@ -664,7 +683,8 @@ export function calculateNpsSignificanceFromSpread(
 export function compareProportionRowsUsingBaseRow(
   selectedValues,
   valueRowIndexes,
-  baseRowIndex
+  baseRowIndex,
+  calculationSettings = { confidenceLevel: "95" }
 ) {
   const baseRow = selectedValues[baseRowIndex]; // Base row for these proportion rows.
   const comparisonRows = []; // Results for each proportion row.
@@ -672,7 +692,7 @@ export function compareProportionRowsUsingBaseRow(
   for (const valueRowIndex of valueRowIndexes) {
     const valueRow = selectedValues[valueRowIndex]; // Current proportion row.
 
-    const rowComparisons = compareAllProportionsInRow(valueRow, baseRow);
+    const rowComparisons = compareAllProportionsInRow(valueRow, baseRow, calculationSettings);
 
     comparisonRows.push({
       valueRowIndex,
@@ -699,7 +719,8 @@ export function compareMeanBlockByRowIndexes(
   valueRowIndex,
   spreadRowIndex,
   baseRowIndex,
-  spreadType
+  spreadType,
+  calculationSettings = { confidenceLevel: "95" }
 ) {
   const meanRow = selectedValues[valueRowIndex]; // Mean values.
   const spreadRow = selectedValues[spreadRowIndex]; // SD or variance values.
@@ -709,7 +730,8 @@ export function compareMeanBlockByRowIndexes(
     meanRow,
     spreadRow,
     baseRow,
-    spreadType
+    spreadType,
+    calculationSettings
   );
 
   return {
@@ -735,7 +757,8 @@ export function compareNpsStructureBlockByRowIndexes(
   valueRowIndex,
   promotersRowIndex,
   detractorsRowIndex,
-  baseRowIndex
+  baseRowIndex,
+  calculationSettings = { confidenceLevel: "95" }
 ) {
   const npsRow = selectedValues[valueRowIndex]; // Visible NPS row.
   const promotersRow = selectedValues[promotersRowIndex]; // Promoter shares.
@@ -758,7 +781,8 @@ export function compareNpsStructureBlockByRowIndexes(
         npsRow[secondColumnIndex],
         promotersRow[secondColumnIndex],
         detractorsRow[secondColumnIndex],
-        baseRow[secondColumnIndex]
+        baseRow[secondColumnIndex],
+        calculationSettings
       );
 
       rowComparisons.push({
@@ -792,7 +816,8 @@ export function compareNpsSpreadBlockByRowIndexes(
   valueRowIndex,
   spreadRowIndex,
   baseRowIndex,
-  spreadType
+  spreadType,
+  calculationSettings = { confidenceLevel: "95" }
 ) {
   const npsRow = selectedValues[valueRowIndex]; // NPS values.
   const spreadRow = selectedValues[spreadRowIndex]; // SD or variance.
@@ -813,7 +838,8 @@ export function compareNpsSpreadBlockByRowIndexes(
         npsRow[secondColumnIndex],
         spreadRow[secondColumnIndex],
         baseRow[secondColumnIndex],
-        spreadType
+        spreadType,
+        calculationSettings
       );
 
       rowComparisons.push({
@@ -902,4 +928,119 @@ export function keepMarkersOnlyInAllowedRows(markerMatrix, allowedMarkerRows) {
   }
 
   return markerMatrix;
+}
+
+/**
+ * Supported two-tailed z-thresholds by confidence level.
+ *
+ * IMPORTANT:
+ * Keys are ordered from highest confidence to lowest confidence.
+ */
+export const Z_THRESHOLDS_BY_CONFIDENCE_LEVEL = {
+  "99": 2.576,
+  "95": 1.96,
+  "90": 1.645,
+  "80": 1.282,
+  "66.6": 0.967,
+};
+
+/**
+ * Returns z-threshold for selected two-tailed confidence level.
+ *
+ * PURPOSE:
+ * Do not silently fallback to another confidence level.
+ */
+export function getZThresholdForConfidence(confidenceLevel) {
+  const confidenceKey = String(confidenceLevel);
+  const threshold =
+    Z_THRESHOLDS_BY_CONFIDENCE_LEVEL[confidenceKey];
+
+  if (threshold === undefined) {
+    throw new Error(`Unsupported confidence level: ${confidenceLevel}`);
+  }
+
+  return threshold;
+}
+
+/**
+ * Approximate two-tailed t-thresholds by confidence level.
+ *
+ * PURPOSE:
+ * Used for means and NPS spread calculations.
+ */
+export const T_THRESHOLDS_BY_CONFIDENCE_LEVEL = {
+  "99": [
+    { df: 1, value: 63.657 },
+    { df: 2, value: 9.925 },
+    { df: 5, value: 4.032 },
+    { df: 10, value: 3.169 },
+    { df: 20, value: 2.845 },
+    { df: 30, value: 2.75 },
+    { df: 60, value: 2.66 },
+  ],
+  "95": [
+    { df: 1, value: 12.706 },
+    { df: 2, value: 4.303 },
+    { df: 5, value: 2.571 },
+    { df: 10, value: 2.228 },
+    { df: 20, value: 2.086 },
+    { df: 30, value: 2.042 },
+    { df: 60, value: 2.0 },
+  ],
+  "90": [
+    { df: 1, value: 6.314 },
+    { df: 2, value: 2.92 },
+    { df: 5, value: 2.015 },
+    { df: 10, value: 1.812 },
+    { df: 20, value: 1.725 },
+    { df: 30, value: 1.697 },
+    { df: 60, value: 1.671 },
+  ],
+  "80": [
+    { df: 1, value: 3.078 },
+    { df: 2, value: 1.886 },
+    { df: 5, value: 1.476 },
+    { df: 10, value: 1.372 },
+    { df: 20, value: 1.325 },
+    { df: 30, value: 1.31 },
+    { df: 60, value: 1.296 },
+  ],
+  "66.6": [
+    { df: 1, value: 1.376 },
+    { df: 2, value: 0.816 },
+    { df: 5, value: 0.727 },
+    { df: 10, value: 0.7 },
+    { df: 20, value: 0.687 },
+    { df: 30, value: 0.683 },
+    { df: 60, value: 0.677 },
+  ],
+};
+
+/**
+ * Returns approximate two-tailed t-threshold for selected confidence level.
+ *
+ * PURPOSE:
+ * For means and NPS spread calculations.
+ */
+export function getTThresholdForConfidence(confidenceLevel, degreesOfFreedom) {
+  const confidenceKey = String(confidenceLevel);
+  const thresholdTable = T_THRESHOLDS_BY_CONFIDENCE_LEVEL[confidenceKey];
+
+  if (!thresholdTable) {
+    throw new Error(`Unsupported confidence level: ${confidenceLevel}`);
+  }
+
+  const zThreshold = getZThresholdForConfidence(confidenceKey);
+
+  if (degreesOfFreedom >= 60) {
+    return zThreshold;
+  }
+
+  for (const thresholdPoint of thresholdTable) {
+    if (degreesOfFreedom <= thresholdPoint.df) {
+      return thresholdPoint.value;
+    }
+  }
+
+  return zThreshold;
 }
