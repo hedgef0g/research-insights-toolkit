@@ -37,3 +37,15 @@
 - Incorrect significance letters appearing in Promoters / Detractors rows.
 - Branch execution conflicts between mean / NPS / fallback logic.
 - Repeated marker formatting inconsistencies.
+
+
+### 29.04.2026
+
+Универсальное автоопределение метрик (buildCalculationBlocks) работает стабильно, поэтому старые ручные режимы расчета для конкретных типов данных (и жестко привязанные к ним парсеры) больше не нужны. Кодовая база очищена от неиспользуемых функций для упрощения дальнейшей поддержки.
+
+Основные изменения по файлам:
+- taskpane.js: удалены обработчики (runMeanSignificance..., runNpsSignificance...) и слушатели событий для кнопок явного расчета средних и NPS. Очищены неиспользуемые импорты.
+- metric-detector.js: удален устаревший планировщик buildAutoCalculationPlan (полностью заменен на актуальный buildCalculationBlocks).
+- significance.js: удалена легаси-функция из MVP v0.2 compareAllRowsUsingBottomBases, а также функции-обертки для отпавших ручных расчетов (compareMeansUsingSpreadAndBaseRows, compareNpsUsingStructureRows, compareNpsUsingSpreadAndBaseRows).
+
+Примечание: математическое ядро расчетов значимости (z-тесты, t-тесты) и функционал диагностической кнопки оставлены без изменений.

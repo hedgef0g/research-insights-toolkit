@@ -197,59 +197,6 @@ export function compareAllProportionsInRow(valueRow, baseRow) {
 }
 
 /**
- * Compares all rows of selected table data using the last row as bases.
- *
- * PURPOSE:
- * This is the main parser/calculation function for MVP v0.2.
- * It assumes:
- * - selected range contains multiple columns;
- * - last row contains bases;
- * - all rows above the last row contain values;
- * - values are proportions/percentages;
- * - each value row is compared column-by-column, all pairs.
- *
- * INPUT:
- * selectedValues - 2D array from Excel or Google Sheets.
- *
- * OUTPUT:
- * Object with base row and comparison results for every value row.
- *
- * MVP LIMITATIONS:
- * - Bases must be in the last selected row.
- * - Does not yet auto-detect weighted bases.
- * - Does not yet use text labels.
- * - Does not yet write significance markers back to the table.
- */
-export function compareAllRowsUsingBottomBases(selectedValues) {
-  if (!selectedValues || selectedValues.length < 2) {
-    return null;
-  }
-
-  const totalRows = selectedValues.length; // Number of selected spreadsheet rows.
-  const baseRowIndex = totalRows - 1; // Last row is treated as the base row.
-  const baseRow = selectedValues[baseRowIndex]; // Bases for all columns.
-
-  const comparisonRows = []; // Stores results for each value row.
-
-  for (let valueRowIndex = 0; valueRowIndex < baseRowIndex; valueRowIndex++) {
-    const valueRow = selectedValues[valueRowIndex]; // Current row of percentages/shares.
-
-    const rowComparisons = compareAllProportionsInRow(valueRow, baseRow);
-
-    comparisonRows.push({
-      valueRowIndex,
-      rowComparisons,
-    });
-  }
-
-  return {
-    baseRowIndex,
-    baseRow,
-    comparisonRows,
-  };
-}
-
-/**
  * Generates column significance labels.
  *
  * PURPOSE:
@@ -643,51 +590,6 @@ export function compareAllMeansInRow(meanRow, spreadRow, baseRow, spreadType) {
 }
 
 /**
- * Compares means using 3 selected rows:
- * Row 1: means
- * Row 2: SD or variance
- * Row 3: bases
- *
- * PURPOSE:
- * Temporary explicit parser for mean significance MVP.
- */
-export function compareMeansUsingSpreadAndBaseRows(selectedValues, spreadType) {
-  if (!selectedValues || selectedValues.length < 3) {
-    return null;
-  }
-
-  const meanRowIndex = 0; // First selected row contains means.
-  const spreadRowIndex = 1; // Second selected row contains SD or variance.
-  const baseRowIndex = 2; // Third selected row contains bases.
-
-  const meanRow = selectedValues[meanRowIndex]; // Mean values.
-  const spreadRow = selectedValues[spreadRowIndex]; // SD or variance values.
-  const baseRow = selectedValues[baseRowIndex]; // Bases.
-
-  const rowComparisons = compareAllMeansInRow(
-    meanRow,
-    spreadRow,
-    baseRow,
-    spreadType
-  );
-
-  return {
-    meanRowIndex,
-    spreadRowIndex,
-    baseRowIndex,
-    meanRow,
-    spreadRow,
-    baseRow,
-    comparisonRows: [
-      {
-        valueRowIndex: meanRowIndex,
-        rowComparisons,
-      },
-    ],
-  };
-}
-
-/**
  * Converts NPS value into -1..1 scale.
  *
  * PURPOSE:
@@ -738,16 +640,6 @@ export function normalizeNpsSpread(rawSpread, spreadType) {
   return null;
 }
 
-/**
- * Calculates significance between two NPS values using promoter/detractor structure.
- *
- * NPS is treated as mean of:
- * promoter = +1
- * passive = 0
- * detractor = -1
- *
- * Variance = P(promoter) + P(detractor) - NPS²
- */
 /**
  * Calculates significance between two NPS values using promoter/detractor structure.
  *
@@ -875,115 +767,6 @@ export function calculateNpsSignificanceFromSpread(
     secondRawBase,
     spreadType
   );
-}
-
-/**
- * Compares NPS values using rows:
- * Row 1: NPS
- * Row 2: SD or variance
- * Row 3: Base
- */
-export function compareNpsUsingSpreadAndBaseRows(selectedValues, spreadType) {
-  if (!selectedValues || selectedValues.length < 3) {
-    return null;
-  }
-
-  const npsRow = selectedValues[0]; // NPS values.
-  const spreadRow = selectedValues[1]; // SD or variance values.
-  const baseRow = selectedValues[2]; // Bases.
-
-  const rowComparisons = []; // Pairwise NPS comparisons.
-
-  for (let firstColumnIndex = 0; firstColumnIndex < npsRow.length; firstColumnIndex++) {
-    for (
-      let secondColumnIndex = firstColumnIndex + 1;
-      secondColumnIndex < npsRow.length;
-      secondColumnIndex++
-    ) {
-      const significanceResult = calculateNpsSignificanceFromSpread(
-        npsRow[firstColumnIndex],
-        spreadRow[firstColumnIndex],
-        baseRow[firstColumnIndex],
-        npsRow[secondColumnIndex],
-        spreadRow[secondColumnIndex],
-        baseRow[secondColumnIndex],
-        spreadType
-      );
-
-      rowComparisons.push({
-        firstColumnIndex,
-        secondColumnIndex,
-        result: significanceResult,
-      });
-    }
-  }
-
-  return {
-    baseRowIndex: 2,
-    baseRow,
-    comparisonRows: [
-      {
-        valueRowIndex: 0,
-        rowComparisons,
-      },
-    ],
-  };
-}
-
-/**
- * Compares all NPS columns using rows:
- * Row 1: NPS
- * Row 2: Promoters %
- * Row 3: Detractors %
- * Row 4: Base
- */
-export function compareNpsUsingStructureRows(selectedValues) {
-  if (!selectedValues || selectedValues.length < 4) {
-    return null;
-  }
-
-  const npsRow = selectedValues[0]; // NPS values.
-  const promotersRow = selectedValues[1]; // Promoter shares.
-  const detractorsRow = selectedValues[2]; // Detractor shares.
-  const baseRow = selectedValues[3]; // Bases.
-
-  const rowComparisons = []; // Pairwise NPS comparisons.
-
-  for (let firstColumnIndex = 0; firstColumnIndex < npsRow.length; firstColumnIndex++) {
-    for (
-      let secondColumnIndex = firstColumnIndex + 1;
-      secondColumnIndex < npsRow.length;
-      secondColumnIndex++
-    ) {
-      const significanceResult = calculateNpsSignificanceFromStructure(
-        npsRow[firstColumnIndex],
-        promotersRow[firstColumnIndex],
-        detractorsRow[firstColumnIndex],
-        baseRow[firstColumnIndex],
-        npsRow[secondColumnIndex],
-        promotersRow[secondColumnIndex],
-        detractorsRow[secondColumnIndex],
-        baseRow[secondColumnIndex]
-      );
-
-      rowComparisons.push({
-        firstColumnIndex,
-        secondColumnIndex,
-        result: significanceResult,
-      });
-    }
-  }
-
-  return {
-    baseRowIndex: 3,
-    baseRow,
-    comparisonRows: [
-      {
-        valueRowIndex: 0,
-        rowComparisons,
-      },
-    ],
-  };
 }
 
 /**
