@@ -57,26 +57,18 @@ export function calculateProportionSignificance(
     return null;
   }
 
-  if (
-    firstProportion < 0 ||
-    firstProportion > 1 ||
-    secondProportion < 0 ||
-    secondProportion > 1
-  ) {
+  if (firstProportion < 0 || firstProportion > 1 || secondProportion < 0 || secondProportion > 1) {
     return null;
   }
 
   // Pooled proportion is used because the test checks whether
   // both values may come from the same underlying population proportion.
   const pooledProportion =
-    (firstProportion * firstBase + secondProportion * secondBase) /
-    (firstBase + secondBase);
+    (firstProportion * firstBase + secondProportion * secondBase) / (firstBase + secondBase);
 
   // Standard error for the difference between two proportions.
   const standardError = Math.sqrt(
-    pooledProportion *
-      (1 - pooledProportion) *
-      (1 / firstBase + 1 / secondBase)
+    pooledProportion * (1 - pooledProportion) * (1 / firstBase + 1 / secondBase)
   );
 
   if (standardError === 0) {
@@ -96,8 +88,7 @@ export function calculateProportionSignificance(
   const isSignificant = absoluteZScore >= zThreshold;
 
   // Direction will later help us decide where to place visual markers.
-  const direction =
-    zScore > 0 ? "first_higher" : zScore < 0 ? "second_higher" : "equal";
+  const direction = zScore > 0 ? "first_higher" : zScore < 0 ? "second_higher" : "equal";
 
   return {
     firstProportion,
@@ -134,7 +125,7 @@ export function compareAllProportionsInRow(
   valueRow,
   baseRow,
   calculationSettings = { confidenceLevel: "95" }
-  ) {
+) {
   const rowComparisons = []; // Stores all pairwise comparisons for this row.
 
   for (let firstColumnIndex = 0; firstColumnIndex < valueRow.length; firstColumnIndex++) {
@@ -241,8 +232,7 @@ export function createEmptyMarkerMatrix(rowCount, columnCount) {
  * For means and NPS, only the first row should receive markers.
  */
 export function buildSignificanceMarkerMatrix(allResults, markerRowCount = null) {
-  const valueRowCount =
-    markerRowCount === null ? allResults.baseRowIndex : markerRowCount;
+  const valueRowCount = markerRowCount === null ? allResults.baseRowIndex : markerRowCount;
 
   const columnCount = allResults.baseRow.length; // Number of selected columns.
 
@@ -369,10 +359,7 @@ export function getTwoTailedTCritical95(degreesOfFreedom) {
     const currentPoint = tCriticalTable[tableIndex]; // Current df/value pair.
     const nextPoint = tCriticalTable[tableIndex + 1]; // Next df/value pair.
 
-    if (
-      degreesOfFreedom >= currentPoint.df &&
-      degreesOfFreedom <= nextPoint.df
-    ) {
+    if (degreesOfFreedom >= currentPoint.df && degreesOfFreedom <= nextPoint.df) {
       if (nextPoint.df === Infinity) {
         return nextPoint.value;
       }
@@ -380,10 +367,7 @@ export function getTwoTailedTCritical95(degreesOfFreedom) {
       const interpolationPosition =
         (degreesOfFreedom - currentPoint.df) / (nextPoint.df - currentPoint.df);
 
-      return (
-        currentPoint.value +
-        interpolationPosition * (nextPoint.value - currentPoint.value)
-      );
+      return currentPoint.value + interpolationPosition * (nextPoint.value - currentPoint.value);
     }
   }
 
@@ -446,9 +430,7 @@ export function calculateMeanSignificance(
   const firstStandardErrorPart = firstVariance / firstBase; // Variance contribution from first group.
   const secondStandardErrorPart = secondVariance / secondBase; // Variance contribution from second group.
 
-  const standardError = Math.sqrt(
-    firstStandardErrorPart + secondStandardErrorPart
-  );
+  const standardError = Math.sqrt(firstStandardErrorPart + secondStandardErrorPart);
 
   if (standardError === 0) {
     return null;
@@ -456,27 +438,20 @@ export function calculateMeanSignificance(
 
   const tScore = (firstMean - secondMean) / standardError; // Welch t-score.
 
-  const degreesOfFreedomNumerator =
-    (firstStandardErrorPart + secondStandardErrorPart) ** 2;
+  const degreesOfFreedomNumerator = (firstStandardErrorPart + secondStandardErrorPart) ** 2;
 
   const degreesOfFreedomDenominator =
-    firstStandardErrorPart ** 2 / (firstBase - 1) +
-    secondStandardErrorPart ** 2 / (secondBase - 1);
+    firstStandardErrorPart ** 2 / (firstBase - 1) + secondStandardErrorPart ** 2 / (secondBase - 1);
 
-  const degreesOfFreedom =
-    degreesOfFreedomNumerator / degreesOfFreedomDenominator;
+  const degreesOfFreedom = degreesOfFreedomNumerator / degreesOfFreedomDenominator;
 
   const confidenceLevel = calculationSettings.confidenceLevel;
-  const tThreshold = getTThresholdForConfidence(
-    confidenceLevel,
-    degreesOfFreedom
-  );
+  const tThreshold = getTThresholdForConfidence(confidenceLevel, degreesOfFreedom);
   const absoluteTScore = Math.abs(tScore); // Two-tailed comparison uses absolute t.
 
   const isSignificant = absoluteTScore >= tThreshold;
 
-  const direction =
-    tScore > 0 ? "first_higher" : tScore < 0 ? "second_higher" : "equal";
+  const direction = tScore > 0 ? "first_higher" : tScore < 0 ? "second_higher" : "equal";
 
   return {
     firstMean,
@@ -503,7 +478,13 @@ export function calculateMeanSignificance(
  * PURPOSE:
  * For one row of means, compare every column with every other column.
  */
-export function compareAllMeansInRow(meanRow, spreadRow, baseRow, spreadType, calculationSettings = { confidenceLevel: "95" }) {
+export function compareAllMeansInRow(
+  meanRow,
+  spreadRow,
+  baseRow,
+  spreadType,
+  calculationSettings = { confidenceLevel: "95" }
+) {
   const rowComparisons = []; // Stores all pairwise comparisons for this mean row.
 
   for (let firstColumnIndex = 0; firstColumnIndex < meanRow.length; firstColumnIndex++) {
@@ -602,10 +583,7 @@ export function calculateNpsSignificanceFromStructure(
   }
 
   // Promoters + detractors cannot logically exceed 100%.
-  if (
-    firstPromoters + firstDetractors > 1 ||
-    secondPromoters + secondDetractors > 1
-  ) {
+  if (firstPromoters + firstDetractors > 1 || secondPromoters + secondDetractors > 1) {
     return null;
   }
 
@@ -614,11 +592,9 @@ export function calculateNpsSignificanceFromStructure(
   const secondNps = secondPromoters - secondDetractors;
 
   // Variance of NPS score where promoter = +1, passive = 0, detractor = -1.
-  const firstVariance =
-    firstPromoters + firstDetractors - firstNps * firstNps;
+  const firstVariance = firstPromoters + firstDetractors - firstNps * firstNps;
 
-  const secondVariance =
-    secondPromoters + secondDetractors - secondNps * secondNps;
+  const secondVariance = secondPromoters + secondDetractors - secondNps * secondNps;
 
   if (firstVariance < 0 || secondVariance < 0) {
     return null;
@@ -652,12 +628,7 @@ export function calculateNpsSignificanceFromSpread(
   const firstSpread = normalizeNpsSpread(firstRawSpread, spreadType); // First SD/variance on -1..1 scale.
   const secondSpread = normalizeNpsSpread(secondRawSpread, spreadType); // Second SD/variance on -1..1 scale.
 
-  if (
-    firstNps === null ||
-    secondNps === null ||
-    firstSpread === null ||
-    secondSpread === null
-  ) {
+  if (firstNps === null || secondNps === null || firstSpread === null || secondSpread === null) {
     return null;
   }
 
@@ -870,20 +841,14 @@ export function compareNpsSpreadBlockByRowIndexes(
  * Used for block-plan mode where different metric blocks
  * occupy arbitrary rows inside one selected range.
  */
-export function applyComparisonResultsToFullMarkerMatrix(
-  blockResults,
-  fullMarkerMatrix
-) {
+export function applyComparisonResultsToFullMarkerMatrix(blockResults, fullMarkerMatrix) {
   const columnLabels = generateSignificanceLabels();
 
   for (const comparisonRow of blockResults.comparisonRows) {
     const valueRowIndex = comparisonRow.valueRowIndex;
 
     for (const comparison of comparisonRow.rowComparisons) {
-      if (
-        !comparison.result ||
-        !comparison.result.isSignificant
-      ) {
+      if (!comparison.result || !comparison.result.isSignificant) {
         continue;
       }
 
@@ -918,11 +883,7 @@ export function keepMarkersOnlyInAllowedRows(markerMatrix, allowedMarkerRows) {
       continue;
     }
 
-    for (
-      let columnIndex = 0;
-      columnIndex < markerMatrix[rowIndex].length;
-      columnIndex++
-    ) {
+    for (let columnIndex = 0; columnIndex < markerMatrix[rowIndex].length; columnIndex++) {
       markerMatrix[rowIndex][columnIndex] = "";
     }
   }
@@ -937,11 +898,11 @@ export function keepMarkersOnlyInAllowedRows(markerMatrix, allowedMarkerRows) {
  * Keys are ordered from highest confidence to lowest confidence.
  */
 export const Z_THRESHOLDS_BY_CONFIDENCE_LEVEL = {
-  "99": 2.576,
-  "95": 1.96,
-  "90": 1.645,
-  "80": 1.282,
-  "66.6": 0.967,
+  99: 2.576,
+  95: 1.96,
+  90: 1.645,
+  80: 1.282,
+  66.6: 0.967,
 };
 
 /**
@@ -952,8 +913,7 @@ export const Z_THRESHOLDS_BY_CONFIDENCE_LEVEL = {
  */
 export function getZThresholdForConfidence(confidenceLevel) {
   const confidenceKey = String(confidenceLevel);
-  const threshold =
-    Z_THRESHOLDS_BY_CONFIDENCE_LEVEL[confidenceKey];
+  const threshold = Z_THRESHOLDS_BY_CONFIDENCE_LEVEL[confidenceKey];
 
   if (threshold === undefined) {
     throw new Error(`Unsupported confidence level: ${confidenceLevel}`);
@@ -969,7 +929,7 @@ export function getZThresholdForConfidence(confidenceLevel) {
  * Used for means and NPS spread calculations.
  */
 export const T_THRESHOLDS_BY_CONFIDENCE_LEVEL = {
-  "99": [
+  99: [
     { df: 1, value: 63.657 },
     { df: 2, value: 9.925 },
     { df: 5, value: 4.032 },
@@ -978,7 +938,7 @@ export const T_THRESHOLDS_BY_CONFIDENCE_LEVEL = {
     { df: 30, value: 2.75 },
     { df: 60, value: 2.66 },
   ],
-  "95": [
+  95: [
     { df: 1, value: 12.706 },
     { df: 2, value: 4.303 },
     { df: 5, value: 2.571 },
@@ -987,7 +947,7 @@ export const T_THRESHOLDS_BY_CONFIDENCE_LEVEL = {
     { df: 30, value: 2.042 },
     { df: 60, value: 2.0 },
   ],
-  "90": [
+  90: [
     { df: 1, value: 6.314 },
     { df: 2, value: 2.92 },
     { df: 5, value: 2.015 },
@@ -996,7 +956,7 @@ export const T_THRESHOLDS_BY_CONFIDENCE_LEVEL = {
     { df: 30, value: 1.697 },
     { df: 60, value: 1.671 },
   ],
-  "80": [
+  80: [
     { df: 1, value: 3.078 },
     { df: 2, value: 1.886 },
     { df: 5, value: 1.476 },
@@ -1005,7 +965,7 @@ export const T_THRESHOLDS_BY_CONFIDENCE_LEVEL = {
     { df: 30, value: 1.31 },
     { df: 60, value: 1.296 },
   ],
-  "66.6": [
+  66.6: [
     { df: 1, value: 1.376 },
     { df: 2, value: 0.816 },
     { df: 5, value: 0.727 },

@@ -59,10 +59,7 @@ Office.onReady((info) => {
   }
 
   if (detectMetricTypeButton) {
-    detectMetricTypeButton.addEventListener(
-      "click",
-      runMetricDetectionDiagnostics
-    );
+    detectMetricTypeButton.addEventListener("click", runMetricDetectionDiagnostics);
   }
 });
 
@@ -96,13 +93,8 @@ async function runSignificanceFromSelection() {
     const selectedText = selectedRange.text; // Displayed values used for preserving visible formatting.
     const outputElement = document.getElementById("significance-result"); // Result block in task pane.
 
-    if (
-      !selectedValues ||
-      selectedValues.length < 2 ||
-      selectedValues[0].length < 2
-    ) {
-      outputElement.textContent =
-        "Please select at least 2 columns and 2 rows.";
+    if (!selectedValues || selectedValues.length < 2 || selectedValues[0].length < 2) {
+      outputElement.textContent = "Please select at least 2 columns and 2 rows.";
       return;
     }
 
@@ -123,15 +115,9 @@ async function runSignificanceFromSelection() {
 
     await context.sync();
 
-    const leftLabelValues = await loadLeftLabelsForSelectedRange(
-      context,
-      selectedRange
-    ); // Labels located 1-2 columns to the left of the selected data.
+    const leftLabelValues = await loadLeftLabelsForSelectedRange(context, selectedRange); // Labels located 1-2 columns to the left of the selected data.
 
-    const detectionResult = detectMetricRowsFromLeftLabels(
-      cleanedValues,
-      leftLabelValues
-    ); // Row type diagnostics based on left-side labels.
+    const detectionResult = detectMetricRowsFromLeftLabels(cleanedValues, leftLabelValues); // Row type diagnostics based on left-side labels.
 
     const calculationBlocks = buildCalculationBlocks(detectionResult); // List of metric blocks to calculate.
 
@@ -140,10 +126,7 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    const fullMarkerMatrix = createEmptyMarkerMatrix(
-      cleanedValues.length,
-      cleanedValues[0].length
-    ); // Full-size marker storage matching the selected range.
+    const fullMarkerMatrix = createEmptyMarkerMatrix(cleanedValues.length, cleanedValues[0].length); // Full-size marker storage matching the selected range.
 
     for (const calculationBlock of calculationBlocks) {
       const blockResults = calculateBlockResults(
@@ -157,10 +140,7 @@ async function runSignificanceFromSelection() {
       }
 
       // Add markers only to comparisonRows.valueRowIndex rows returned by the block calculation.
-      applyComparisonResultsToFullMarkerMatrix(
-        blockResults,
-        fullMarkerMatrix
-      );
+      applyComparisonResultsToFullMarkerMatrix(blockResults, fullMarkerMatrix);
     }
 
     const allowedMarkerRows = getAllowedMarkerRowIndexes(calculationBlocks); // Rows where marker letters are allowed.
@@ -283,10 +263,7 @@ async function runMetricDetectionDiagnostics() {
     const outputElement = document.getElementById("significance-result"); // Task pane output area.
 
     if (selectedStartColumnIndex === 0) {
-      const detectionResult = detectMetricRowsFromLeftLabels(
-        selectedValues,
-        []
-      );
+      const detectionResult = detectMetricRowsFromLeftLabels(selectedValues, []);
 
       outputElement.textContent =
         formatMetricDetectionDiagnostics(detectionResult) +
@@ -295,10 +272,7 @@ async function runMetricDetectionDiagnostics() {
       return;
     }
 
-    const labelColumnCount = Math.min(
-      LABEL_SCAN_COLUMNS_LEFT,
-      selectedStartColumnIndex
-    ); // Scan up to 2 columns left, but not beyond sheet boundary.
+    const labelColumnCount = Math.min(LABEL_SCAN_COLUMNS_LEFT, selectedStartColumnIndex); // Scan up to 2 columns left, but not beyond sheet boundary.
 
     const labelStartColumnIndex = selectedStartColumnIndex - labelColumnCount; // First scanned label column.
 
@@ -317,13 +291,9 @@ async function runMetricDetectionDiagnostics() {
 
     const leftLabelValues = leftLabelRange.values; // 2D array of left-side label values.
 
-    const detectionResult = detectMetricRowsFromLeftLabels(
-      selectedValues,
-      leftLabelValues
-    );
+    const detectionResult = detectMetricRowsFromLeftLabels(selectedValues, leftLabelValues);
 
-    outputElement.textContent =
-      formatMetricDetectionDiagnostics(detectionResult);
+    outputElement.textContent = formatMetricDetectionDiagnostics(detectionResult);
   });
 }
 
@@ -346,10 +316,7 @@ async function loadLeftLabelsForSelectedRange(context, selectedRange) {
     return [];
   }
 
-  const labelColumnCount = Math.min(
-    LABEL_SCAN_COLUMNS_LEFT,
-    selectedStartColumnIndex
-  ); // Scan up to configured number of columns left, but not beyond sheet boundary.
+  const labelColumnCount = Math.min(LABEL_SCAN_COLUMNS_LEFT, selectedStartColumnIndex); // Scan up to configured number of columns left, but not beyond sheet boundary.
 
   const labelStartColumnIndex = selectedStartColumnIndex - labelColumnCount; // First scanned label column.
 
@@ -376,12 +343,9 @@ async function loadLeftLabelsForSelectedRange(context, selectedRange) {
 function readCalculationSettingsFromPanel() {
   const confidenceLevelElement = document.getElementById("confidence-level");
 
-  const confidenceLevel = confidenceLevelElement
-    ? confidenceLevelElement.value
-    : "95";
+  const confidenceLevel = confidenceLevelElement ? confidenceLevelElement.value : "95";
 
   return {
     confidenceLevel,
   };
 }
-

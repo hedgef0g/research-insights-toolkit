@@ -166,11 +166,7 @@ export function formatMetricDetectionDiagnostics(detectionResult) {
  * In this case, the same base may apply both to proportions and means.
  */
 function findNextBaseRowIndex(rowDiagnostics, startRowIndex) {
-  for (
-    let rowIndex = startRowIndex + 1;
-    rowIndex < rowDiagnostics.length;
-    rowIndex++
-  ) {
+  for (let rowIndex = startRowIndex + 1; rowIndex < rowDiagnostics.length; rowIndex++) {
     if (rowDiagnostics[rowIndex].rowType === "base") {
       return rowIndex;
     }
@@ -327,10 +323,7 @@ export function buildCalculationBlocks(detectionResult) {
   if (calculationBlocks.length === 0 && rowDiagnostics.length >= 2) {
     calculationBlocks.push({
       metricType: "proportion",
-      valueRowIndexes: Array.from(
-        { length: rowDiagnostics.length - 1 },
-        (_, index) => index
-      ),
+      valueRowIndexes: Array.from({ length: rowDiagnostics.length - 1 }, (_, index) => index),
       baseRowIndex: rowDiagnostics.length - 1,
     });
   }
@@ -346,11 +339,7 @@ export function buildCalculationBlocks(detectionResult) {
  * from being calculated as ordinary proportions.
  */
 function isProportionValueRowType(rowType) {
-  return (
-    rowType === "proportion" ||
-    rowType === "empty" ||
-    rowType === "unknownText"
-  );
+  return rowType === "proportion" || rowType === "empty" || rowType === "unknownText";
 }
 
 /**

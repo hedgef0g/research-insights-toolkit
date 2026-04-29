@@ -10,9 +10,7 @@ function parseRawCellValue(rawValue) {
   const textValue = String(rawValue).trim();
   const isPercentText = textValue.endsWith("%");
 
-  const cleanedTextValue = isPercentText
-    ? textValue.replace("%", "").trim()
-    : textValue;
+  const cleanedTextValue = isPercentText ? textValue.replace("%", "").trim() : textValue;
 
   const numericValue = Number(cleanedTextValue.replace(",", "."));
 
@@ -70,7 +68,7 @@ export function normalizeNpsSpread(rawSpread, spreadType) {
   if (!parsed || parsed.numericValue < 0) return null;
 
   const val = parsed.numericValue;
-  
+
   if (spreadType === "standardDeviation") {
     return val > 1 ? val / 100 : val;
   }

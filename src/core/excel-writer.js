@@ -7,11 +7,7 @@ import { removeSignificanceMarkersFromText } from "./significance";
  * Shared writer for proportions, means, and NPS blocks.
  * It also protects cells from Excel auto-formatting values as time.
  */
-export function writeMarkersToSelectedRange(
-  selectedRange,
-  selectedText,
-  markerMatrix
-) {
+export function writeMarkersToSelectedRange(selectedRange, selectedText, markerMatrix) {
   const rowCount = markerMatrix.length; // Number of rows in marker matrix.
   const columnCount = markerMatrix[0] ? markerMatrix[0].length : 0; // Number of columns.
 
@@ -30,9 +26,7 @@ export function writeMarkersToSelectedRange(
 
       currentCell.numberFormat = [["@"]]; // Force text format to prevent Excel time conversion.
 
-      currentCell.values = [
-        [`${displayedValueWithoutMarkers} ${markers}`.trim()],
-      ];
+      currentCell.values = [[`${displayedValueWithoutMarkers} ${markers}`.trim()]];
 
       currentCell.format.font.bold = true;
       currentCell.format.fill.color = "#E2F0D9";
