@@ -27,18 +27,119 @@
   <body class="ms-font-m ms-welcome ms-Fabric">
     <main id="app-body" class="ms-welcome__main" style="display: none">
       <section class="settings-panel">
-        <h3>Settings</h3>
-        <label for="confidence-level">Confidence level</label>
-          <select id="confidence-level">
-            <option value="99">99%</option>
-            <option value="95" selected>95%</option>
-            <option value="90">90%</option>
-            <option value="80">80%</option>
-            <option value="66.6">66.6%</option>
-          </select>
+        <button type="button" id="settings-toggle" class="settings-toggle">
+          <span>Настройки</span>
+          <span id="settings-toggle-icon">▾</span>
+        </button>
+
+        <div id="settings-content" class="settings-content">
+          <div class="settings-group">
+            <label for="confidence-level">Уровень значимости</label>
+            <select id="confidence-level">
+              <option value="99">99%</option>
+              <option value="95" selected>95%</option>
+              <option value="90">90%</option>
+              <option value="80">80%</option>
+              <option value="66.6">66.6%</option>
+            </select>
+          </div>
+
+          <div class="settings-group">
+            <label>
+              <input type="checkbox" id="round-cell-values" />
+              Округлять значения в ячейках
+            </label>
+          </div>
+
+          <div class="settings-group">
+            <h4>Баннер</h4>
+            <label
+              ><input type="checkbox" id="write-banner-letters" /> Проставлять буквы в
+              баннере</label
+            >
+            <label
+              ><input type="checkbox" id="respect-banner-structure" disabled /> Учитывать структуру
+              баннера</label
+            >
+            <label
+              ><input type="checkbox" id="labels-on-left-side" /> Лейблы значений слева листа</label
+            >
+          </div>
+
+          <div class="settings-group">
+            <h4>Сравнение с Тоталом</h4>
+            <fieldset class="exclusive-options">
+              <legend>Режим сравнения с Тоталом</legend>
+
+              <label
+                ><input type="checkbox" id="compare-only-with-total" disabled /> Сравнивать только с
+                Тотал</label
+              >
+              <label
+                ><input type="checkbox" id="exclude-total-from-comparisons" disabled /> Не
+                сравнивать с Тотал</label
+              >
+            </fieldset>
+
+            <fieldset class="exclusive-options">
+              <legend>Расположение Тотала</legend>
+
+              <label
+                ><input type="checkbox" id="first-column-is-total" disabled /> Первая колонка —
+                Тотал</label
+              >
+              <label
+                ><input type="checkbox" id="total-in-each-banner" disabled /> Тотал в каждом
+                баннере</label
+              >
+            </fieldset>
+          </div>
+
+          <div class="settings-group">
+            <h4>Заливки</h4>
+            <label for="significant-fill-color">Обычная значимость</label>
+            <input type="color" id="significant-fill-color" value="#E2F0D9" disabled />
+
+            <label for="lower-than-total-fill-color">Заливка &lt; Тотал</label>
+            <input type="color" id="lower-than-total-fill-color" value="#FCE4D6" disabled />
+
+            <label
+              ><input type="checkbox" id="fill-only-total-comparisons" disabled /> Заливка только
+              для Тотала</label
+            >
+          </div>
+
+          <div class="settings-group">
+            <h4>Маленькие базы</h4>
+            <label
+              ><input type="checkbox" id="exclude-small-bases" disabled /> Не сравнивать маленькие
+              базы</label
+            >
+
+            <div class="inline-number-setting">
+              <label for="small-base-threshold">База &lt;</label>
+              <input type="number" id="small-base-threshold" value="50" min="0" step="1" disabled />
+            </div>
+
+            <label for="small-base-fill-color">Заливка маленькой базы</label>
+            <input type="color" id="small-base-fill-color" value="#D0D0D0" disabled />
+          </div>
+
+          <div class="settings-group">
+            <label for="settings-storage-mode">Сохранять настройки...</label>
+            <select id="settings-storage-mode">
+              <option value="none" selected>Не сохранять</option>
+              <option value="local" disabled>Локально</option>
+              <option value="cloud" disabled>В облаке</option>
+            </select>
+          </div>
+
+          <a href="#" id="help-link">Справка об использовании</a>
+        </div>
       </section>
-      <button id="calculate-significance">Calculate Significance</button>
-      <pre id="significance-result">Select values and bases,</br>then click the button.</pre>
+
+      <button id="calculate-significance">Запустить</button>
+      <pre id="significance-result">Select values and bases, then click the button.</pre>
       <button id="detect-metric-type">Detect Metric Type</button>
       <button id="clear-significance">Clear Significance</button>
     </main>

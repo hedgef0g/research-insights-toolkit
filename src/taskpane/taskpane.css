@@ -3,44 +3,81 @@
  * See LICENSE in the project root for license information.
  */
 
- html,
- body {
-     width: 100%;
-     height: 100%;
-     margin: 0;
-     padding: 0;
- }
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
 
- .ms-welcome__main {
-    display: -webkit-flex;
-    display: flex;
-    -webkit-flex-direction: column;
-    flex-direction: column;
-    -webkit-flex-wrap: nowrap;
-    flex-wrap: nowrap;
-    -webkit-align-items: center;
-    align-items: center;
-    -webkit-flex: 1 0 0;
-    flex: 1 0 0;
-    padding: 10px 20px;
- }
- 
- .ms-welcome__main > h2 {
-     width: 100%;
-     text-align: center;
- }
+.ms-welcome__main {
+  display: -webkit-flex;
+  display: flex;
+  -webkit-flex-direction: column;
+  flex-direction: column;
+  -webkit-flex-wrap: nowrap;
+  flex-wrap: nowrap;
+  -webkit-align-items: center;
+  align-items: center;
+  -webkit-flex: 1 0 0;
+  flex: 1 0 0;
+  padding: 10px 20px;
+}
+
+.ms-welcome__main > h2 {
+  width: 100%;
+  text-align: center;
+}
 
 b {
-    font-weight: bold;
+  font-weight: bold;
 }
 
 .settings-panel {
   width: 100%;
+  box-sizing: border-box;
   margin-bottom: 16px;
   padding: 12px;
   border: 1px solid #ddd;
-  border-radius: 6px;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.settings-panel h3 {
+  margin: 0 0 12px 0;
+}
+
+.settings-panel h4 {
+  margin: 12px 0 8px 0;
+}
+
+.settings-group {
+  margin-bottom: 12px;
+}
+
+.settings-group label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.settings-group select,
+.settings-group input[type="number"] {
+  width: 100%;
   box-sizing: border-box;
+  padding: 6px;
+  margin-bottom: 8px;
+}
+
+.settings-group input[type="color"] {
+  width: 100%;
+  height: 32px;
+  margin-bottom: 8px;
+}
+
+#help-link {
+  display: inline-block;
+  margin-top: 8px;
 }
 
 .settings-panel h3 {
@@ -57,4 +94,78 @@ b {
   width: 100%;
   padding: 6px;
   margin-bottom: 8px;
+}
+
+.inline-number-setting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.inline-number-setting input[type="number"] {
+  width: 80px;
+  padding: 6px;
+}
+
+.inline-number-setting label {
+  margin-bottom: 0;
+}
+
+.exclusive-options {
+  margin: 8px 0 12px 0;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+}
+
+.exclusive-options legend {
+  padding: 0 4px;
+  color: #666;
+  font-size: 12px;
+}
+
+.settings-toggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.settings-content {
+  margin-top: 8px;
+}
+
+.settings-content.collapsed {
+  display: none;
+}
+
+.primary-action-button {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid #0078d4;
+  border-radius: 8px;
+  background: #0078d4;
+  color: white;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primary-action-button:hover {
+  background: #106ebe;
+  border-color: #106ebe;
+}
+
+.primary-action-button:active {
+  background: #005a9e;
+  border-color: #005a9e;
 }

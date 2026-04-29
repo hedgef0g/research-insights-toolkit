@@ -22,9 +22,17 @@ export const METRIC_DICTIONARY = [
   {
     rowType: "standardDeviation",
     keywords: [
-      "sd", "std", "std dev", "standard deviation", "stdev", "st dev",
-      "стандартное отклонение", "ст отклонение", "ст откл", 
-      "среднеквадратическое отклонение", "ско",
+      "sd",
+      "std",
+      "std dev",
+      "standard deviation",
+      "stdev",
+      "st dev",
+      "стандартное отклонение",
+      "ст отклонение",
+      "ст откл",
+      "среднеквадратическое отклонение",
+      "ско",
     ],
   },
   {
@@ -34,8 +42,15 @@ export const METRIC_DICTIONARY = [
   {
     rowType: "mean",
     keywords: [
-      "mean", "average", "avg", "среднее", "средняя", "срзнач", 
-      "ср знач", "ср значение", "среднее значение",
+      "mean",
+      "average",
+      "avg",
+      "среднее",
+      "средняя",
+      "срзнач",
+      "ср знач",
+      "ср значение",
+      "среднее значение",
     ],
   },
   {

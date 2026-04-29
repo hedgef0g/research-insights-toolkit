@@ -71,19 +71,20 @@ export function extractRowLabelFromLeftCells(leftLabelRowValues) {
     return "";
   }
 
-  /**
-   * We scan from right to left because the closest label to the selected
-   * data range is usually the most relevant one.
-   */
   for (
     let labelColumnIndex = leftLabelRowValues.length - 1;
     labelColumnIndex >= 0;
     labelColumnIndex--
   ) {
-    const currentLabelValue = leftLabelRowValues[labelColumnIndex]; // Candidate label cell value.
-    const normalizedLabel = normalizeLabelText(currentLabelValue); // Normalized candidate.
+    const currentLabelValue = leftLabelRowValues[labelColumnIndex];
 
-    if (normalizedLabel && Number.isNaN(Number(normalizedLabel))) {
+    if (isNumericLikeCellValue(currentLabelValue)) {
+      continue;
+    }
+
+    const normalizedLabel = normalizeLabelText(currentLabelValue);
+
+    if (normalizedLabel) {
       return String(currentLabelValue);
     }
   }
@@ -166,11 +167,7 @@ export function formatMetricDetectionDiagnostics(detectionResult) {
  * In this case, the same base may apply both to proportions and means.
  */
 function findNextBaseRowIndex(rowDiagnostics, startRowIndex) {
-  for (
-    let rowIndex = startRowIndex + 1;
-    rowIndex < rowDiagnostics.length;
-    rowIndex++
-  ) {
+  for (let rowIndex = startRowIndex + 1; rowIndex < rowDiagnostics.length; rowIndex++) {
     if (rowDiagnostics[rowIndex].rowType === "base") {
       return rowIndex;
     }
@@ -327,10 +324,7 @@ export function buildCalculationBlocks(detectionResult) {
   if (calculationBlocks.length === 0 && rowDiagnostics.length >= 2) {
     calculationBlocks.push({
       metricType: "proportion",
-      valueRowIndexes: Array.from(
-        { length: rowDiagnostics.length - 1 },
-        (_, index) => index
-      ),
+      valueRowIndexes: Array.from({ length: rowDiagnostics.length - 1 }, (_, index) => index),
       baseRowIndex: rowDiagnostics.length - 1,
     });
   }
@@ -346,11 +340,7 @@ export function buildCalculationBlocks(detectionResult) {
  * from being calculated as ordinary proportions.
  */
 function isProportionValueRowType(rowType) {
-  return (
-    rowType === "proportion" ||
-    rowType === "empty" ||
-    rowType === "unknownText"
-  );
+  return rowType === "proportion" || rowType === "empty" || rowType === "unknownText";
 }
 
 /**
@@ -389,4 +379,29 @@ export function getAllowedMarkerRowIndexes(calculationBlocks) {
   }
 
   return allowedMarkerRows;
+}
+
+/**
+ * Checks whether a cell value looks like a numeric data value.
+ *
+ * PURPOSE:
+ * Prevent numeric columns located between labels and selected range
+ * from being treated as row labels.
+ */
+function isNumericLikeCellValue(rawValue) {
+  if (rawValue === null || rawValue === undefined || rawValue === "") {
+    return false;
+  }
+
+  if (typeof rawValue === "number") {
+    return true;
+  }
+
+  const textValue = String(rawValue).trim().replace("%", "").replace(",", ".");
+
+  if (textValue === "") {
+    return false;
+  }
+
+  return !Number.isNaN(Number(textValue));
 }
