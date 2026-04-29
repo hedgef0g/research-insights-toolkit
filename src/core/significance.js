@@ -1,3 +1,10 @@
+import {
+  normalizeShare,
+  normalizeVariance,
+  normalizeNpsValue,
+  normalizeNpsSpread,
+} from "./normalizers";
+
 /**
  * Default z-threshold for a two-tailed 95% significance test.
  *
@@ -8,46 +15,6 @@
  * 99%  -> 2.576
  */
 export const DEFAULT_Z_THRESHOLD_95 = 1.96;
-
-/**
- * Converts a user-entered percentage/share into a decimal proportion.
- *
- * PURPOSE:
- * Users may enter values either as:
- * - 0.42 meaning 42%
- * - 42 meaning 42%
- *
- * INPUT:
- * rawValue - any value from a spreadsheet cell.
- *
- * OUTPUT:
- * Number between 0 and 1, or null if the value cannot be used.
- */
-export function normalizeShare(rawValue) {
-  if (rawValue === null || rawValue === undefined || rawValue === "") {
-    return null;
-  }
-
-  const textValue = String(rawValue).trim(); // Spreadsheet value as text.
-
-  const isPercentText = textValue.endsWith("%"); // Example: "42%".
-
-  const cleanedTextValue = isPercentText
-    ? textValue.replace("%", "").trim()
-    : textValue;
-
-  const numericValue = Number(cleanedTextValue.replace(",", "."));
-
-  if (Number.isNaN(numericValue)) {
-    return null;
-  }
-
-  if (isPercentText) {
-    return numericValue / 100;
-  }
-
-  return numericValue > 1 ? numericValue / 100 : numericValue;
-}
 
 /**
  * Calculates statistical significance between two proportions.
@@ -415,37 +382,6 @@ export function getTwoTailedTCritical95(degreesOfFreedom) {
 }
 
 /**
- * Converts SD or variance input into variance.
- *
- * PURPOSE:
- * t-test formula needs variance.
- *
- * INPUT:
- * spreadRawValue - standard deviation or variance from spreadsheet.
- * spreadType     - "standardDeviation" or "variance".
- *
- * OUTPUT:
- * Variance value, or null if input is invalid.
- */
-export function normalizeVariance(spreadRawValue, spreadType) {
-  const spreadValue = Number(String(spreadRawValue).replace(",", ".")); // Numeric SD/variance value.
-
-  if (Number.isNaN(spreadValue) || spreadValue < 0) {
-    return null;
-  }
-
-  if (spreadType === "standardDeviation") {
-    return spreadValue * spreadValue;
-  }
-
-  if (spreadType === "variance") {
-    return spreadValue;
-  }
-
-  return null;
-}
-
-/**
  * Calculates statistical significance between two means using Welch's t-test.
  *
  * PURPOSE:
@@ -587,57 +523,6 @@ export function compareAllMeansInRow(meanRow, spreadRow, baseRow, spreadType) {
   }
 
   return rowComparisons;
-}
-
-/**
- * Converts NPS value into -1..1 scale.
- *
- * PURPOSE:
- * Users may enter NPS as:
- * - 40 meaning 40 NPS points
- * - 0.40 meaning the same value on -1..1 scale
- */
-export function normalizeNpsValue(rawValue) {
-  const numericValue = Number(String(rawValue).replace(",", "."));
-
-  if (Number.isNaN(numericValue)) {
-    return null;
-  }
-
-  return Math.abs(numericValue) > 1 ? numericValue / 100 : numericValue;
-}
-
-/**
- * Normalizes NPS spread value: SD or variance.
- *
- * PURPOSE:
- * Keep NPS and spread values in the same -1..1 scale.
- *
- * Examples:
- * SD:
- * - 0.80 stays 0.80
- * - 80 becomes 0.80
- *
- * Variance:
- * - 0.64 stays 0.64
- * - 6400 becomes 0.64
- */
-export function normalizeNpsSpread(rawSpread, spreadType) {
-  const numericSpread = Number(String(rawSpread).replace(",", "."));
-
-  if (Number.isNaN(numericSpread) || numericSpread < 0) {
-    return null;
-  }
-
-  if (spreadType === "standardDeviation") {
-    return numericSpread > 1 ? numericSpread / 100 : numericSpread;
-  }
-
-  if (spreadType === "variance") {
-    return numericSpread > 1 ? numericSpread / 10000 : numericSpread;
-  }
-
-  return null;
 }
 
 /**

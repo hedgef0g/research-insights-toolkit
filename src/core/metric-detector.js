@@ -1,19 +1,7 @@
-/**
- * Number of columns to scan to the left of the selected data range.
- *
- * PURPOSE:
- * Labels may be located immediately to the left of data,
- * or one extra column further left.
- */
+import { METRIC_DICTIONARY } from "./dictionary.config"; // Импортируем наш конфиг
+
 export const LABEL_SCAN_COLUMNS_LEFT = 2;
 
-/**
- * Normalizes a label string before classification.
- *
- * PURPOSE:
- * Spreadsheet labels may contain dots, extra spaces, different casing,
- * Russian ё/е variations, etc.
- */
 export function normalizeLabelText(rawLabel) {
   if (rawLabel === null || rawLabel === undefined) {
     return "";
@@ -29,23 +17,20 @@ export function normalizeLabelText(rawLabel) {
 
 /**
  * Checks whether normalized label contains any known keyword.
- *
- * PURPOSE:
- * Central helper for row type classification.
  */
 function labelContainsAnyKeyword(normalizedLabel, keywords) {
   return keywords.some((keyword) => normalizedLabel.includes(keyword));
 }
 
 /**
- * Classifies one normalized row label.
+ * Classifies one normalized row label based on the dictionary config.
  *
  * PURPOSE:
  * Detect what kind of data row this is:
  * proportion, mean, SD, variance, NPS, promoters, detractors, base, or unknown.
  */
 export function classifyMetricLabel(rawLabel) {
-  const normalizedLabel = normalizeLabelText(rawLabel); // Clean label text.
+  const normalizedLabel = normalizeLabelText(rawLabel);
 
   if (!normalizedLabel) {
     return {
@@ -54,140 +39,17 @@ export function classifyMetricLabel(rawLabel) {
     };
   }
 
-  const proportionKeywords = [
-    "%",
-    "percent",
-    "percentage",
-    "share",
-    "доля",
-    "процент",
-    "проценты",
-  ];
-
-  const meanKeywords = [
-    "mean",
-    "average",
-    "avg",
-    "среднее",
-    "средняя",
-    "срзнач",
-    "ср знач",
-    "ср значение",
-    "среднее значение",
-  ];
-
-  const standardDeviationKeywords = [
-    "sd",
-    "std",
-    "std dev",
-    "standard deviation",
-    "stdev",
-    "st dev",
-    "стандартное отклонение",
-    "ст отклонение",
-    "ст откл",
-    "среднеквадратическое отклонение",
-    "ско",
-  ];
-
-  const varianceKeywords = [
-    "variance",
-    "var",
-    "dispersion",
-    "дисперсия",
-    "дисп",
-  ];
-
-  const npsKeywords = [
-    "nps",
-    "нпс",
-    "net promoter score",
-    "индекс лояльности",
-  ];
-
-  const promotersKeywords = [
-    "promoters",
-    "promoter",
-    "промоутеры",
-    "промоутер",
-    "сторонники",
-    "лояльные",
-  ];
-
-  const detractorsKeywords = [
-    "detractors",
-    "detractor",
-    "детракторы",
-    "детрактор",
-    "критики",
-    "недовольные",
-  ];
-
-  const baseKeywords = [
-    "base",
-    "база",
-    "основание",
-    "выборка",
-    "количество",
-    "кол во",
-  ];
-
-  if (labelContainsAnyKeyword(normalizedLabel, npsKeywords)) {
-    return {
-      rowType: "nps",
-      normalizedLabel,
-    };
+  // Проходимся по словарю. Как только находим совпадение — возвращаем тип.
+  for (const dictionaryEntry of METRIC_DICTIONARY) {
+    if (labelContainsAnyKeyword(normalizedLabel, dictionaryEntry.keywords)) {
+      return {
+        rowType: dictionaryEntry.rowType,
+        normalizedLabel,
+      };
+    }
   }
 
-  if (labelContainsAnyKeyword(normalizedLabel, promotersKeywords)) {
-    return {
-      rowType: "promoters",
-      normalizedLabel,
-    };
-  }
-
-  if (labelContainsAnyKeyword(normalizedLabel, detractorsKeywords)) {
-    return {
-      rowType: "detractors",
-      normalizedLabel,
-    };
-  }
-
-  if (labelContainsAnyKeyword(normalizedLabel, standardDeviationKeywords)) {
-    return {
-      rowType: "standardDeviation",
-      normalizedLabel,
-    };
-  }
-
-  if (labelContainsAnyKeyword(normalizedLabel, varianceKeywords)) {
-    return {
-      rowType: "variance",
-      normalizedLabel,
-    };
-  }
-
-  if (labelContainsAnyKeyword(normalizedLabel, meanKeywords)) {
-    return {
-      rowType: "mean",
-      normalizedLabel,
-    };
-  }
-
-  if (labelContainsAnyKeyword(normalizedLabel, baseKeywords)) {
-    return {
-      rowType: "base",
-      normalizedLabel,
-    };
-  }
-
-  if (labelContainsAnyKeyword(normalizedLabel, proportionKeywords)) {
-    return {
-      rowType: "proportion",
-      normalizedLabel,
-    };
-  }
-
+  // Если ни одно слово из конфига не подошло
   return {
     rowType: "unknownText",
     normalizedLabel,
