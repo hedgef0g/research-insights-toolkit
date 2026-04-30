@@ -6,7 +6,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Contoso Task Pane Add-in</title>
+    <title>Research Insights Toolkit</title>
 
     <!-- Office JavaScript API -->
     <script
@@ -50,6 +50,19 @@
               Округлять значения в ячейках
             </label>
           </div>
+          <div class="settings-group">
+            <label>
+              <input type="checkbox" id="compare-with-previous-column" />
+              Сравнение с предыдущей колонкой
+            </label>
+
+            <div id="previous-column-fill-wrapper" style="display: none; margin-left: 18px">
+              <label>
+                <input type="checkbox" id="apply-previous-column-fill" />
+                Применить заливку
+              </label>
+            </div>
+          </div>
 
           <div class="settings-group">
             <h4>Баннер</h4>
@@ -72,12 +85,12 @@
               <legend>Режим сравнения с Тоталом</legend>
 
               <label
-                ><input type="checkbox" id="compare-only-with-total" disabled /> Сравнивать только с
+                ><input type="checkbox" id="compare-only-with-total" /> Сравнивать только с
                 Тотал</label
               >
               <label
-                ><input type="checkbox" id="exclude-total-from-comparisons" disabled /> Не
-                сравнивать с Тотал</label
+                ><input type="checkbox" id="exclude-total-from-comparisons" /> Не сравнивать с
+                Тотал</label
               >
             </fieldset>
 
@@ -85,9 +98,16 @@
               <legend>Расположение Тотала</legend>
 
               <label
-                ><input type="checkbox" id="first-column-is-total" disabled /> Первая колонка —
-                Тотал</label
+                ><input type="checkbox" id="first-column-is-total" /> Первая колонка — Тотал</label
               >
+              <div
+                id="previous-column-total-warning"
+                class="settings-warning"
+                style="display: none"
+              >
+                WARNING: При выбранных настройках Тотал будет обрабатываться как обычная предыдущая
+                колонка, если не включить "Не сравнивать с Тотал"
+              </div>
               <label
                 ><input type="checkbox" id="total-in-each-banner" disabled /> Тотал в каждом
                 баннере</label
@@ -98,31 +118,31 @@
           <div class="settings-group">
             <h4>Заливки</h4>
             <label for="significant-fill-color">Обычная значимость</label>
-            <input type="color" id="significant-fill-color" value="#E2F0D9" disabled />
+            <input type="color" id="significant-fill-color" value="#E2F0D9" />
 
             <label for="lower-than-total-fill-color">Заливка &lt; Тотал</label>
-            <input type="color" id="lower-than-total-fill-color" value="#FCE4D6" disabled />
+            <input type="color" id="lower-than-total-fill-color" value="#FCE4D6" />
 
             <label
-              ><input type="checkbox" id="fill-only-total-comparisons" disabled /> Заливка только
-              для Тотала</label
+              ><input type="checkbox" id="fill-only-total-comparisons" /> Заливка только для
+              Тотала</label
             >
           </div>
 
           <div class="settings-group">
             <h4>Маленькие базы</h4>
             <label
-              ><input type="checkbox" id="exclude-small-bases" disabled /> Не сравнивать маленькие
+              ><input type="checkbox" id="exclude-small-bases" /> Не сравнивать маленькие
               базы</label
             >
 
             <div class="inline-number-setting">
               <label for="small-base-threshold">База &lt;</label>
-              <input type="number" id="small-base-threshold" value="50" min="0" step="1" disabled />
+              <input type="number" id="small-base-threshold" value="50" min="0" step="1" />
             </div>
 
             <label for="small-base-fill-color">Заливка маленькой базы</label>
-            <input type="color" id="small-base-fill-color" value="#D0D0D0" disabled />
+            <input type="color" id="small-base-fill-color" value="#D0D0D0" />
           </div>
 
           <div class="settings-group">
@@ -138,10 +158,14 @@
         </div>
       </section>
 
-      <button id="calculate-significance">Запустить</button>
-      <pre id="significance-result">Select values and bases, then click the button.</pre>
-      <button id="detect-metric-type">Detect Metric Type</button>
-      <button id="clear-significance">Clear Significance</button>
+      <div class="action-buttons-row">
+        <button id="calculate-significance" class="primary-action-button">Запустить</button>
+        <button id="clear-significance" class="secondary-action-button">Очистить значимости</button>
+      </div>
+      <section id="status-panel" class="status-panel" style="display: none">
+        <h4>Статус</h4>
+        <pre id="significance-result"></pre>
+      </section>
     </main>
   </body>
 </html>
