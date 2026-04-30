@@ -6,8 +6,9 @@
 /* global console, document, Excel, Office */
 
 import {
-  createEmptyMarkerMatrix,
-  applyComparisonResultsToFullMarkerMatrix,
+  createEmptyCellResultMatrix,
+  applyComparisonResultsToFullCellResultMatrix,
+  applySmallBaseRulesForCalculationBlock,
   keepMarkersOnlyInAllowedRows,
   compareProportionRowsUsingBaseRow,
   compareMeanBlockByRowIndexes,
@@ -25,7 +26,7 @@ import {
   getAllowedMarkerRowIndexes,
 } from "../core/metric-detector";
 
-import { writeMarkersToSelectedRange } from "../core/excel-writer";
+import { writeCellResultsToSelectedRange } from "../core/excel-writer";
 
 /**
  * Initializes task pane events after Office is ready.
@@ -86,6 +87,39 @@ async function runSignificanceFromSelection() {
 
     const outputElement = document.getElementById("significance-result");
     const calculationSettings = readCalculationSettingsFromPanel();
+    if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
+      outputElement.textContent =
+        "Режим “Сравнение с предыдущей колонкой” несовместим с режимом “Сравнивать только с Тотал”.";
+
+      return;
+    }
+
+    if (
+      calculationSettings.compareWithPreviousColumn &&
+      calculationSettings.excludeTotalFromComparisons &&
+      !calculationSettings.firstColumnIsTotal
+    ) {
+      outputElement.textContent =
+        "Для режима “Не сравнивать с Тотал” нужно указать расположение Тотала. Сейчас поддерживается только вариант “Первая колонка — Тотал”.";
+
+      return;
+    }
+    if (calculationSettings.compareOnlyWithTotal && !calculationSettings.firstColumnIsTotal) {
+      outputElement.textContent =
+        "Для режима “Сравнивать только с Тотал” нужно указать расположение Тотала. Сейчас поддерживается только вариант “Первая колонка — Тотал”.";
+
+      return;
+    }
+
+    if (
+      calculationSettings.excludeTotalFromComparisons &&
+      !calculationSettings.firstColumnIsTotal
+    ) {
+      outputElement.textContent =
+        "Для режима “Не сравнивать с Тотал” нужно указать расположение Тотала. Сейчас поддерживается только вариант “Первая колонка — Тотал”.";
+
+      return;
+    }
 
     selectedRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
@@ -94,6 +128,16 @@ async function runSignificanceFromSelection() {
     if (calculationSettings.writeBannerLetters && selectedRange.rowIndex === 0) {
       outputElement.textContent =
         "Данные расположены в первой строке. Добавьте строку над выделенным массивом и запустите расчёт повторно.";
+
+      return;
+    }
+
+    if (
+      calculationSettings.compareWithPreviousColumn &&
+      calculationSettings.fillOnlyTotalComparisons
+    ) {
+      outputElement.textContent =
+        "Режим “Сравнение с предыдущей колонкой” несовместим с настройкой “Заливка только для Тотала”.";
 
       return;
     }
@@ -109,7 +153,7 @@ async function runSignificanceFromSelection() {
     const selectedText = selectedRange.text;
 
     if (!selectedValues || selectedValues.length < 2 || selectedValues[0].length < 2) {
-      outputElement.textContent = "Please select at least 2 columns and 2 rows.";
+      setStatusMessage("Please select at least 2 columns and 2 rows.");
       return;
     }
 
@@ -135,37 +179,58 @@ async function runSignificanceFromSelection() {
     const calculationBlocks = buildCalculationBlocks(detectionResult); // List of metric blocks to calculate.
 
     if (!calculationBlocks || calculationBlocks.length === 0) {
-      outputElement.textContent = "Could not detect any calculation blocks.";
+      setStatusMessage("Could not detect any calculation blocks.");
       return;
     }
 
-    const fullMarkerMatrix = createEmptyMarkerMatrix(cleanedValues.length, cleanedValues[0].length); // Full-size marker storage matching the selected range.
+    const fullCellResultMatrix = createEmptyCellResultMatrix(
+      cleanedValues.length,
+      cleanedValues[0].length
+    ); // Full-size marker storage matching the selected range.
 
     for (const calculationBlock of calculationBlocks) {
+      const smallBaseResult = applySmallBaseRulesForCalculationBlock(
+        cleanedValues,
+        calculationBlock,
+        fullCellResultMatrix,
+        calculationSettings
+      );
+
+      if (smallBaseResult.errorMessage) {
+        setStatusMessage(smallBaseResult.errorMessage);
+        return;
+      }
+
+      const blockCalculationSettings = {
+        ...calculationSettings,
+        excludedColumnIndexes: smallBaseResult.excludedColumnIndexes,
+      };
+
       const blockResults = calculateBlockResults(
         cleanedValues,
         calculationBlock,
-        calculationSettings
-      ); // Calculation result for current block.
+        blockCalculationSettings
+      );
 
       if (!blockResults) {
         continue;
       }
 
-      // Add markers only to comparisonRows.valueRowIndex rows returned by the block calculation.
-      applyComparisonResultsToFullMarkerMatrix(blockResults, fullMarkerMatrix);
+      applyComparisonResultsToFullCellResultMatrix(
+        blockResults,
+        fullCellResultMatrix,
+        blockCalculationSettings
+      );
     }
 
-    const allowedMarkerRows = getAllowedMarkerRowIndexes(calculationBlocks); // Rows where marker letters are allowed.
+    const allowedMarkerRows = getAllowedMarkerRowIndexes(calculationBlocks);
 
-    // Defensive cleanup: service rows must never receive significance markers.
-    keepMarkersOnlyInAllowedRows(fullMarkerMatrix, allowedMarkerRows);
+    keepMarkersOnlyInAllowedRows(fullCellResultMatrix, allowedMarkerRows);
 
-    // Write markers once, through one shared writer.
-    writeMarkersToSelectedRange(
+    writeCellResultsToSelectedRange(
       selectedRange,
       selectedText,
-      fullMarkerMatrix,
+      fullCellResultMatrix,
       detectionResult,
       calculationSettings
     );
@@ -176,7 +241,7 @@ async function runSignificanceFromSelection() {
 
     await context.sync();
 
-    outputElement.textContent = `Significance calculated for ${calculationBlocks.length} detected block(s).`;
+    setStatusMessage(`Significance calculated for ${calculationBlocks.length} detected block(s).`);
   });
 }
 
@@ -259,7 +324,7 @@ async function clearSignificanceFromSelection() {
     await context.sync();
 
     const outputElement = document.getElementById("significance-result");
-    outputElement.textContent = "Significance markers removed.";
+    setStatusMessage("Significance markers removed.");
   });
 }
 
@@ -280,13 +345,11 @@ async function runMetricDetectionDiagnostics() {
     await context.sync();
 
     const selectedValues = selectedRange.values; // Selected data values.
-    const selectedStartRowIndex = selectedRange.rowIndex; // Zero-based first row of selected range.
     const selectedStartColumnIndex = selectedRange.columnIndex; // Zero-based first column of selected range.
-    const selectedRowCount = selectedRange.rowCount; // Number of selected rows.
 
     const outputElement = document.getElementById("significance-result"); // Task pane output area.
 
-    if (selectedStartColumnIndex === 0) {
+    if (selectedStartColumnIndex === 0 && !calculationSettings.labelsOnLeftSide) {
       const detectionResult = detectMetricRowsFromLeftLabels(selectedValues, []);
 
       outputElement.textContent =
@@ -296,23 +359,15 @@ async function runMetricDetectionDiagnostics() {
       return;
     }
 
-    const labelColumnCount = Math.min(LABEL_SCAN_COLUMNS_LEFT, selectedStartColumnIndex); // Scan up to 2 columns left, but not beyond sheet boundary.
-
     const leftLabelValues = await loadLabelValuesForSelectedRange(
       context,
       selectedRange,
       calculationSettings
     );
 
-    const labelStartColumnIndex = selectedStartColumnIndex - labelColumnCount; // First scanned label column.
-
-    const worksheet = selectedRange.worksheet; // Worksheet containing selected range.
-
-    await context.sync();
-
     const detectionResult = detectMetricRowsFromLeftLabels(selectedValues, leftLabelValues);
 
-    outputElement.textContent = formatMetricDetectionDiagnostics(detectionResult);
+    setStatusMessage(formatMetricDetectionDiagnostics(detectionResult));
   });
 }
 
@@ -413,6 +468,9 @@ function readCalculationSettingsFromPanel() {
 
     roundCellValues: getCheckboxValue("round-cell-values"),
 
+    compareWithPreviousColumn: getCheckboxValue("compare-with-previous-column"),
+    applyPreviousColumnFill: getCheckboxValue("apply-previous-column-fill"),
+
     writeBannerLetters: getCheckboxValue("write-banner-letters"),
     respectBannerStructure: getCheckboxValue("respect-banner-structure"),
     labelsOnLeftSide: getCheckboxValue("labels-on-left-side"),
@@ -466,12 +524,17 @@ function initializeSettingsPanel() {
 
   bindMutuallyExclusiveCheckboxes("first-column-is-total", "total-in-each-banner");
 
+  initializePreviousColumnComparisonSettings();
+
   const helpLink = document.getElementById("help-link");
 
   if (helpLink) {
     helpLink.addEventListener("click", (event) => {
       event.preventDefault();
-      window.open("https://github.com/YOUR_USER/YOUR_REPO#readme", "_blank");
+      window.open(
+        "https://github.com/hedgef0g/research-insights-toolkit/blob/main/README.md",
+        "_blank"
+      );
     });
   }
 
@@ -563,7 +626,13 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
   const bannerValues = bannerRange.values[0];
 
   const updatedBannerValues = bannerValues.map((currentValue, columnIndex) => {
-    const marker = significanceLabels[columnIndex];
+    if (calculationSettings.firstColumnIsTotal && columnIndex === 0) {
+      return removeBannerCellMarker(currentValue);
+    }
+
+    const markerIndex = calculationSettings.firstColumnIsTotal ? columnIndex - 1 : columnIndex;
+
+    const marker = significanceLabels[markerIndex];
 
     if (!marker) {
       return currentValue;
@@ -571,6 +640,21 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
 
     return updateBannerCellMarker(currentValue, marker);
   });
+
+  /**
+   * Removes significance marker from the end of a banner cell.
+   *
+   * PURPOSE:
+   * In firstColumnIsTotal mode, the Total banner cell must not have
+   * a significance marker.
+   */
+  function removeBannerCellMarker(rawValue) {
+    const textValue = rawValue === null || rawValue === undefined ? "" : String(rawValue);
+
+    const markerSuffixPattern = /\s*\([^()]+\)$/;
+
+    return textValue.replace(markerSuffixPattern, "").trim();
+  }
 
   bannerRange.values = [updatedBannerValues];
 }
@@ -600,4 +684,122 @@ function updateBannerCellMarker(rawValue, marker) {
   }
 
   return `${textWithoutOldMarker} ${expectedMarkerSuffix}`;
+}
+
+/**
+ * Initializes Previous Column comparison UI behavior.
+ *
+ * RULES:
+ * - Previous-column mode disables banner letters.
+ * - Previous-column mode is incompatible with compare-only-with-total.
+ * - exclude-total-from-comparisons is available in previous-column mode
+ *   only when first-column-is-total is enabled.
+ * - Previous-column fill option is visible only in previous-column mode.
+ * - Warning is shown when previous-column + first-column-is-total is enabled
+ *   and exclude-total-from-comparisons is not enabled.
+ */
+function initializePreviousColumnComparisonSettings() {
+  const previousColumnCheckbox = document.getElementById("compare-with-previous-column");
+  const previousColumnFillWrapper = document.getElementById("previous-column-fill-wrapper");
+  const previousColumnFillCheckbox = document.getElementById("apply-previous-column-fill");
+
+  const writeBannerLettersCheckbox = document.getElementById("write-banner-letters");
+
+  const compareOnlyWithTotalCheckbox = document.getElementById("compare-only-with-total");
+  const excludeTotalCheckbox = document.getElementById("exclude-total-from-comparisons");
+  const firstColumnIsTotalCheckbox = document.getElementById("first-column-is-total");
+
+  const fillOnlyTotalComparisonsCheckbox = document.getElementById("fill-only-total-comparisons");
+
+  const warningElement = document.getElementById("previous-column-total-warning");
+
+  if (!previousColumnCheckbox) {
+    return;
+  }
+
+  const updatePreviousColumnUiState = () => {
+    const isPreviousColumnMode = previousColumnCheckbox.checked;
+    const firstColumnIsTotal = firstColumnIsTotalCheckbox
+      ? firstColumnIsTotalCheckbox.checked
+      : false;
+
+    if (previousColumnFillWrapper) {
+      previousColumnFillWrapper.style.display = isPreviousColumnMode ? "block" : "none";
+    }
+
+    if (!isPreviousColumnMode && previousColumnFillCheckbox) {
+      previousColumnFillCheckbox.checked = false;
+    }
+
+    if (writeBannerLettersCheckbox) {
+      if (isPreviousColumnMode) {
+        writeBannerLettersCheckbox.checked = false;
+        writeBannerLettersCheckbox.disabled = true;
+      } else {
+        writeBannerLettersCheckbox.disabled = false;
+      }
+    }
+
+    if (compareOnlyWithTotalCheckbox) {
+      if (isPreviousColumnMode) {
+        compareOnlyWithTotalCheckbox.checked = false;
+        compareOnlyWithTotalCheckbox.disabled = true;
+      } else {
+        compareOnlyWithTotalCheckbox.disabled = false;
+      }
+    }
+
+    if (fillOnlyTotalComparisonsCheckbox) {
+      if (isPreviousColumnMode) {
+        fillOnlyTotalComparisonsCheckbox.checked = false;
+        fillOnlyTotalComparisonsCheckbox.disabled = true;
+      } else {
+        fillOnlyTotalComparisonsCheckbox.disabled = false;
+      }
+    }
+
+    if (excludeTotalCheckbox) {
+      if (isPreviousColumnMode && !firstColumnIsTotal) {
+        excludeTotalCheckbox.checked = false;
+        excludeTotalCheckbox.disabled = true;
+      } else {
+        excludeTotalCheckbox.disabled = false;
+      }
+    }
+
+    if (warningElement) {
+      const shouldShowWarning =
+        isPreviousColumnMode &&
+        firstColumnIsTotal &&
+        excludeTotalCheckbox &&
+        !excludeTotalCheckbox.checked;
+
+      warningElement.style.display = shouldShowWarning ? "block" : "none";
+    }
+  };
+
+  previousColumnCheckbox.addEventListener("change", updatePreviousColumnUiState);
+
+  if (firstColumnIsTotalCheckbox) {
+    firstColumnIsTotalCheckbox.addEventListener("change", updatePreviousColumnUiState);
+  }
+
+  if (excludeTotalCheckbox) {
+    excludeTotalCheckbox.addEventListener("change", updatePreviousColumnUiState);
+  }
+
+  updatePreviousColumnUiState();
+}
+
+function setStatusMessage(message) {
+  const statusPanel = document.getElementById("status-panel");
+  const outputElement = document.getElementById("significance-result");
+
+  if (statusPanel) {
+    statusPanel.style.display = "block";
+  }
+
+  if (outputElement) {
+    outputElement.textContent = message || "";
+  }
 }

@@ -6,17 +6,6 @@ import {
 } from "./normalizers";
 
 /**
- * Default z-threshold for a two-tailed 95% significance test.
- *
- * TODO:
- * In future versions, make confidence level configurable:
- * 90%  -> 1.645
- * 95%  -> 1.960
- * 99%  -> 2.576
- */
-export const DEFAULT_Z_THRESHOLD_95 = 1.96;
-
-/**
  * Calculates statistical significance between two proportions.
  *
  * PURPOSE:
@@ -126,38 +115,42 @@ export function compareAllProportionsInRow(
   baseRow,
   calculationSettings = { confidenceLevel: "95" }
 ) {
-  const rowComparisons = []; // Stores all pairwise comparisons for this row.
+  const rowComparisons = [];
 
-  for (let firstColumnIndex = 0; firstColumnIndex < valueRow.length; firstColumnIndex++) {
-    for (
-      let secondColumnIndex = firstColumnIndex + 1;
-      secondColumnIndex < valueRow.length;
-      secondColumnIndex++
-    ) {
-      const firstValue = valueRow[firstColumnIndex]; // Value from the first compared column.
-      const secondValue = valueRow[secondColumnIndex]; // Value from the second compared column.
+  const comparisonPairs = buildColumnComparisonPairs(
+    valueRow.length,
+    calculationSettings,
+    calculationSettings.excludedColumnIndexes || new Set()
+  );
 
-      const firstBase = baseRow[firstColumnIndex]; // Base for the first compared column.
-      const secondBase = baseRow[secondColumnIndex]; // Base for the second compared column.
+  for (const comparisonPair of comparisonPairs) {
+    const firstColumnIndex = comparisonPair.firstColumnIndex;
+    const secondColumnIndex = comparisonPair.secondColumnIndex;
 
-      const significanceResult = calculateProportionSignificance(
-        firstValue,
-        firstBase,
-        secondValue,
-        secondBase,
-        calculationSettings
-      );
+    const firstValue = valueRow[firstColumnIndex];
+    const secondValue = valueRow[secondColumnIndex];
 
-      rowComparisons.push({
-        firstColumnIndex,
-        secondColumnIndex,
-        firstValue,
-        secondValue,
-        firstBase,
-        secondBase,
-        result: significanceResult,
-      });
-    }
+    const firstBase = baseRow[firstColumnIndex];
+    const secondBase = baseRow[secondColumnIndex];
+
+    const significanceResult = calculateProportionSignificance(
+      firstValue,
+      firstBase,
+      secondValue,
+      secondBase,
+      calculationSettings
+    );
+
+    rowComparisons.push({
+      firstColumnIndex,
+      secondColumnIndex,
+      comparisonType: comparisonPair.comparisonType,
+      firstValue,
+      secondValue,
+      firstBase,
+      secondBase,
+      result: significanceResult,
+    });
   }
 
   return rowComparisons;
@@ -194,6 +187,151 @@ export function generateSignificanceLabels() {
 }
 
 /**
+ * Builds column comparison pairs based on current comparison settings.
+ *
+ * MODES:
+ * - Default: all columns are compared pairwise.
+ * - firstColumnIsTotal:
+ *   Total is compared with every segment, and segments are also compared pairwise.
+ * - firstColumnIsTotal + compareOnlyWithTotal:
+ *   only Total-vs-segment comparisons are performed.
+ * - firstColumnIsTotal + excludeTotalFromComparisons:
+ *   only segment-vs-segment comparisons are performed.
+ *
+ * excludedColumnIndexes:
+ * Columns excluded before calculation, for example because of small base.
+ */
+export function buildColumnComparisonPairs(
+  columnCount,
+  calculationSettings = {},
+  excludedColumnIndexes = new Set()
+) {
+  const pairs = [];
+
+  if (columnCount < 2) {
+    return pairs;
+  }
+
+  const firstColumnIsTotal = calculationSettings.firstColumnIsTotal;
+  const compareOnlyWithTotal = calculationSettings.compareOnlyWithTotal;
+  const excludeTotalFromComparisons = calculationSettings.excludeTotalFromComparisons;
+  const compareWithPreviousColumn = calculationSettings.compareWithPreviousColumn;
+
+  const isExcluded = (columnIndex) => excludedColumnIndexes.has(columnIndex);
+
+  if (compareWithPreviousColumn) {
+    const startColumnIndex = firstColumnIsTotal && excludeTotalFromComparisons ? 2 : 1;
+
+    for (let columnIndex = startColumnIndex; columnIndex < columnCount; columnIndex++) {
+      const previousColumnIndex = columnIndex - 1;
+
+      if (isExcluded(previousColumnIndex) || isExcluded(columnIndex)) {
+        continue;
+      }
+
+      pairs.push({
+        firstColumnIndex: previousColumnIndex,
+        secondColumnIndex: columnIndex,
+        comparisonType: "previousColumn",
+      });
+    }
+
+    return pairs;
+  }
+
+  if (firstColumnIsTotal) {
+    if (!excludeTotalFromComparisons && !isExcluded(0)) {
+      for (let columnIndex = 1; columnIndex < columnCount; columnIndex++) {
+        if (isExcluded(columnIndex)) {
+          continue;
+        }
+
+        pairs.push({
+          firstColumnIndex: 0,
+          secondColumnIndex: columnIndex,
+          comparisonType: "total",
+        });
+      }
+    }
+
+    if (compareOnlyWithTotal) {
+      return pairs;
+    }
+
+    for (let firstColumnIndex = 1; firstColumnIndex < columnCount; firstColumnIndex++) {
+      if (isExcluded(firstColumnIndex)) {
+        continue;
+      }
+
+      for (
+        let secondColumnIndex = firstColumnIndex + 1;
+        secondColumnIndex < columnCount;
+        secondColumnIndex++
+      ) {
+        if (isExcluded(secondColumnIndex)) {
+          continue;
+        }
+
+        pairs.push({
+          firstColumnIndex,
+          secondColumnIndex,
+          comparisonType: "segment",
+        });
+      }
+    }
+
+    return pairs;
+  }
+
+  for (let firstColumnIndex = 0; firstColumnIndex < columnCount; firstColumnIndex++) {
+    if (isExcluded(firstColumnIndex)) {
+      continue;
+    }
+
+    for (
+      let secondColumnIndex = firstColumnIndex + 1;
+      secondColumnIndex < columnCount;
+      secondColumnIndex++
+    ) {
+      if (isExcluded(secondColumnIndex)) {
+        continue;
+      }
+
+      pairs.push({
+        firstColumnIndex,
+        secondColumnIndex,
+        comparisonType: "segment",
+      });
+    }
+  }
+
+  return pairs;
+}
+
+/**
+ * Returns visible significance label for a selected column.
+ *
+ * In firstColumnIsTotal mode:
+ * - column 0 has no label;
+ * - column 1 gets "a";
+ * - column 2 gets "b";
+ * - etc.
+ */
+export function getSignificanceLabelForColumnIndex(columnIndex, calculationSettings = {}) {
+  const labels = generateSignificanceLabels();
+
+  if (calculationSettings.firstColumnIsTotal) {
+    if (columnIndex === 0) {
+      return "";
+    }
+
+    return labels[columnIndex - 1] || "";
+  }
+
+  return labels[columnIndex] || "";
+}
+
+/**
  * Builds empty marker storage for each value cell.
  *
  * PURPOSE:
@@ -214,6 +352,101 @@ export function createEmptyMarkerMatrix(rowCount, columnCount) {
   }
 
   return markerMatrix;
+}
+
+export const CELL_FILL_REASONS = {
+  NONE: "none",
+  SIGNIFICANT: "significant",
+  LOWER_THAN_TOTAL: "lowerThanTotal",
+  SMALL_BASE: "smallBase",
+};
+
+export const CELL_FILL_PRIORITIES = {
+  [CELL_FILL_REASONS.NONE]: 0,
+  [CELL_FILL_REASONS.SIGNIFICANT]: 10,
+  [CELL_FILL_REASONS.LOWER_THAN_TOTAL]: 20,
+  [CELL_FILL_REASONS.SMALL_BASE]: 30,
+};
+
+/**
+ * Builds empty cell result storage for each selected cell.
+ *
+ * PURPOSE:
+ * Stores both visible significance markers and formatting reasons.
+ * This allows fill priority logic:
+ * small base > lower than Total > normal significance > none.
+ */
+export function createEmptyCellResultMatrix(rowCount, columnCount) {
+  const cellResultMatrix = [];
+
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
+    const cellResultRow = [];
+
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+      cellResultRow.push({
+        markers: "",
+        fillReason: CELL_FILL_REASONS.NONE,
+        fillPriority: CELL_FILL_PRIORITIES[CELL_FILL_REASONS.NONE],
+        hasPositiveTotalComparison: false,
+        previousColumnArrow: "",
+        previousColumnArrowDirection: "",
+      });
+    }
+
+    cellResultMatrix.push(cellResultRow);
+  }
+
+  return cellResultMatrix;
+}
+
+/**
+ * Applies fill reason only if it has higher priority than current fill.
+ */
+function applyFillReasonToCellResult(cellResult, fillReason) {
+  const nextPriority = CELL_FILL_PRIORITIES[fillReason];
+
+  if (nextPriority === undefined) {
+    return;
+  }
+
+  if (nextPriority > cellResult.fillPriority) {
+    cellResult.fillReason = fillReason;
+    cellResult.fillPriority = nextPriority;
+  }
+}
+
+/**
+ * Appends ordinary segment marker and applies normal significance fill.
+ */
+function appendSignificanceMarkerToCellResult(cellResult, marker) {
+  if (!marker) {
+    return;
+  }
+
+  cellResult.markers += marker;
+  applyFillReasonToCellResult(cellResult, CELL_FILL_REASONS.SIGNIFICANT);
+}
+
+/**
+ * Prepends Total marker and applies corresponding fill.
+ *
+ * T = segment is significantly higher than Total.
+ * t = segment is significantly lower than Total.
+ */
+function prependTotalMarkerToCellResult(cellResult, totalMarker) {
+  const markerText = cellResult.markers || "";
+  const markerTextWithoutOldTotalMarker = markerText.replace(/[tT]/g, "");
+
+  cellResult.markers = `${totalMarker}${markerTextWithoutOldTotalMarker}`;
+
+  if (totalMarker === "T") {
+    cellResult.hasPositiveTotalComparison = true;
+    applyFillReasonToCellResult(cellResult, CELL_FILL_REASONS.SIGNIFICANT);
+    return;
+  }
+
+  cellResult.hasPositiveTotalComparison = false;
+  applyFillReasonToCellResult(cellResult, CELL_FILL_REASONS.LOWER_THAN_TOTAL);
 }
 
 /**
@@ -293,12 +526,12 @@ export function removeSignificanceMarkersFromText(rawText) {
   const textValue = String(rawText); // Cell value converted to text.
 
   const markerCharacters =
-    "abcdefghijklmnopqrsuvwxyz" +
-    "ABCDEFGHIJKLMNOPQRSUVWXYZ" +
+    "abcdefghijklmnopqrstuvwxyz" +
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
     "абвгдежзийклмнопрсуфхцчшщъыьэюя" +
     "АБВГДЕЖЗИЙКЛМНОПРСУФХЦЧШЩЪЫЬЭЮЯ";
 
-  const markerSuffixPattern = new RegExp(`\\s*[${markerCharacters}]+$`);
+  const markerSuffixPattern = new RegExp(`\\s*[${markerCharacters}↑↓]+$`);
 
   return textValue.replace(markerSuffixPattern, "");
 }
@@ -319,60 +552,6 @@ export function removeSignificanceMarkersFromMatrix(valuesMatrix) {
  * Default confidence level for two-tailed significance tests.
  */
 export const DEFAULT_CONFIDENCE_LEVEL = 0.95;
-
-/**
- * Returns approximate two-tailed t critical value for 95% confidence.
- *
- * PURPOSE:
- * JavaScript does not have a built-in Student's t distribution function.
- * For MVP, we use a standard lookup table with simple interpolation.
- *
- * FUTURE EXTENSION:
- * Replace with a statistical library or full inverse t-distribution function.
- */
-export function getTwoTailedTCritical95(degreesOfFreedom) {
-  const tCriticalTable = [
-    { df: 1, value: 12.706 },
-    { df: 2, value: 4.303 },
-    { df: 3, value: 3.182 },
-    { df: 4, value: 2.776 },
-    { df: 5, value: 2.571 },
-    { df: 6, value: 2.447 },
-    { df: 7, value: 2.365 },
-    { df: 8, value: 2.306 },
-    { df: 9, value: 2.262 },
-    { df: 10, value: 2.228 },
-    { df: 15, value: 2.131 },
-    { df: 20, value: 2.086 },
-    { df: 30, value: 2.042 },
-    { df: 40, value: 2.021 },
-    { df: 60, value: 2.0 },
-    { df: 120, value: 1.98 },
-    { df: Infinity, value: 1.96 },
-  ];
-
-  if (degreesOfFreedom <= 1) {
-    return 12.706;
-  }
-
-  for (let tableIndex = 0; tableIndex < tCriticalTable.length - 1; tableIndex++) {
-    const currentPoint = tCriticalTable[tableIndex]; // Current df/value pair.
-    const nextPoint = tCriticalTable[tableIndex + 1]; // Next df/value pair.
-
-    if (degreesOfFreedom >= currentPoint.df && degreesOfFreedom <= nextPoint.df) {
-      if (nextPoint.df === Infinity) {
-        return nextPoint.value;
-      }
-
-      const interpolationPosition =
-        (degreesOfFreedom - currentPoint.df) / (nextPoint.df - currentPoint.df);
-
-      return currentPoint.value + interpolationPosition * (nextPoint.value - currentPoint.value);
-    }
-  }
-
-  return 1.96;
-}
 
 /**
  * Calculates statistical significance between two means using Welch's t-test.
@@ -485,37 +664,41 @@ export function compareAllMeansInRow(
   spreadType,
   calculationSettings = { confidenceLevel: "95" }
 ) {
-  const rowComparisons = []; // Stores all pairwise comparisons for this mean row.
+  const rowComparisons = [];
 
-  for (let firstColumnIndex = 0; firstColumnIndex < meanRow.length; firstColumnIndex++) {
-    for (
-      let secondColumnIndex = firstColumnIndex + 1;
-      secondColumnIndex < meanRow.length;
-      secondColumnIndex++
-    ) {
-      const significanceResult = calculateMeanSignificance(
-        meanRow[firstColumnIndex],
-        spreadRow[firstColumnIndex],
-        baseRow[firstColumnIndex],
-        meanRow[secondColumnIndex],
-        spreadRow[secondColumnIndex],
-        baseRow[secondColumnIndex],
-        spreadType,
-        calculationSettings
-      );
+  const comparisonPairs = buildColumnComparisonPairs(
+    meanRow.length,
+    calculationSettings,
+    calculationSettings.excludedColumnIndexes || new Set()
+  );
 
-      rowComparisons.push({
-        firstColumnIndex,
-        secondColumnIndex,
-        firstValue: meanRow[firstColumnIndex],
-        secondValue: meanRow[secondColumnIndex],
-        firstSpread: spreadRow[firstColumnIndex],
-        secondSpread: spreadRow[secondColumnIndex],
-        firstBase: baseRow[firstColumnIndex],
-        secondBase: baseRow[secondColumnIndex],
-        result: significanceResult,
-      });
-    }
+  for (const comparisonPair of comparisonPairs) {
+    const firstColumnIndex = comparisonPair.firstColumnIndex;
+    const secondColumnIndex = comparisonPair.secondColumnIndex;
+
+    const significanceResult = calculateMeanSignificance(
+      meanRow[firstColumnIndex],
+      spreadRow[firstColumnIndex],
+      baseRow[firstColumnIndex],
+      meanRow[secondColumnIndex],
+      spreadRow[secondColumnIndex],
+      baseRow[secondColumnIndex],
+      spreadType,
+      calculationSettings
+    );
+
+    rowComparisons.push({
+      firstColumnIndex,
+      secondColumnIndex,
+      comparisonType: comparisonPair.comparisonType,
+      firstValue: meanRow[firstColumnIndex],
+      secondValue: meanRow[secondColumnIndex],
+      firstSpread: spreadRow[firstColumnIndex],
+      secondSpread: spreadRow[secondColumnIndex],
+      firstBase: baseRow[firstColumnIndex],
+      secondBase: baseRow[secondColumnIndex],
+      result: significanceResult,
+    });
   }
 
   return rowComparisons;
@@ -738,30 +921,34 @@ export function compareNpsStructureBlockByRowIndexes(
 
   const rowComparisons = []; // Pairwise NPS comparisons.
 
-  for (let firstColumnIndex = 0; firstColumnIndex < npsRow.length; firstColumnIndex++) {
-    for (
-      let secondColumnIndex = firstColumnIndex + 1;
-      secondColumnIndex < npsRow.length;
-      secondColumnIndex++
-    ) {
-      const significanceResult = calculateNpsSignificanceFromStructure(
-        npsRow[firstColumnIndex],
-        promotersRow[firstColumnIndex],
-        detractorsRow[firstColumnIndex],
-        baseRow[firstColumnIndex],
-        npsRow[secondColumnIndex],
-        promotersRow[secondColumnIndex],
-        detractorsRow[secondColumnIndex],
-        baseRow[secondColumnIndex],
-        calculationSettings
-      );
+  const comparisonPairs = buildColumnComparisonPairs(
+    npsRow.length,
+    calculationSettings,
+    calculationSettings.excludedColumnIndexes || new Set()
+  );
 
-      rowComparisons.push({
-        firstColumnIndex,
-        secondColumnIndex,
-        result: significanceResult,
-      });
-    }
+  for (const comparisonPair of comparisonPairs) {
+    const firstColumnIndex = comparisonPair.firstColumnIndex;
+    const secondColumnIndex = comparisonPair.secondColumnIndex;
+
+    const significanceResult = calculateNpsSignificanceFromStructure(
+      npsRow[firstColumnIndex],
+      promotersRow[firstColumnIndex],
+      detractorsRow[firstColumnIndex],
+      baseRow[firstColumnIndex],
+      npsRow[secondColumnIndex],
+      promotersRow[secondColumnIndex],
+      detractorsRow[secondColumnIndex],
+      baseRow[secondColumnIndex],
+      calculationSettings
+    );
+
+    rowComparisons.push({
+      firstColumnIndex,
+      secondColumnIndex,
+      comparisonType: comparisonPair.comparisonType,
+      result: significanceResult,
+    });
   }
 
   return {
@@ -796,29 +983,33 @@ export function compareNpsSpreadBlockByRowIndexes(
 
   const rowComparisons = []; // Pairwise NPS comparisons.
 
-  for (let firstColumnIndex = 0; firstColumnIndex < npsRow.length; firstColumnIndex++) {
-    for (
-      let secondColumnIndex = firstColumnIndex + 1;
-      secondColumnIndex < npsRow.length;
-      secondColumnIndex++
-    ) {
-      const significanceResult = calculateNpsSignificanceFromSpread(
-        npsRow[firstColumnIndex],
-        spreadRow[firstColumnIndex],
-        baseRow[firstColumnIndex],
-        npsRow[secondColumnIndex],
-        spreadRow[secondColumnIndex],
-        baseRow[secondColumnIndex],
-        spreadType,
-        calculationSettings
-      );
+  const comparisonPairs = buildColumnComparisonPairs(
+    npsRow.length,
+    calculationSettings,
+    calculationSettings.excludedColumnIndexes || new Set()
+  );
 
-      rowComparisons.push({
-        firstColumnIndex,
-        secondColumnIndex,
-        result: significanceResult,
-      });
-    }
+  for (const comparisonPair of comparisonPairs) {
+    const firstColumnIndex = comparisonPair.firstColumnIndex;
+    const secondColumnIndex = comparisonPair.secondColumnIndex;
+
+    const significanceResult = calculateNpsSignificanceFromSpread(
+      npsRow[firstColumnIndex],
+      spreadRow[firstColumnIndex],
+      baseRow[firstColumnIndex],
+      npsRow[secondColumnIndex],
+      spreadRow[secondColumnIndex],
+      baseRow[secondColumnIndex],
+      spreadType,
+      calculationSettings
+    );
+
+    rowComparisons.push({
+      firstColumnIndex,
+      secondColumnIndex,
+      comparisonType: comparisonPair.comparisonType,
+      result: significanceResult,
+    });
   }
 
   return {
@@ -834,16 +1025,25 @@ export function compareNpsSpreadBlockByRowIndexes(
 }
 
 /**
- * Adds significance letters from comparison results
- * directly into full marker matrix.
+ * Adds significance results directly into full cell result matrix.
  *
  * PURPOSE:
  * Used for block-plan mode where different metric blocks
  * occupy arbitrary rows inside one selected range.
+ *
+ * TOTAL LOGIC:
+ * If firstColumnIsTotal is enabled:
+ * - Total column never receives markers.
+ * - Total-vs-segment comparisons write:
+ *   - "T" into segment cell if segment is significantly higher than Total.
+ *   - "t" into segment cell if segment is significantly lower than Total.
+ * - Segment-vs-segment comparisons use normal labels starting from the second selected column.
  */
-export function applyComparisonResultsToFullMarkerMatrix(blockResults, fullMarkerMatrix) {
-  const columnLabels = generateSignificanceLabels();
-
+export function applyComparisonResultsToFullCellResultMatrix(
+  blockResults,
+  fullCellResultMatrix,
+  calculationSettings = {}
+) {
   for (const comparisonRow of blockResults.comparisonRows) {
     const valueRowIndex = comparisonRow.valueRowIndex;
 
@@ -855,40 +1055,157 @@ export function applyComparisonResultsToFullMarkerMatrix(blockResults, fullMarke
       const firstColumnIndex = comparison.firstColumnIndex;
       const secondColumnIndex = comparison.secondColumnIndex;
 
-      const firstLabel = columnLabels[firstColumnIndex];
-      const secondLabel = columnLabels[secondColumnIndex];
+      if (comparison.comparisonType === "previousColumn") {
+        applyPreviousColumnArrowToCellResultMatrix(
+          fullCellResultMatrix,
+          valueRowIndex,
+          comparison,
+          calculationSettings
+        );
+
+        continue;
+      }
+
+      if (calculationSettings.firstColumnIsTotal && comparison.comparisonType === "total") {
+        applyTotalComparisonMarkerToFullCellResultMatrix(
+          fullCellResultMatrix,
+          valueRowIndex,
+          comparison
+        );
+
+        continue;
+      }
+
+      if (calculationSettings.firstColumnIsTotal) {
+        if (firstColumnIndex === 0 || secondColumnIndex === 0) {
+          continue;
+        }
+      }
+
+      const firstLabel = getSignificanceLabelForColumnIndex(firstColumnIndex, calculationSettings);
+
+      const secondLabel = getSignificanceLabelForColumnIndex(
+        secondColumnIndex,
+        calculationSettings
+      );
+
+      if (!firstLabel || !secondLabel) {
+        continue;
+      }
 
       if (comparison.result.direction === "first_higher") {
-        fullMarkerMatrix[valueRowIndex][firstColumnIndex] += secondLabel;
+        appendSignificanceMarkerToCellResult(
+          fullCellResultMatrix[valueRowIndex][firstColumnIndex],
+          secondLabel
+        );
       }
 
       if (comparison.result.direction === "second_higher") {
-        fullMarkerMatrix[valueRowIndex][secondColumnIndex] += firstLabel;
+        appendSignificanceMarkerToCellResult(
+          fullCellResultMatrix[valueRowIndex][secondColumnIndex],
+          firstLabel
+        );
       }
     }
   }
 }
 
 /**
- * Clears marker matrix rows that are not allowed to receive markers.
+ * Applies special Total comparison marker.
+ *
+ * RULES:
+ * - Total column is column 0.
+ * - Marker is always written into the segment column.
+ * - "T" means segment is significantly higher than Total.
+ * - "t" means segment is significantly lower than Total.
+ * - Total marker has priority and must appear before segment markers.
+ */
+function applyTotalComparisonMarkerToFullCellResultMatrix(
+  fullCellResultMatrix,
+  valueRowIndex,
+  comparison
+) {
+  const firstColumnIndex = comparison.firstColumnIndex;
+  const secondColumnIndex = comparison.secondColumnIndex;
+
+  const segmentColumnIndex = firstColumnIndex === 0 ? secondColumnIndex : firstColumnIndex;
+  const segmentIsFirstColumn = segmentColumnIndex === firstColumnIndex;
+
+  const segmentIsHigher =
+    (segmentIsFirstColumn && comparison.result.direction === "first_higher") ||
+    (!segmentIsFirstColumn && comparison.result.direction === "second_higher");
+
+  const totalMarker = segmentIsHigher ? "T" : "t";
+
+  prependTotalMarkerToCellResult(
+    fullCellResultMatrix[valueRowIndex][segmentColumnIndex],
+    totalMarker
+  );
+}
+
+/**
+ * Applies special Total comparison marker.
+ *
+ * RULES:
+ * - Total column is column 0.
+ * - Marker is always written into the segment column.
+ * - "T" means segment is significantly higher than Total.
+ * - "t" means segment is significantly lower than Total.
+ * - Total marker has priority and must appear before segment markers.
+ */
+function applyTotalComparisonMarkerToFullMarkerMatrix(fullMarkerMatrix, valueRowIndex, comparison) {
+  const firstColumnIndex = comparison.firstColumnIndex;
+  const secondColumnIndex = comparison.secondColumnIndex;
+
+  const segmentColumnIndex = firstColumnIndex === 0 ? secondColumnIndex : firstColumnIndex;
+  const segmentIsFirstColumn = segmentColumnIndex === firstColumnIndex;
+
+  const segmentIsHigher =
+    (segmentIsFirstColumn && comparison.result.direction === "first_higher") ||
+    (!segmentIsFirstColumn && comparison.result.direction === "second_higher");
+
+  const totalMarker = segmentIsHigher ? "T" : "t";
+
+  fullMarkerMatrix[valueRowIndex][segmentColumnIndex] = prependTotalMarker(
+    fullMarkerMatrix[valueRowIndex][segmentColumnIndex],
+    totalMarker
+  );
+}
+
+/**
+ * Puts Total marker before ordinary segment markers.
+ *
+ * Example:
+ * - existing "ab" + "T" -> "Tab"
+ * - existing "tbc" + "T" -> "Tbc"
+ */
+function prependTotalMarker(existingMarkers, totalMarker) {
+  const markerText = existingMarkers || "";
+  const markerTextWithoutOldTotalMarker = markerText.replace(/[tT]/g, "");
+
+  return `${totalMarker}${markerTextWithoutOldTotalMarker}`;
+}
+
+/**
+ * Clears markers from rows that are not allowed to receive markers.
  *
  * PURPOSE:
  * Defensive protection for complex tables.
- * Even if some calculation accidentally creates markers for service rows,
- * this function removes them before writing to Excel.
+ * Service rows may still receive fill formatting, for example small-base fill,
+ * but they must not receive significance markers.
  */
-export function keepMarkersOnlyInAllowedRows(markerMatrix, allowedMarkerRows) {
-  for (let rowIndex = 0; rowIndex < markerMatrix.length; rowIndex++) {
+export function keepMarkersOnlyInAllowedRows(cellResultMatrix, allowedMarkerRows) {
+  for (let rowIndex = 0; rowIndex < cellResultMatrix.length; rowIndex++) {
     if (allowedMarkerRows.has(rowIndex)) {
       continue;
     }
 
-    for (let columnIndex = 0; columnIndex < markerMatrix[rowIndex].length; columnIndex++) {
-      markerMatrix[rowIndex][columnIndex] = "";
+    for (let columnIndex = 0; columnIndex < cellResultMatrix[rowIndex].length; columnIndex++) {
+      cellResultMatrix[rowIndex][columnIndex].markers = "";
     }
   }
 
-  return markerMatrix;
+  return cellResultMatrix;
 }
 
 /**
@@ -1003,4 +1320,206 @@ export function getTThresholdForConfidence(confidenceLevel, degreesOfFreedom) {
   }
 
   return zThreshold;
+}
+
+/**
+ * Applies small-base formatting for one calculation block
+ * and returns columns that must be excluded from significance calculations.
+ *
+ * IMPORTANT:
+ * Small-base logic runs before statistical tests.
+ *
+ * RULES:
+ * - If base < threshold, the column is excluded from comparisons in this block.
+ * - Small-base fill is applied to the whole column inside this block.
+ * - Base row itself is also filled.
+ * - If Total column has small base, calculation is stopped with an error.
+ */
+export function applySmallBaseRulesForCalculationBlock(
+  selectedValues,
+  calculationBlock,
+  fullCellResultMatrix,
+  calculationSettings = {}
+) {
+  const excludedColumnIndexes = new Set();
+
+  if (!calculationSettings.excludeSmallBasesFromComparisons) {
+    return {
+      excludedColumnIndexes,
+      errorMessage: "",
+    };
+  }
+
+  const threshold = Number(calculationSettings.smallBaseThreshold);
+
+  if (Number.isNaN(threshold) || threshold < 0) {
+    return {
+      excludedColumnIndexes,
+      errorMessage: "Некорректный порог маленькой базы. Проверьте настройку “База <”.",
+    };
+  }
+
+  const baseRow = selectedValues[calculationBlock.baseRowIndex];
+
+  if (!baseRow) {
+    return {
+      excludedColumnIndexes,
+      errorMessage: "",
+    };
+  }
+
+  const blockRowIndexes = getRowIndexesCoveredByCalculationBlock(calculationBlock);
+
+  for (let columnIndex = 0; columnIndex < baseRow.length; columnIndex++) {
+    const baseValue = parseBaseValue(baseRow[columnIndex]);
+
+    if (baseValue === null) {
+      continue;
+    }
+
+    if (baseValue >= threshold) {
+      continue;
+    }
+
+    if (calculationSettings.firstColumnIsTotal && columnIndex === 0) {
+      return {
+        excludedColumnIndexes,
+        errorMessage:
+          "В колонке Тотал обнаружена маленькая база. Проверьте данные: база Тотала не должна быть меньше баз сегментов. Расчёт остановлен.",
+      };
+    }
+
+    excludedColumnIndexes.add(columnIndex);
+
+    applySmallBaseFillToBlockColumn(fullCellResultMatrix, blockRowIndexes, columnIndex);
+  }
+
+  return {
+    excludedColumnIndexes,
+    errorMessage: "",
+  };
+}
+
+/**
+ * Applies small-base fill to every row of one calculation block
+ * in the selected column.
+ */
+function applySmallBaseFillToBlockColumn(fullCellResultMatrix, blockRowIndexes, columnIndex) {
+  for (const rowIndex of blockRowIndexes) {
+    if (!fullCellResultMatrix[rowIndex]) {
+      continue;
+    }
+
+    const cellResult = fullCellResultMatrix[rowIndex][columnIndex];
+
+    if (!cellResult) {
+      continue;
+    }
+
+    cellResult.markers = "";
+    cellResult.hasPositiveTotalComparison = false;
+    cellResult.previousColumnArrow = "";
+    cellResult.previousColumnArrowDirection = "";
+
+    applyFillReasonToCellResult(cellResult, CELL_FILL_REASONS.SMALL_BASE);
+  }
+}
+
+/**
+ * Parses base value safely.
+ */
+function parseBaseValue(rawValue) {
+  if (rawValue === null || rawValue === undefined || rawValue === "") {
+    return null;
+  }
+
+  const numericValue = Number(String(rawValue).trim().replace(",", "."));
+
+  if (Number.isNaN(numericValue)) {
+    return null;
+  }
+
+  return numericValue;
+}
+
+/**
+ * Returns all selected-range row indexes covered by one calculation block.
+ *
+ * PURPOSE:
+ * Small-base fill is applied within the current calculation block,
+ * including the block's Base row.
+ */
+function getRowIndexesCoveredByCalculationBlock(calculationBlock) {
+  if (calculationBlock.metricType === "proportion") {
+    return [...calculationBlock.valueRowIndexes, calculationBlock.baseRowIndex];
+  }
+
+  if (calculationBlock.metricType === "mean") {
+    return [
+      calculationBlock.valueRowIndex,
+      calculationBlock.spreadRowIndex,
+      calculationBlock.baseRowIndex,
+    ];
+  }
+
+  if (calculationBlock.metricType === "npsStructure") {
+    return [
+      calculationBlock.valueRowIndex,
+      calculationBlock.promotersRowIndex,
+      calculationBlock.detractorsRowIndex,
+      calculationBlock.baseRowIndex,
+    ];
+  }
+
+  if (calculationBlock.metricType === "npsSpread") {
+    return [
+      calculationBlock.valueRowIndex,
+      calculationBlock.spreadRowIndex,
+      calculationBlock.baseRowIndex,
+    ];
+  }
+
+  return [];
+}
+
+/**
+ * Applies previous-column arrow to the right/current column of a comparison pair.
+ *
+ * RULE:
+ * - Previous column is firstColumnIndex.
+ * - Current column is secondColumnIndex.
+ * - Arrow is written only into current/right column.
+ */
+function applyPreviousColumnArrowToCellResultMatrix(
+  fullCellResultMatrix,
+  valueRowIndex,
+  comparison,
+  calculationSettings = {}
+) {
+  const currentColumnIndex = comparison.secondColumnIndex;
+  const cellResult = fullCellResultMatrix[valueRowIndex][currentColumnIndex];
+
+  if (!cellResult) {
+    return;
+  }
+
+  if (comparison.result.direction === "second_higher") {
+    cellResult.previousColumnArrow = "↑";
+    cellResult.previousColumnArrowDirection = "up";
+
+    if (calculationSettings.applyPreviousColumnFill) {
+      applyFillReasonToCellResult(cellResult, CELL_FILL_REASONS.SIGNIFICANT);
+    }
+
+    return;
+  }
+
+  if (comparison.result.direction === "first_higher") {
+    cellResult.previousColumnArrow = "↓";
+    cellResult.previousColumnArrowDirection = "down";
+
+    if (calculationSettings.applyPreviousColumnFill) {
+      applyFillReasonToCellResult(cellResult, CELL_FILL_REASONS.LOWER_THAN_TOTAL);
+    }
+  }
 }

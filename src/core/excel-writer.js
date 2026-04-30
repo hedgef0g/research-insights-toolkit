@@ -1,50 +1,111 @@
 import { removeSignificanceMarkersFromText } from "./significance";
 
 /**
- * Writes significance markers into selected range.
+ * Writes cell results into selected range.
  *
  * PURPOSE:
- * Shared writer for proportions, means, and NPS blocks.
- * It also protects cells from Excel auto-formatting values as time.
+ * Shared writer for proportions, means, NPS, Total comparisons, and small bases.
+ * It writes markers and applies fill formatting according to fillReason priority.
  */
-export function writeMarkersToSelectedRange(
+export function writeCellResultsToSelectedRange(
   selectedRange,
   selectedText,
-  markerMatrix,
+  cellResultMatrix,
   detectionResult,
   calculationSettings
 ) {
-  const rowCount = markerMatrix.length; // Number of rows in marker matrix.
-  const columnCount = markerMatrix[0] ? markerMatrix[0].length : 0; // Number of columns.
+  const rowCount = cellResultMatrix.length;
+  const columnCount = cellResultMatrix[0] ? cellResultMatrix[0].length : 0;
 
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
     for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
-      const markers = markerMatrix[rowIndex][columnIndex]; // Marker letters for current cell.
+      const cellResult = cellResultMatrix[rowIndex][columnIndex];
 
-      if (!markers) {
+      if (!cellResult) {
         continue;
       }
 
-      const currentCell = selectedRange.getCell(rowIndex, columnIndex); // Target cell.
-      const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
-        selectedText[rowIndex][columnIndex]
-      );
+      const markers = cellResult.markers || "";
+      const previousColumnArrow = cellResult.previousColumnArrow || "";
+      const fillReason = cellResult.fillReason || "none";
 
-      const roundedDisplayedValue = formatDisplayedValueForOutput(
-        displayedValueWithoutMarkers,
-        rowIndex,
-        detectionResult,
-        calculationSettings
-      );
+      if (!markers && !previousColumnArrow && fillReason === "none") {
+        continue;
+      }
 
-      currentCell.numberFormat = [["@"]];
+      const currentCell = selectedRange.getCell(rowIndex, columnIndex);
 
-      currentCell.values = [[`${roundedDisplayedValue} ${markers}`.trim()]];
+      const outputMarkerText = previousColumnArrow || markers;
 
-      currentCell.format.font.bold = true;
-      currentCell.format.fill.color = "#E2F0D9";
+      if (outputMarkerText) {
+        const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
+          selectedText[rowIndex][columnIndex]
+        );
+
+        const roundedDisplayedValue = formatDisplayedValueForOutput(
+          displayedValueWithoutMarkers,
+          rowIndex,
+          detectionResult,
+          calculationSettings
+        );
+
+        currentCell.numberFormat = [["@"]];
+        currentCell.values = [[`${roundedDisplayedValue} ${outputMarkerText}`.trim()]];
+
+        if (previousColumnArrow) {
+          applyPreviousColumnArrowFontColorExperimental(
+            currentCell,
+            cellResult,
+            calculationSettings
+          );
+        }
+      }
+
+      const fillColor = getFillColorForCellResult(cellResult, calculationSettings);
+
+      if (fillColor) {
+        currentCell.format.fill.color = fillColor;
+      }
+
+      if (
+        markers ||
+        previousColumnArrow ||
+        fillReason === "significant" ||
+        fillReason === "lowerThanTotal"
+      ) {
+        currentCell.format.font.bold = true;
+      }
     }
   }
+}
+
+/**
+ * Returns fill color for cell result according to fill reason and settings.
+ *
+ * RULE:
+ * If fillOnlyTotalComparisons is enabled, normal significant fill is applied
+ * only to cells that are significantly higher than Total.
+ */
+function getFillColorForCellResult(cellResult, calculationSettings) {
+  const fillReason = cellResult.fillReason || "none";
+
+  if (fillReason === "smallBase") {
+    return calculationSettings.smallBaseFillColor || "#D0D0D0";
+  }
+
+  if (fillReason === "lowerThanTotal") {
+    return calculationSettings.lowerThanTotalFillColor || "#FCE4D6";
+  }
+
+  if (fillReason === "significant") {
+    if (calculationSettings.fillOnlyTotalComparisons && !cellResult.hasPositiveTotalComparison) {
+      return "";
+    }
+
+    return calculationSettings.significantFillColor || "#E2F0D9";
+  }
+
+  return "";
 }
 
 /**
@@ -60,23 +121,22 @@ function formatDisplayedValueForOutput(
   detectionResult,
   calculationSettings
 ) {
-  const numericValue = parseOutputNumber(displayedValue);
+  const parsedValue = parseOutputNumber(displayedValue);
 
-  if (numericValue === null) {
+  if (parsedValue === null) {
     return displayedValue;
   }
 
   const rowType = getDetectedRowTypeByIndex(detectionResult, rowIndex);
-  const decimalPlaces = getDecimalPlacesForRowType(
-    rowType,
-    calculationSettings
-  );
+  const decimalPlaces = getDecimalPlacesForRowType(rowType, calculationSettings);
 
   if (decimalPlaces === null) {
     return displayedValue;
   }
 
-  return numericValue.toFixed(decimalPlaces);
+  const roundedValue = parsedValue.numericValue.toFixed(decimalPlaces);
+
+  return parsedValue.hasPercentSign ? `${roundedValue}%` : roundedValue;
 }
 
 /**
@@ -86,18 +146,14 @@ function formatDisplayedValueForOutput(
  * Supports comma decimals and percent signs.
  */
 function parseOutputNumber(displayedValue) {
-  if (
-    displayedValue === null ||
-    displayedValue === undefined ||
-    displayedValue === ""
-  ) {
+  if (displayedValue === null || displayedValue === undefined || displayedValue === "") {
     return null;
   }
 
-  const textValue = String(displayedValue)
-    .trim()
-    .replace("%", "")
-    .replace(",", ".");
+  const rawTextValue = String(displayedValue).trim();
+  const hasPercentSign = rawTextValue.endsWith("%");
+
+  const textValue = rawTextValue.replace("%", "").replace(",", ".");
 
   const numericValue = Number(textValue);
 
@@ -105,7 +161,10 @@ function parseOutputNumber(displayedValue) {
     return null;
   }
 
-  return numericValue;
+  return {
+    numericValue,
+    hasPercentSign,
+  };
 }
 
 /**
@@ -135,21 +194,11 @@ function getDetectedRowTypeByIndex(detectionResult, rowIndex) {
  * - means / SD / variance: 1 decimal
  */
 function getDecimalPlacesForRowType(rowType, calculationSettings) {
-  const shouldRoundCellValues =
-    calculationSettings && calculationSettings.roundCellValues;
+  const shouldRoundCellValues = calculationSettings && calculationSettings.roundCellValues;
 
-  const shareLikeRowTypes = [
-    "proportion",
-    "nps",
-    "promoters",
-    "detractors",
-  ];
+  const shareLikeRowTypes = ["proportion", "nps", "promoters", "detractors"];
 
-  const meanLikeRowTypes = [
-    "mean",
-    "standardDeviation",
-    "variance",
-  ];
+  const meanLikeRowTypes = ["mean", "standardDeviation", "variance"];
 
   if (shareLikeRowTypes.includes(rowType)) {
     return shouldRoundCellValues ? 0 : 1;
@@ -160,4 +209,43 @@ function getDecimalPlacesForRowType(rowType, calculationSettings) {
   }
 
   return null;
+}
+
+/**
+ * Tries to color only the previous-column arrow.
+ *
+ * IMPORTANT:
+ * This is experimental. Some Office.js Excel runtimes may not support
+ * character-level formatting inside a cell. If unsupported, we silently
+ * fall back to leaving the arrow uncolored instead of breaking the calculation.
+ */
+function applyPreviousColumnArrowFontColorExperimental(
+  currentCell,
+  cellResult,
+  calculationSettings
+) {
+  const arrowDirection = cellResult.previousColumnArrowDirection;
+
+  if (!arrowDirection) {
+    return;
+  }
+
+  const arrowColor =
+    arrowDirection === "up"
+      ? calculationSettings.significantFillColor || "#70AD47"
+      : calculationSettings.lowerThanTotalFillColor || "#C00000";
+
+  try {
+    // Placeholder for future rich-text implementation.
+    // Standard Excel.Range formatting applies to the whole cell, not a substring.
+    // Do not use currentCell.format.font.color here unless you accept coloring
+    // the entire cell value.
+    //
+    // If a reliable rich-text API becomes available in the target runtime,
+    // implement it here only, without changing significance.js.
+    void currentCell;
+    void arrowColor;
+  } catch (error) {
+    console.warn("Arrow character coloring is not supported in this Excel runtime.", error);
+  }
 }
