@@ -30,7 +30,7 @@
           </GetStarted>
           <FunctionFile resid="Commands.Url"/>
           <ExtensionPoint xsi:type="PrimaryCommandSurface">
-            <OfficeTab id="TabHome">
+            <CustomTab id="RIT.CustomTab">
               <Group id="CommandsGroup">
                 <Label resid="CommandsGroup.Label"/>
                 <Icon>
@@ -55,7 +55,8 @@
                   </Action>
                 </Control>
               </Group>
-            </OfficeTab>
+              <Label resid="CustomTab.Label" />
+            </CustomTab>
           </ExtensionPoint>
         </DesktopFormFactor>
       </Host>
@@ -75,6 +76,7 @@
         <bt:String id="GetStarted.Title" DefaultValue="RIT is ready"/>
         <bt:String id="CommandsGroup.Label" DefaultValue="Research Tools"/>
         <bt:String id="TaskpaneButton.Label" DefaultValue="Open RIT"/>
+        <bt:String id="CustomTab.Label" DefaultValue="Research Insights"/>
       </bt:ShortStrings>
       <bt:LongStrings>
         <bt:String id="GetStarted.Description" DefaultValue="Open the Home tab, click the toolkit button, and start analyzing your tables."/>
