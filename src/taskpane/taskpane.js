@@ -1266,7 +1266,7 @@ function initializeSettingsPanel() {
     helpLink.addEventListener("click", (event) => {
       event.preventDefault();
       window.open(
-        "https://github.com/hedgef0g/research-insights-toolkit/blob/main/README.md",
+        "https://hedgef0g.github.io/research-insights-toolkit/assets/rit-help-ru.html",
         "_blank"
       );
     });
