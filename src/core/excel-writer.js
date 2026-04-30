@@ -17,11 +17,37 @@ export function writeCellResultsToSelectedRange(
   const rowCount = cellResultMatrix.length;
   const columnCount = cellResultMatrix[0] ? cellResultMatrix[0].length : 0;
 
+  if (!rowCount || !columnCount) {
+    return;
+  }
+
+  const rowTypeByIndex = buildDetectedRowTypeByIndexMap(detectionResult);
+
+  const nextValues = [];
+  const nextNumberFormats = [];
+
+  const boldMask = [];
+  const fillReasonMask = [];
+
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
+    const valueRow = [];
+    const numberFormatRow = [];
+    const boldRow = [];
+    const fillReasonRow = [];
+
     for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
       const cellResult = cellResultMatrix[rowIndex][columnIndex];
 
+      const currentText =
+        selectedText && selectedText[rowIndex] && selectedText[rowIndex][columnIndex] !== undefined
+          ? selectedText[rowIndex][columnIndex]
+          : "";
+
       if (!cellResult) {
+        valueRow.push(currentText);
+        numberFormatRow.push("@");
+        boldRow.push(false);
+        fillReasonRow.push("none");
         continue;
       }
 
@@ -29,54 +55,49 @@ export function writeCellResultsToSelectedRange(
       const previousColumnArrow = cellResult.previousColumnArrow || "";
       const fillReason = cellResult.fillReason || "none";
 
-      if (!markers && !previousColumnArrow && fillReason === "none") {
-        continue;
-      }
+      const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(currentText);
 
-      const currentCell = selectedRange.getCell(rowIndex, columnIndex);
+      const roundedDisplayedValue = formatDisplayedValueForOutput(
+        displayedValueWithoutMarkers,
+        rowIndex,
+        rowTypeByIndex,
+        calculationSettings
+      );
 
       const outputMarkerText = previousColumnArrow || markers;
 
-      if (outputMarkerText) {
-        const displayedValueWithoutMarkers = removeSignificanceMarkersFromText(
-          selectedText[rowIndex][columnIndex]
-        );
+      const nextValue = outputMarkerText
+        ? `${roundedDisplayedValue} ${outputMarkerText}`.trim()
+        : roundedDisplayedValue;
 
-        const roundedDisplayedValue = formatDisplayedValueForOutput(
-          displayedValueWithoutMarkers,
-          rowIndex,
-          detectionResult,
-          calculationSettings
-        );
+      valueRow.push(nextValue);
+      numberFormatRow.push("@");
 
-        currentCell.numberFormat = [["@"]];
-        currentCell.values = [[`${roundedDisplayedValue} ${outputMarkerText}`.trim()]];
+      boldRow.push(
+        Boolean(
+          markers ||
+          previousColumnArrow ||
+          fillReason === "significant" ||
+          fillReason === "lowerThanTotal"
+        )
+      );
 
-        if (previousColumnArrow) {
-          applyPreviousColumnArrowFontColorExperimental(
-            currentCell,
-            cellResult,
-            calculationSettings
-          );
-        }
-      }
-
-      const fillColor = getFillColorForCellResult(cellResult, calculationSettings);
-
-      if (fillColor) {
-        currentCell.format.fill.color = fillColor;
-      }
-
-      if (
-        markers ||
-        previousColumnArrow ||
-        fillReason === "significant" ||
-        fillReason === "lowerThanTotal"
-      ) {
-        currentCell.format.font.bold = true;
-      }
+      fillReasonRow.push(fillReason);
     }
+
+    nextValues.push(valueRow);
+    nextNumberFormats.push(numberFormatRow);
+    boldMask.push(boldRow);
+    fillReasonMask.push(fillReasonRow);
   }
+
+  // Main performance win:
+  // one values write + one numberFormat write instead of per-cell writes.
+  selectedRange.numberFormat = nextNumberFormats;
+  selectedRange.values = nextValues;
+
+  applyGroupedBoldFormatting(selectedRange, boldMask);
+  applyGroupedFillFormatting(selectedRange, fillReasonMask, cellResultMatrix, calculationSettings);
 }
 
 /**
@@ -118,7 +139,7 @@ function getFillColorForCellResult(cellResult, calculationSettings) {
 function formatDisplayedValueForOutput(
   displayedValue,
   rowIndex,
-  detectionResult,
+  rowTypeByIndex,
   calculationSettings
 ) {
   const parsedValue = parseOutputNumber(displayedValue);
@@ -127,7 +148,7 @@ function formatDisplayedValueForOutput(
     return displayedValue;
   }
 
-  const rowType = getDetectedRowTypeByIndex(detectionResult, rowIndex);
+  const rowType = rowTypeByIndex.get(rowIndex) || null;
   const decimalPlaces = getDecimalPlacesForRowType(rowType, calculationSettings);
 
   if (decimalPlaces === null) {
@@ -170,16 +191,18 @@ function parseOutputNumber(displayedValue) {
 /**
  * Returns detected row type for selected range row index.
  */
-function getDetectedRowTypeByIndex(detectionResult, rowIndex) {
+function buildDetectedRowTypeByIndexMap(detectionResult) {
+  const rowTypeByIndex = new Map();
+
   if (!detectionResult || !detectionResult.rowDiagnostics) {
-    return null;
+    return rowTypeByIndex;
   }
 
-  const rowDiagnostic = detectionResult.rowDiagnostics.find(
-    (diagnostic) => diagnostic.rowIndex === rowIndex
-  );
+  for (const rowDiagnostic of detectionResult.rowDiagnostics) {
+    rowTypeByIndex.set(rowDiagnostic.rowIndex, rowDiagnostic.rowType);
+  }
 
-  return rowDiagnostic ? rowDiagnostic.rowType : null;
+  return rowTypeByIndex;
 }
 
 /**
@@ -211,41 +234,84 @@ function getDecimalPlacesForRowType(rowType, calculationSettings) {
   return null;
 }
 
-/**
- * Tries to color only the previous-column arrow.
- *
- * IMPORTANT:
- * This is experimental. Some Office.js Excel runtimes may not support
- * character-level formatting inside a cell. If unsupported, we silently
- * fall back to leaving the arrow uncolored instead of breaking the calculation.
- */
-function applyPreviousColumnArrowFontColorExperimental(
-  currentCell,
-  cellResult,
+function applyGroupedBoldFormatting(selectedRange, boldMask) {
+  for (let rowIndex = 0; rowIndex < boldMask.length; rowIndex++) {
+    const row = boldMask[rowIndex];
+
+    let runStart = null;
+
+    for (let columnIndex = 0; columnIndex <= row.length; columnIndex++) {
+      const shouldBeBold = columnIndex < row.length ? row[columnIndex] : false;
+
+      if (shouldBeBold && runStart === null) {
+        runStart = columnIndex;
+        continue;
+      }
+
+      if ((!shouldBeBold || columnIndex === row.length) && runStart !== null) {
+        const runEnd = columnIndex - 1;
+        const runWidth = runEnd - runStart + 1;
+
+        selectedRange
+          .getCell(rowIndex, runStart)
+          .getResizedRange(0, runWidth - 1).format.font.bold = true;
+
+        runStart = null;
+      }
+    }
+  }
+}
+
+function applyGroupedFillFormatting(
+  selectedRange,
+  fillReasonMask,
+  cellResultMatrix,
   calculationSettings
 ) {
-  const arrowDirection = cellResult.previousColumnArrowDirection;
+  for (let rowIndex = 0; rowIndex < fillReasonMask.length; rowIndex++) {
+    const row = fillReasonMask[rowIndex];
 
-  if (!arrowDirection) {
-    return;
-  }
+    let runStart = null;
+    let currentRunColor = "";
 
-  const arrowColor =
-    arrowDirection === "up"
-      ? calculationSettings.significantFillColor || "#70AD47"
-      : calculationSettings.lowerThanTotalFillColor || "#C00000";
+    for (let columnIndex = 0; columnIndex <= row.length; columnIndex++) {
+      const cellResult =
+        columnIndex < row.length && cellResultMatrix[rowIndex]
+          ? cellResultMatrix[rowIndex][columnIndex]
+          : null;
 
-  try {
-    // Placeholder for future rich-text implementation.
-    // Standard Excel.Range formatting applies to the whole cell, not a substring.
-    // Do not use currentCell.format.font.color here unless you accept coloring
-    // the entire cell value.
-    //
-    // If a reliable rich-text API becomes available in the target runtime,
-    // implement it here only, without changing significance.js.
-    void currentCell;
-    void arrowColor;
-  } catch (error) {
-    console.warn("Arrow character coloring is not supported in this Excel runtime.", error);
+      const fillColor = cellResult
+        ? getFillColorForCellResult(cellResult, calculationSettings)
+        : "";
+
+      const continuesRun = fillColor && runStart !== null && fillColor === currentRunColor;
+
+      if (fillColor && runStart === null) {
+        runStart = columnIndex;
+        currentRunColor = fillColor;
+        continue;
+      }
+
+      if (continuesRun) {
+        continue;
+      }
+
+      if (runStart !== null) {
+        const runEnd = columnIndex - 1;
+        const runWidth = runEnd - runStart + 1;
+
+        selectedRange
+          .getCell(rowIndex, runStart)
+          .getResizedRange(0, runWidth - 1).format.fill.color = currentRunColor;
+
+        runStart = null;
+        currentRunColor = "";
+      }
+
+      if (fillColor) {
+        runStart = columnIndex;
+        currentRunColor = fillColor;
+      }
+    }
   }
 }

@@ -2,18 +2,117 @@
 
 ## [Current Development Stage]
 
-#### 28.04.2026 
+### 30.04.2026 — Banner-aware MVP and completed UI settings logic
 
-### Added
+#### Added
+
+- Banner structure detection for Excel crosstab-style tables:
+  - one-level banners;
+  - two-level banners;
+  - repeated adjacent group labels;
+  - reconstructed span detection for merged-like headers.
+- Banner-aware comparison logic:
+  - comparisons are limited to detected banner groups;
+  - columns from different groups are not compared;
+  - marker indexing is local to each banner group.
+- Local Total logic inside banner groups:
+  - local Total is used as the group reference when no global Total exists;
+  - local Total columns are excluded from ordinary segment-vs-segment comparisons;
+  - local Total columns never receive ordinary letter labels.
+- Global Total logic:
+  - global Total can be detected from the banner structure;
+  - global Total becomes the only Total reference when present;
+  - local Totals are compared with global Total as target columns;
+  - local Totals are not used as intra-group references when global Total exists.
+- Banner-aware Total modes:
+  - compare only with Total;
+  - exclude Total from comparisons;
+  - concise status message when compare-only-with-Total produces no valid pairs;
+  - error stop when a group contains multiple local Totals and no global Total resolves the ambiguity.
+- Banner-aware previous-column mode:
+  - previous-column comparisons stay inside detected banner groups;
+  - previous-column comparisons do not cross group boundaries;
+  - Total columns are excluded from previous-column chains under banner structure;
+  - small-base excluded columns are not skipped over.
+- Automatic previous-column mode for wave-like banner groups:
+  - wave groups use previous-column comparisons automatically;
+  - non-wave groups keep ordinary group comparisons;
+  - UI checkbox state is not changed;
+  - previous-column fill is applied automatically for auto wave comparisons;
+  - banner letters are not written for auto wave groups.
+- Wave-group detection based on group labels:
+  - `wave`
+  - `waves`
+  - `волна`
+  - `волны`
+  - `period`
+  - `periods`
+  - `период`
+  - `периоды`
+  - `замер`
+  - `замеры`
+- Banner letter writing with banner structure:
+  - letters are written only into the lowest banner level;
+  - upper banner levels are not modified;
+  - letters are local to each detected group;
+  - Total columns never receive ordinary banner letters;
+  - old trailing banner markers are replaced or removed as needed.
+- One-tailed test setting:
+  - new checkbox next to the confidence level selector;
+  - applies to proportions, means, NPS, Total comparisons, previous-column comparisons, and banner-aware comparisons.
+- Modular statistical threshold calculation:
+  - threshold logic moved to a dedicated module;
+  - z and Student's t critical values are calculated through distribution quantiles rather than static approximation tables.
+- Local settings persistence:
+  - `settings-storage-mode = none`;
+  - `settings-storage-mode = local`;
+  - reset button restores default settings and clears saved local settings.
+- Small-base handling:
+  - columns with bases below threshold are excluded before significance calculation;
+  - small-base fill is applied to the full relevant calculation block;
+  - small-base fill has the highest fill priority.
+- Clean user-facing status messages:
+  - technical banner diagnostics are hidden from normal status output;
+  - only relevant banner messages are shown to the user.
+
+#### Improved
+
+- Completed the functionality originally reserved by the UI settings panel.
+- Previous-column fill is now enabled by default when previous-column mode is selected.
+- Previous-column mode disables banner letters and compare-only-with-Total.
+- Banner structure mode disables manual Total placement checkboxes, because Total placement is detected by the banner engine.
+- Total-related settings remain valid under banner structure:
+  - compare only with Total;
+  - exclude Total from comparisons.
+- User status output is now concise:
+  - simple successful calculations show only the success message;
+  - wave/global Total/banner errors add only user-relevant messages.
+
+#### Fixed
+
+- Prevented Total columns from receiving ordinary group-local letters.
+- Prevented Total columns from participating in ordinary banner group comparisons.
+- Fixed group-local marker propagation through row comparison objects.
+- Fixed banner-aware previous-column behavior with excluded Total columns.
+- Fixed old banner markers remaining on columns that should no longer receive letters.
+- Fixed excessive technical banner diagnostics appearing in the user status panel.
+- Fixed UI state conflicts between previous-column mode, Total settings, banner letters, and banner structure mode.
+
+---
+
+### 28.04.2026
+
+#### Added
+
 - Unified significance engine with automatic metric detection.
 - Support for significance testing of proportions.
 - Support for significance testing of means using:
-  - Standard deviation
-  - Variance
+  - standard deviation;
+  - variance.
 - Support for significance testing of NPS using:
-  - Promoters / Detractors structure
-  - Standard deviation
-  - Variance
+  - Promoters / Detractors structure;
+  - standard deviation;
+  - variance.
 - Automatic pairwise all-vs-all comparison across selected columns.
 - Automatic significance letters appended directly into Excel cells.
 - Pale green highlight + bold formatting for significant cells.
@@ -22,106 +121,121 @@
 - Metric type diagnostics tool.
 - Shared-base support across mixed metric tables.
 - Support for mixed tables containing:
-  - proportions
-  - means
-  - NPS
-  - any combination of them
+  - proportions;
+  - means;
+  - NPS;
+  - any combination of them.
 
-### Improved
+#### Improved
+
 - Replaced single-plan detection with block-plan detector.
 - Smarter handling of tables where one base row serves several metric blocks.
 - Better compatibility with real research tables.
 - Added protection against Excel converting values into time format after adding letters.
 - Improved project launch workflow with automatic VS Code startup tasks.
 
-### Fixed
+#### Fixed
+
 - NPS significance routing issues in auto mode.
 - Incorrect significance letters appearing in Promoters / Detractors rows.
 - Branch execution conflicts between mean / NPS / fallback logic.
 - Repeated marker formatting inconsistencies.
 
+---
 
-#### 29.04.2026 
+### 29.04.2026 — Refactoring pass 1
 
-### Первый проход рефакторинга
-Универсальное автоопределение метрик (buildCalculationBlocks) работает стабильно, поэтому старые ручные режимы расчета для конкретных типов данных (и жестко привязанные к ним парсеры) больше не нужны. Кодовая база очищена от неиспользуемых функций для упрощения дальнейшей поддержки.
+Unified automatic metric detection through `buildCalculationBlocks` became stable, so old manual calculation modes and their dedicated parsers were removed.
 
-Основные изменения по файлам:
-- taskpane.js: удалены обработчики (runMeanSignificance..., runNpsSignificance...) и слушатели событий для кнопок явного расчета средних и NPS. Очищены неиспользуемые импорты.
-- metric-detector.js: удален устаревший планировщик buildAutoCalculationPlan (полностью заменен на актуальный buildCalculationBlocks).
-- significance.js: удалена легаси-функция из MVP v0.2 compareAllRowsUsingBottomBases, а также функции-обертки для отпавших ручных расчетов (compareMeansUsingSpreadAndBaseRows, compareNpsUsingStructureRows, compareNpsUsingSpreadAndBaseRows).
+#### Changed
 
-Примечание: математическое ядро расчетов значимости (z-тесты, t-тесты) и функционал диагностической кнопки оставлены без изменений.
+- `taskpane.js`:
+  - removed handlers and event listeners for explicit mean and NPS calculation buttons;
+  - removed unused imports.
+- `core/metric-detector.js`:
+  - removed deprecated `buildAutoCalculationPlan`, fully replaced by `buildCalculationBlocks`.
+- `core/significance.js`:
+  - removed legacy MVP v0.2 `compareAllRowsUsingBottomBases`;
+  - removed wrappers for retired manual calculation flows.
 
-### Второй проход рефакторинга
-Устранение технического долга: разделение ответственности (Separation of Concerns) и избавление от дублирования кода (DRY) для повышения читаемости и масштабируемости проекта.
+#### Notes
 
-Основные архитектурные изменения:
-- Вынос Excel-рендера: функция writeMarkersToSelectedRange перемещена из taskpane.js в новый модуль core/excel-writer.js. taskpane.js теперь выступает исключительно в роли контроллера.
-- Изоляция математического ядра: логика парсинга и очистки "грязных" табличных данных (пробелы, символы %, запятые) вынесена из significance.js в core/normalizers.js. Создана единая утилита parseRawCellValue. В significance.js остались только чистые статистические функции.
-- Config-driven детектор: хардкод массивов с ключевыми словами вырезан из metric-detector.js. Создан конфигурационный файл core/dictionary.config.js (METRIC_DICTIONARY), что позволяет легко добавлять новые термины и языки без изменения логики алгоритма поиска.
+- The statistical core remained intact.
+- Metric diagnostics remained available.
 
-### Дополнение функционала №1
+---
 
-## Добавлено
+### 29.04.2026 — Refactoring pass 2
 
-- Настраиваемый уровень значимости через интерфейс панели:
-  - 99%
-  - 95%
-  - 90%
-  - 80%
-  - 66.6%
+#### Changed
 
-- Выбранный уровень значимости теперь применяется ко всем поддерживаемым типам метрик:
-  - пропорции
-  - средние значения
-  - NPS по стандартному отклонению / дисперсии
-  - NPS по структуре (Promoters / Detractors)
+- Excel rendering was moved from `taskpane.js` into `core/excel-writer.js`.
+- Dirty Excel value normalization was moved from `significance.js` into `core/normalizers.js`.
+- Metric dictionary arrays were moved into `core/dictionary.config.js`.
+- `taskpane.js` now acts primarily as the Excel/UI controller.
+- `significance.js` contains statistical and comparison logic.
+- `metric-detector.js` contains detection and block-plan construction.
 
-## Улучшено
+---
 
-- Перезапуск расчёта теперь полностью очищает старые маркеры значимости и форматирование перед новым пересчётом.
+### 29.04.2026 — Feature pass 1
 
-- Улучшен block-plan detector для комплексных таблиц:
-  - корректная работа при общей базе для нескольких метрик
-  - устранён пропуск следующих блоков после Mean / NPS
-  - улучшена обработка смешанных таблиц с пропорциями, средними и NPS
+#### Added
 
+- Configurable confidence level selector:
+  - 99%;
+  - 95%;
+  - 90%;
+  - 80%;
+  - 66.6%.
+- Confidence level applies to:
+  - proportions;
+  - means;
+  - NPS from spread;
+  - NPS from Promoters / Detractors structure.
 
-### Дополнение функционала №2
+#### Improved
 
-## Добавлено
+- Re-running the calculation fully clears old markers and formatting before recalculation.
+- Block-plan detector improved for:
+  - shared bases;
+  - mixed metric tables;
+  - avoiding skipped metric blocks after Mean / NPS.
 
-- Добавлен сворачиваемый блок **"Настройки"** в панели надстройки.
-- Добавлена основа UI для будущей работы с баннерами:
-  - проставление букв в баннере;
-  - учёт структуры баннера;
-  - поиск лейблов в самых левых колонках листа;
-  - настройки сравнения с Total;
-  - настройки расположения Total;
-  - настройки заливок;
-  - настройки маленьких баз;
-  - выбор режима сохранения настроек.
-- Добавлена настройка **"Округлять значения в ячейках"**.
-- Добавлена подстановка буквенных маркеров в строку над выделенным диапазоном:
-  - формат маркера: `(a)`, `(b)`, `(c)` и т.д.;
-  - если в ячейке баннера уже есть старый маркер, он заменяется новым;
-  - если нужный маркер уже стоит в конце ячейки, повторно он не добавляется.
-- Добавлена возможность искать лейблы метрик не только непосредственно слева от выделенного диапазона, но и в самых левых колонках листа.
-- Добавлено предупреждение для случая, когда включена подстановка букв в баннер, но выделенный диапазон начинается с первой строки листа.
+---
 
-## Улучшено
+### 29.04.2026 — Feature pass 2
 
-- Кнопка расчёта переименована в **"Запустить"**.
-- Значения в ячейках теперь могут округляться перед подстановкой букв:
-  - по умолчанию доли, NPS, Promoters и Detractors округляются до 1 знака;
-  - по умолчанию средние, стандартные отклонения и дисперсии округляются до 2 знаков;
-  - при включённой настройке округления доли, NPS, Promoters и Detractors округляются до целого;
-  - при включённой настройке округления средние, стандартные отклонения и дисперсии округляются до 1 знака.
-- Улучшен поиск лейблов слева от выделенного диапазона:
-  - промежуточные числовые колонки больше не принимаются за текстовые лейблы;
-  - это позволяет выделять данные без колонки Total, сохраняя корректное распознавание строк.
+#### Added
 
-## Исправлено
+- Collapsible **Settings** block.
+- Settings UI foundation for:
+  - banner letters;
+  - banner structure;
+  - left-side label detection;
+  - Total comparison modes;
+  - Total placement modes;
+  - fill colors;
+  - small bases;
+  - settings storage.
+- **Round cell values** setting.
+- Banner letter writing above selected range:
+  - marker format: `(a)`, `(b)`, `(c)`;
+  - existing trailing marker is replaced;
+  - duplicate trailing marker is not added.
+- Optional metric label lookup from the leftmost sheet columns.
+- Warning when banner letter writing is enabled but the selected range starts in the first worksheet row.
 
-- Исправлена ошибка, при которой поиск лейблов мог ошибочно использовать числовое значение из промежуточной колонки вместо настоящего лейбла.
+#### Improved
+
+- Main calculation button renamed to **Запустить**.
+- Display rounding before marker insertion:
+  - default proportions / NPS / Promoters / Detractors: 1 decimal;
+  - default means / SD / variance: 2 decimals;
+  - with rounding enabled, proportions / NPS / Promoters / Detractors: integer;
+  - with rounding enabled, means / SD / variance: 1 decimal.
+- Improved label lookup to skip numeric intermediate columns.
+
+#### Fixed
+
+- Numeric values between labels and selected data are no longer mistaken for metric labels.

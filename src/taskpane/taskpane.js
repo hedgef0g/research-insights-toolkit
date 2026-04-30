@@ -16,6 +16,7 @@ import {
   compareNpsSpreadBlockByRowIndexes,
   removeSignificanceMarkersFromMatrix,
   generateSignificanceLabels,
+  buildBannerLocalSignificanceLabelMap,
 } from "../core/significance";
 
 import {
@@ -28,10 +29,48 @@ import {
 
 import { writeCellResultsToSelectedRange } from "../core/excel-writer";
 
+import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core/banner-detector";
+
+const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
+  "GLOBAL_TOTAL_USED",
+  "BANNER_AUTO_PREVIOUS_COLUMN_APPLIED",
+  "BANNER_TOTAL_ONLY_NO_TOTAL_PAIRS",
+  "BANNER_MULTIPLE_LOCAL_TOTALS",
+  "BANNER_TOTAL_OUTSIDE_SELECTION",
+  "BANNER_MALFORMED_STRUCTURE",
+  "BANNER_NO_ROWS_ABOVE_SELECTION",
+]);
+
+function formatBannerUserMessages(bannerStructure) {
+  if (!bannerStructure || !bannerStructure.messages) {
+    return "";
+  }
+
+  const visibleMessages = bannerStructure.messages.filter((message) =>
+    USER_VISIBLE_BANNER_MESSAGE_CODES.has(message.code)
+  );
+
+  if (visibleMessages.length === 0) {
+    return "";
+  }
+
+  if (visibleMessages.length === 1) {
+    return visibleMessages[0].text;
+  }
+
+  return ["Сообщения:", ...visibleMessages.map((message) => `- ${message.text}`)].join("\n");
+}
+
 const LOCAL_SETTINGS_STORAGE_KEY = "rit.settings.v1";
 
 const SETTINGS_CONTROL_CONFIG = [
   { id: "confidence-level", type: "value", settingName: "confidenceLevel" },
+
+  {
+    id: "one-tailed-test",
+    type: "checked",
+    settingName: "oneTailedTest",
+  },
 
   { id: "round-cell-values", type: "checked", settingName: "roundCellValues" },
 
@@ -86,6 +125,7 @@ const SETTINGS_CONTROL_CONFIG = [
 
 const DEFAULT_CALCULATION_SETTINGS = {
   confidenceLevel: "95",
+  oneTailedTest: false,
 
   roundCellValues: false,
 
@@ -113,6 +153,70 @@ const DEFAULT_CALCULATION_SETTINGS = {
 
   settingsStorageMode: "none",
 };
+
+const SETTINGS_TOOLTIPS = {
+  "confidence-level":
+    "Выберите уровень значимости для статистических тестов. Чем выше уровень, тем строже проверка и тем меньше отличий будут признаны значимыми.",
+
+  "one-tailed-test":
+    "Использовать односторонний тест вместо двустороннего. При том же уровне значимости такой тест легче находит отличия, но предполагает проверку различия в одном направлении.",
+
+  "round-cell-values":
+    "Округлять отображаемые значения перед добавлением маркеров. Расчёты при этом выполняются по исходным очищенным значениям, а не по округлённым.",
+
+  "compare-with-previous-column":
+    "Сравнивать каждую колонку только с колонкой слева: колонка 2 с колонкой 1, колонка 3 с колонкой 2 и так далее. Вместо букв используются стрелки вверх или вниз.",
+
+  "apply-previous-column-fill":
+    "Применять заливку к ячейкам со значимыми отличиями в режиме сравнения с предыдущей колонкой. Для роста используется обычная заливка значимости, для снижения — цвет “ниже Total”.",
+
+  "write-banner-letters":
+    "Добавлять буквенные индексы колонок в строку над выделенным диапазоном. Например: Segment 1 (a), Segment 2 (b). В режиме учёта структуры баннера буквы ставятся локально внутри групп.",
+
+  "respect-banner-structure":
+    "Анализировать структуру баннера над выделенным диапазоном. Это позволяет сравнивать колонки только внутри групп, определять локальные и глобальные Total, а также распознавать волновые баннеры.",
+
+  "labels-on-left-side":
+    "Искать лейблы строк не рядом с выделенным диапазоном, а в самых левых колонках листа. Полезно для широких таблиц, где данные выделены справа, а названия строк находятся далеко слева.",
+
+  "compare-only-with-total":
+    "Сравнивать каждую колонку только с колонкой Total. Обычные попарные сравнения между сегментами выполняться не будут.",
+
+  "exclude-total-from-comparisons":
+    "Исключить Total из расчётов. Total не будет использоваться как база сравнения и не будет сравниваться с другими колонками.",
+
+  "first-column-is-total":
+    "Считать первую колонку выделенного диапазона Total. Она будет использоваться как референс для сравнения с остальными колонками.",
+
+  "total-in-each-banner":
+    "Считать, что Total находится внутри каждой группы баннера. При включённом учёте структуры баннера расположение Total определяется автоматически.",
+
+  "significant-fill-color":
+    "Цвет заливки для ячеек, которые статистически значимо выше другой сравниваемой ячейки или Total.",
+
+  "lower-than-total-fill-color":
+    "Цвет заливки для ячеек, которые статистически значимо ниже Total или ниже предыдущей колонки в режиме сравнения с предыдущей колонкой.",
+
+  "fill-only-total-comparisons":
+    "Применять обычную зелёную заливку только к ячейкам, которые значимо выше Total. Отличия между обычными сегментами будут отмечаться буквами, но без зелёной заливки.",
+
+  "exclude-small-bases":
+    "Исключать из расчётов колонки, где база меньше заданного порога. Такие колонки не участвуют в статистических сравнениях и получают отдельную заливку.",
+
+  "small-base-threshold":
+    "Минимальный допустимый размер базы. Если база колонки меньше этого значения, колонка исключается из расчётов.",
+
+  "small-base-fill-color":
+    "Цвет заливки для колонок с маленькой базой. Эта заливка имеет самый высокий приоритет и перекрывает остальные типы заливки.",
+
+  "settings-storage-mode":
+    "Выберите, сохранять ли настройки панели. Локальное сохранение работает только на этом устройстве и в этом браузере/Excel WebView.",
+
+  "reset-settings":
+    "Сбросить все настройки к значениям по умолчанию и удалить локально сохранённые настройки.",
+};
+
+const ENABLE_BANNER_SPAN_DIAGNOSTICS = false;
 
 /**
  * Initializes task pane events after Office is ready.
@@ -184,28 +288,25 @@ async function runSignificanceFromSelection() {
     }
 
     if (
-      calculationSettings.compareWithPreviousColumn &&
       calculationSettings.excludeTotalFromComparisons &&
-      !calculationSettings.firstColumnIsTotal
+      !calculationSettings.firstColumnIsTotal &&
+      !calculationSettings.respectBannerStructure
     ) {
-      outputElement.textContent =
-        "Для режима “Не сравнивать с Тотал” нужно указать расположение Тотала. Сейчас поддерживается только вариант “Первая колонка — Тотал”.";
-
-      return;
-    }
-    if (calculationSettings.compareOnlyWithTotal && !calculationSettings.firstColumnIsTotal) {
-      outputElement.textContent =
-        "Для режима “Сравнивать только с Тотал” нужно указать расположение Тотала. Сейчас поддерживается только вариант “Первая колонка — Тотал”.";
+      setStatusMessage(
+        "Для режима “Не сравнивать с Тотал” нужно указать расположение Тотала. Сейчас поддерживается вариант “Первая колонка — Тотал” или режим “Учитывать структуру баннера”."
+      );
 
       return;
     }
 
     if (
-      calculationSettings.excludeTotalFromComparisons &&
-      !calculationSettings.firstColumnIsTotal
+      calculationSettings.compareOnlyWithTotal &&
+      !calculationSettings.firstColumnIsTotal &&
+      !calculationSettings.respectBannerStructure
     ) {
-      outputElement.textContent =
-        "Для режима “Не сравнивать с Тотал” нужно указать расположение Тотала. Сейчас поддерживается только вариант “Первая колонка — Тотал”.";
+      setStatusMessage(
+        "Для режима “Сравнивать только с Тотал” нужно указать расположение Тотала. Сейчас поддерживается вариант “Первая колонка — Тотал” или режим “Учитывать структуру баннера”."
+      );
 
       return;
     }
@@ -237,6 +338,8 @@ async function runSignificanceFromSelection() {
     selectedRange.format.verticalAlignment = "Center";
 
     await context.sync();
+
+    console.timeEnd("RIT read selected values");
 
     const selectedValues = selectedRange.values;
     const selectedText = selectedRange.text;
@@ -272,6 +375,29 @@ async function runSignificanceFromSelection() {
       return;
     }
 
+    let bannerStructure = null;
+
+    if (calculationSettings.respectBannerStructure) {
+      const bannerContext = await loadBannerContextForSelectedRange(
+        context,
+        selectedRange,
+        calculationSettings
+      );
+
+      bannerStructure = detectBannerStructure(bannerContext, calculationSettings);
+
+      if (bannerContext.messages && bannerContext.messages.length > 0) {
+        bannerStructure.messages = [...bannerContext.messages, ...(bannerStructure.messages || [])];
+      }
+
+      /** 
+      bannerSpanDiagnostics = await loadBannerSpanDiagnosticsForSelectedRange(
+        context,
+        selectedRange
+      );
+      */
+    }
+
     const fullCellResultMatrix = createEmptyCellResultMatrix(
       cleanedValues.length,
       cleanedValues[0].length
@@ -293,6 +419,7 @@ async function runSignificanceFromSelection() {
       const blockCalculationSettings = {
         ...calculationSettings,
         excludedColumnIndexes: smallBaseResult.excludedColumnIndexes,
+        bannerStructure,
       };
 
       const blockResults = calculateBlockResults(
@@ -300,6 +427,20 @@ async function runSignificanceFromSelection() {
         calculationBlock,
         blockCalculationSettings
       );
+
+      const bannerStructureErrorMessage = getFirstBannerStructureError(bannerStructure);
+
+      if (bannerStructureErrorMessage) {
+        const statusMessages = [bannerStructureErrorMessage];
+
+        if (bannerStructure) {
+          statusMessages.push("");
+          statusMessages.push(formatBannerDetectionDiagnostics(bannerStructure));
+        }
+
+        setStatusMessage(statusMessages.join("\n"));
+        return;
+      }
 
       if (!blockResults) {
         continue;
@@ -311,6 +452,7 @@ async function runSignificanceFromSelection() {
         blockCalculationSettings
       );
     }
+    console.timeEnd("RIT calculations");
 
     const allowedMarkerRows = getAllowedMarkerRowIndexes(calculationBlocks);
 
@@ -325,12 +467,32 @@ async function runSignificanceFromSelection() {
     );
 
     if (calculationSettings.writeBannerLetters) {
-      await writeBannerMarkersAboveSelectedRange(context, selectedRange, calculationSettings);
+      if (calculationSettings.respectBannerStructure && bannerStructure) {
+        await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
+          context,
+          selectedRange,
+          bannerStructure,
+          calculationSettings
+        );
+      } else {
+        await writeBannerMarkersAboveSelectedRange(context, selectedRange, calculationSettings);
+      }
     }
 
     await context.sync();
+    console.timeEnd("RIT final context sync");
 
-    setStatusMessage(`Significance calculated for ${calculationBlocks.length} detected block(s).`);
+    const statusMessages = [`Расчёт выполнен. Обработано блоков: ${calculationBlocks.length}.`];
+
+    const bannerUserMessages = formatBannerUserMessages(bannerStructure);
+
+    if (bannerUserMessages) {
+      statusMessages.push("");
+      statusMessages.push(bannerUserMessages);
+    }
+
+    setStatusMessage(statusMessages.join("\n"));
+    console.timeEnd("RIT total run");
   });
 }
 
@@ -476,6 +638,481 @@ async function loadLabelValuesForSelectedRange(context, selectedRange, calculati
 }
 
 /**
+ * Reads banner rows above selected range.
+ *
+ * PURPOSE:
+ * Detection-only banner engine stage.
+ * Reads:
+ * - lower banner row directly above selection;
+ * - up to maxBannerScanRows rows above it.
+ *
+ * This function does not read merge metadata yet.
+ */
+async function loadBannerContextForSelectedRange(context, selectedRange, calculationSettings) {
+  const maxBannerScanRows = 5;
+
+  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
+
+  await context.sync();
+
+  const selectedStartRowIndex = selectedRange.rowIndex;
+  const selectedStartColumnIndex = selectedRange.columnIndex;
+  const selectedColumnCount = selectedRange.columnCount;
+
+  if (selectedStartRowIndex === 0) {
+    return {
+      selectedColumnCount,
+      lowerBannerRow: [],
+      upperScanRows: [],
+      messages: [
+        {
+          severity: "warning",
+          code: "BANNER_NO_ROWS_ABOVE_SELECTION",
+          text: "Баннер: над выделенным диапазоном нет строк для анализа.",
+        },
+      ],
+    };
+  }
+
+  const worksheet = selectedRange.worksheet;
+
+  const lowerBannerRange = worksheet.getRangeByIndexes(
+    selectedStartRowIndex - 1,
+    selectedStartColumnIndex,
+    1,
+    selectedColumnCount
+  );
+
+  lowerBannerRange.load("text");
+
+  const availableUpperRowCount = Math.min(maxBannerScanRows, selectedStartRowIndex - 1);
+
+  let upperScanRows = [];
+
+  if (availableUpperRowCount > 0) {
+    const upperScanRange = worksheet.getRangeByIndexes(
+      selectedStartRowIndex - 1 - availableUpperRowCount,
+      selectedStartColumnIndex,
+      availableUpperRowCount,
+      selectedColumnCount
+    );
+
+    upperScanRange.load("text");
+
+    await context.sync();
+
+    upperScanRows = upperScanRange.text.slice().reverse();
+
+    return {
+      selectedColumnCount,
+      lowerBannerRow: lowerBannerRange.text[0],
+      upperScanRows,
+      messages: [],
+    };
+  }
+
+  await context.sync();
+
+  return {
+    selectedColumnCount,
+    lowerBannerRow: lowerBannerRange.text[0],
+    upperScanRows: [],
+    messages: [],
+  };
+}
+
+/**
+ * Reads expanded banner rows and reconstructs possible horizontal spans.
+ *
+ * PURPOSE:
+ * Diagnostic-only fallback for merged banner headers.
+ *
+ * WHY:
+ * Office.js may not expose merged areas reliably for continuation cells.
+ * In practice, merged banner rows often look like:
+ *   Age | "" | ""
+ * So we reconstruct spans as:
+ *   non-empty cell + following empty cells until next non-empty cell.
+ */
+async function loadBannerSpanDiagnosticsForSelectedRange(context, selectedRange) {
+  const maxBannerScanRows = 5;
+  const maxColumnsToScanLeft = 10;
+  const maxColumnsToScanRight = 10;
+
+  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
+
+  await context.sync();
+
+  const selectedStartRowIndex = selectedRange.rowIndex;
+  const selectedStartColumnIndex = selectedRange.columnIndex;
+  const selectedColumnCount = selectedRange.columnCount;
+  const selectedEndColumnIndex = selectedStartColumnIndex + selectedColumnCount - 1;
+
+  if (selectedStartRowIndex === 0) {
+    return [
+      "Banner span diagnostics:",
+      "- Над выделенным диапазоном нет строк для анализа span-структуры.",
+    ].join("\n");
+  }
+
+  const availableRowCount = Math.min(maxBannerScanRows + 1, selectedStartRowIndex);
+  const firstBannerRowIndex = selectedStartRowIndex - availableRowCount;
+
+  const scanStartColumnIndex = Math.max(0, selectedStartColumnIndex - maxColumnsToScanLeft);
+
+  const scanEndColumnIndex = selectedEndColumnIndex + maxColumnsToScanRight;
+
+  const scanColumnCount = scanEndColumnIndex - scanStartColumnIndex + 1;
+
+  const bannerScanRange = selectedRange.worksheet.getRangeByIndexes(
+    firstBannerRowIndex,
+    scanStartColumnIndex,
+    availableRowCount,
+    scanColumnCount
+  );
+
+  bannerScanRange.load("text");
+
+  await context.sync();
+
+  const lines = [];
+
+  lines.push("Banner span diagnostics:");
+  lines.push(
+    `- Диапазон проверки: строки ${firstBannerRowIndex + 1}:${selectedStartRowIndex}, колонки ${getExcelColumnLetter(scanStartColumnIndex)}:${getExcelColumnLetter(scanEndColumnIndex)}.`
+  );
+  lines.push(
+    `- Выделение по колонкам: ${getExcelColumnLetter(selectedStartColumnIndex)}:${getExcelColumnLetter(selectedEndColumnIndex)}.`
+  );
+
+  const lowerBannerLocalRowIndex = availableRowCount - 1;
+  const lowerBannerRowText = bannerScanRange.text[lowerBannerLocalRowIndex] || [];
+
+  for (let localRowIndex = 0; localRowIndex < availableRowCount; localRowIndex++) {
+    const sheetRowIndex = firstBannerRowIndex + localRowIndex;
+    const rowOffsetFromSelection = sheetRowIndex - selectedStartRowIndex;
+    const rowText = bannerScanRange.text[localRowIndex] || [];
+
+    const spans = reconstructHorizontalSpansFromRowText(
+      rowText,
+      scanStartColumnIndex,
+      selectedStartColumnIndex,
+      selectedEndColumnIndex,
+      lowerBannerRowText,
+      localRowIndex === lowerBannerLocalRowIndex
+    );
+
+    lines.push(`- Row offset ${rowOffsetFromSelection}:`);
+
+    if (spans.length === 0) {
+      lines.push("  - spans: none");
+      continue;
+    }
+
+    for (const span of spans) {
+      const selectedPartText =
+        span.selectedStartColumnIndex !== null
+          ? `, selected cols ${getExcelColumnLetter(span.selectedStartColumnIndex)}:${getExcelColumnLetter(span.selectedEndColumnIndex)}`
+          : ", outside selection";
+
+      lines.push(
+        `  - "${span.label}": sheet cols ${getExcelColumnLetter(span.startColumnIndex)}:${getExcelColumnLetter(span.endColumnIndex)}, length=${span.length}${selectedPartText}`
+      );
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Reconstructs possible horizontal spans from row text.
+ *
+ * RULE:
+ * A non-empty cell starts a span.
+ * Empty cells to the right are treated as continuation until next non-empty cell.
+ *
+ * For upper banner rows, spans are additionally constrained by the lower banner row:
+ * if lower level has a continuous non-empty area starting at the span start,
+ * upper span should not extend beyond that lower-level area.
+ */
+function reconstructHorizontalSpansFromRowText(
+  rowText,
+  scanStartColumnIndex,
+  selectedStartColumnIndex,
+  selectedEndColumnIndex,
+  lowerBannerRowText = [],
+  isLowerBannerRow = false
+) {
+  const spans = [];
+  let currentSpan = null;
+
+  for (let localColumnIndex = 0; localColumnIndex < rowText.length; localColumnIndex++) {
+    const sheetColumnIndex = scanStartColumnIndex + localColumnIndex;
+    const cellText = normalizeBannerDiagnosticCellText(rowText[localColumnIndex]);
+
+    if (cellText) {
+      if (currentSpan) {
+        currentSpan.endColumnIndex = sheetColumnIndex - 1;
+        refineDiagnosticSpanRightBoundaryByLowerBannerRow(
+          currentSpan,
+          lowerBannerRowText,
+          scanStartColumnIndex,
+          isLowerBannerRow
+        );
+        finalizeDiagnosticSpanSelection(
+          currentSpan,
+          selectedStartColumnIndex,
+          selectedEndColumnIndex
+        );
+        spans.push(currentSpan);
+      }
+
+      currentSpan = {
+        label: cellText,
+        startColumnIndex: sheetColumnIndex,
+        endColumnIndex: sheetColumnIndex,
+        length: 1,
+        selectedStartColumnIndex: null,
+        selectedEndColumnIndex: null,
+      };
+
+      continue;
+    }
+
+    if (currentSpan) {
+      currentSpan.endColumnIndex = sheetColumnIndex;
+    }
+  }
+
+  if (currentSpan) {
+    refineDiagnosticSpanRightBoundaryByLowerBannerRow(
+      currentSpan,
+      lowerBannerRowText,
+      scanStartColumnIndex,
+      isLowerBannerRow
+    );
+    finalizeDiagnosticSpanSelection(currentSpan, selectedStartColumnIndex, selectedEndColumnIndex);
+    spans.push(currentSpan);
+  }
+
+  return spans
+    .map((span) => ({
+      ...span,
+      length: span.endColumnIndex - span.startColumnIndex + 1,
+    }))
+    .filter((span) => span.label && span.length > 0);
+}
+
+/**
+ * Adds selected-range intersection metadata to reconstructed span.
+ */
+function finalizeDiagnosticSpanSelection(span, selectedStartColumnIndex, selectedEndColumnIndex) {
+  const intersectionStart = Math.max(span.startColumnIndex, selectedStartColumnIndex);
+  const intersectionEnd = Math.min(span.endColumnIndex, selectedEndColumnIndex);
+
+  if (intersectionStart <= intersectionEnd) {
+    span.selectedStartColumnIndex = intersectionStart;
+    span.selectedEndColumnIndex = intersectionEnd;
+  }
+}
+
+/**
+ * Refines upper banner span right boundary using lower banner row.
+ *
+ * PURPOSE:
+ * Prevents a merged-like upper label from stretching to the end of the scan range.
+ *
+ * Example:
+ * Upper row:
+ *   Age | "" | "" | "" | ""
+ * Lower row:
+ *   Total | 18-24 | 25-34 | "" | ""
+ *
+ * Without refinement:
+ *   Age spans all scanned empty cells.
+ *
+ * With refinement:
+ *   Age spans only the continuous non-empty lower-level area: Total..25-34.
+ */
+function refineDiagnosticSpanRightBoundaryByLowerBannerRow(
+  span,
+  lowerBannerRowText,
+  scanStartColumnIndex,
+  isLowerBannerRow
+) {
+  if (isLowerBannerRow) {
+    return;
+  }
+
+  if (!lowerBannerRowText || lowerBannerRowText.length === 0) {
+    return;
+  }
+
+  const spanStartLocalColumnIndex = span.startColumnIndex - scanStartColumnIndex;
+
+  if (spanStartLocalColumnIndex < 0 || spanStartLocalColumnIndex >= lowerBannerRowText.length) {
+    return;
+  }
+
+  const lowerStartText = normalizeBannerDiagnosticCellText(
+    lowerBannerRowText[spanStartLocalColumnIndex]
+  );
+
+  if (!lowerStartText) {
+    return;
+  }
+
+  let lowerAreaEndLocalColumnIndex = spanStartLocalColumnIndex;
+
+  for (
+    let localColumnIndex = spanStartLocalColumnIndex + 1;
+    localColumnIndex < lowerBannerRowText.length;
+    localColumnIndex++
+  ) {
+    const lowerCellText = normalizeBannerDiagnosticCellText(lowerBannerRowText[localColumnIndex]);
+
+    if (!lowerCellText) {
+      break;
+    }
+
+    lowerAreaEndLocalColumnIndex = localColumnIndex;
+  }
+
+  const lowerAreaEndSheetColumnIndex = scanStartColumnIndex + lowerAreaEndLocalColumnIndex;
+
+  span.endColumnIndex = Math.min(span.endColumnIndex, lowerAreaEndSheetColumnIndex);
+}
+
+/**
+ * Normalizes diagnostic banner cell text.
+ */
+function normalizeBannerDiagnosticCellText(rawValue) {
+  if (rawValue === null || rawValue === undefined) {
+    return "";
+  }
+
+  return String(rawValue).trim();
+}
+
+/**
+ * Reads merge diagnostics for banner rows above selected range.
+ *
+ * PURPOSE:
+ * Temporary spike for understanding how Office.js exposes merged cells.
+ *
+ * This function does not affect calculations.
+ */
+async function loadBannerMergeDiagnosticsForSelectedRange(context, selectedRange) {
+  const maxBannerScanRows = 5;
+
+  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
+
+  await context.sync();
+
+  const selectedStartRowIndex = selectedRange.rowIndex;
+  const selectedStartColumnIndex = selectedRange.columnIndex;
+  const selectedColumnCount = selectedRange.columnCount;
+
+  if (selectedStartRowIndex === 0) {
+    return [
+      "Merge diagnostics:",
+      "- Над выделенным диапазоном нет строк для анализа merge-структуры.",
+    ].join("\n");
+  }
+
+  const availableRowCount = Math.min(maxBannerScanRows + 1, selectedStartRowIndex);
+  const firstBannerRowIndex = selectedStartRowIndex - availableRowCount;
+
+  const bannerScanRange = selectedRange.worksheet.getRangeByIndexes(
+    firstBannerRowIndex,
+    selectedStartColumnIndex,
+    availableRowCount,
+    selectedColumnCount
+  );
+
+  bannerScanRange.load(["text", "values", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+
+  await context.sync();
+
+  const lines = [];
+
+  lines.push("Merge diagnostics:");
+  lines.push(
+    `- Диапазон проверки: ${availableRowCount} строк над выделением, ${selectedColumnCount} колонок.`
+  );
+
+  for (let localRowIndex = 0; localRowIndex < availableRowCount; localRowIndex++) {
+    const sheetRowIndex = firstBannerRowIndex + localRowIndex;
+    const rowOffsetFromSelection = sheetRowIndex - selectedStartRowIndex;
+
+    lines.push(`- Row offset ${rowOffsetFromSelection}:`);
+
+    for (let localColumnIndex = 0; localColumnIndex < selectedColumnCount; localColumnIndex++) {
+      const sheetColumnIndex = selectedStartColumnIndex + localColumnIndex;
+
+      const cellText =
+        bannerScanRange.text &&
+        bannerScanRange.text[localRowIndex] &&
+        bannerScanRange.text[localRowIndex][localColumnIndex] !== undefined
+          ? bannerScanRange.text[localRowIndex][localColumnIndex]
+          : "";
+
+      const mergeInfo = await getCellMergeDiagnosticInfo(
+        context,
+        selectedRange.worksheet,
+        sheetRowIndex,
+        sheetColumnIndex
+      );
+
+      lines.push(`  - col ${localColumnIndex + 1}: text="${cellText}", ${mergeInfo}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Attempts to get merge diagnostic info for one worksheet cell.
+ *
+ * IMPORTANT:
+ * Office.js merged-cell support can vary by runtime/API set.
+ * This helper is intentionally defensive.
+ */
+async function getCellMergeDiagnosticInfo(context, worksheet, rowIndex, columnIndex) {
+  const cell = worksheet.getRangeByIndexes(rowIndex, columnIndex, 1, 1);
+
+  try {
+    const mergedArea = cell.getMergedAreasOrNullObject();
+
+    mergedArea.load([
+      "isNullObject",
+      "address",
+      "rowIndex",
+      "columnIndex",
+      "rowCount",
+      "columnCount",
+    ]);
+
+    await context.sync();
+
+    if (mergedArea.isNullObject) {
+      return "merged=false";
+    }
+
+    return [
+      "merged=true",
+      `area="${mergedArea.address}"`,
+      `topRow=${mergedArea.rowIndex + 1}`,
+      `leftCol=${mergedArea.columnIndex + 1}`,
+      `rows=${mergedArea.rowCount}`,
+      `cols=${mergedArea.columnCount}`,
+    ].join(", ");
+  } catch (error) {
+    return `mergeInfo=unavailable (${error && error.message ? error.message : "unknown error"})`;
+  }
+}
+
+/**
  * Reads labels immediately to the left of selected range.
  *
  * PURPOSE:
@@ -552,8 +1189,11 @@ function readCalculationSettingsFromPanel() {
 
   const smallBaseThresholdElement = document.getElementById("small-base-threshold");
 
+  const oneTailedTestCheckbox = document.getElementById("one-tailed-test");
+
   return {
     confidenceLevel: confidenceLevelElement ? confidenceLevelElement.value : "95",
+    oneTailedTest: oneTailedTestCheckbox ? oneTailedTestCheckbox.checked : false,
 
     roundCellValues: getCheckboxValue("round-cell-values"),
 
@@ -609,6 +1249,8 @@ function getInputValue(elementId, fallbackValue) {
  * Handles mutually exclusive checkbox groups.
  */
 function initializeSettingsPanel() {
+  initializeSettingsTooltips();
+
   bindMutuallyExclusiveCheckboxes("compare-only-with-total", "exclude-total-from-comparisons");
 
   bindMutuallyExclusiveCheckboxes("first-column-is-total", "total-in-each-banner");
@@ -616,6 +1258,7 @@ function initializeSettingsPanel() {
   initializePreviousColumnComparisonSettings();
   initializeSettingsResetButton();
   initializeSettingsToggle();
+  initializeBannerStructureSettings();
 
   const helpLink = document.getElementById("help-link");
 
@@ -627,6 +1270,49 @@ function initializeSettingsPanel() {
         "_blank"
       );
     });
+  }
+}
+
+/**
+ * Adds Russian tooltips to settings controls.
+ *
+ * PURPOSE:
+ * Keep taskpane.html clean and define all setting explanations in one place.
+ */
+function initializeSettingsTooltips() {
+  for (const [elementId, tooltipText] of Object.entries(SETTINGS_TOOLTIPS)) {
+    const element = document.getElementById(elementId);
+
+    if (!element) {
+      continue;
+    }
+
+    element.title = tooltipText;
+    element.setAttribute("aria-label", tooltipText);
+
+    const explicitLabel = document.querySelector(`label[for="${elementId}"]`);
+
+    if (explicitLabel) {
+      explicitLabel.title = tooltipText;
+      continue;
+    }
+
+    const wrappingLabel = element.closest("label");
+
+    if (wrappingLabel) {
+      wrappingLabel.title = tooltipText;
+      continue;
+    }
+
+    const parent = element.parentElement;
+
+    if (parent) {
+      const labelLikeText = parent.querySelector("span, .checkbox-text, .label-text");
+
+      if (labelLikeText) {
+        labelLikeText.title = tooltipText;
+      }
+    }
   }
 }
 
@@ -749,6 +1435,75 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
 }
 
 /**
+ * Writes group-local significance letters into the lowest banner level.
+ *
+ * The lowest banner level is the row immediately above selected range.
+ *
+ * RULES:
+ * - upper banner levels are not modified;
+ * - labels are local to banner groups;
+ * - Total columns are skipped if excluded from comparisons;
+ * - global Total column is skipped;
+ * - existing trailing marker like "(a)" is replaced;
+ * - same trailing marker is not duplicated.
+ */
+async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
+  context,
+  selectedRange,
+  bannerStructure,
+  calculationSettings
+) {
+  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
+
+  await context.sync();
+
+  const selectedStartRowIndex = selectedRange.rowIndex;
+  const selectedStartColumnIndex = selectedRange.columnIndex;
+  const selectedColumnCount = selectedRange.columnCount;
+
+  if (selectedStartRowIndex === 0) {
+    setStatusMessage(
+      "Данные расположены в первой строке. Добавьте строку над выделенным массивом для подстановки букв в баннер."
+    );
+
+    return;
+  }
+
+  const labelMap = buildBannerLocalSignificanceLabelMap(bannerStructure, calculationSettings);
+
+  const bannerRange = selectedRange.worksheet.getRangeByIndexes(
+    selectedStartRowIndex - 1,
+    selectedStartColumnIndex,
+    1,
+    selectedColumnCount
+  );
+
+  bannerRange.load("text");
+
+  await context.sync();
+
+  const currentBannerTexts = bannerRange.text[0] || [];
+  const nextBannerTexts = [];
+
+  for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
+    const currentText = currentBannerTexts[columnIndex] || "";
+    const label = labelMap.get(columnIndex);
+
+    if (!label) {
+      nextBannerTexts.push(removeTrailingBannerMarker(currentText));
+      continue;
+    }
+
+    nextBannerTexts.push(appendOrReplaceTrailingBannerMarker(currentText, label));
+  }
+
+  bannerRange.numberFormat = [nextBannerTexts.map(() => "@")];
+  bannerRange.values = [nextBannerTexts];
+
+  await context.sync();
+}
+
+/**
  * Adds or replaces significance marker at the end of a banner cell.
  *
  * PURPOSE:
@@ -789,11 +1544,20 @@ function updateBannerCellMarker(rawValue, marker) {
  */
 function initializePreviousColumnComparisonSettings() {
   const previousColumnCheckbox = document.getElementById("compare-with-previous-column");
+  const previousColumnFillCheckbox = document.getElementById("apply-previous-column-fill");
+
   const firstColumnIsTotalCheckbox = document.getElementById("first-column-is-total");
   const excludeTotalCheckbox = document.getElementById("exclude-total-from-comparisons");
 
   if (previousColumnCheckbox) {
-    previousColumnCheckbox.addEventListener("change", refreshSettingsPanelState);
+    previousColumnCheckbox.addEventListener("change", () => {
+      if (previousColumnCheckbox.checked && previousColumnFillCheckbox) {
+        previousColumnFillCheckbox.checked = true;
+      }
+
+      refreshSettingsPanelState();
+      handleSettingsPersistenceAfterChange();
+    });
   }
 
   if (firstColumnIsTotalCheckbox) {
@@ -825,6 +1589,7 @@ function setStatusMessage(message) {
  */
 function refreshSettingsPanelState() {
   refreshPreviousColumnComparisonState();
+  refreshBannerStructureSettingsState();
 }
 
 /**
@@ -840,6 +1605,7 @@ function refreshPreviousColumnComparisonState() {
   const compareOnlyWithTotalCheckbox = document.getElementById("compare-only-with-total");
   const excludeTotalCheckbox = document.getElementById("exclude-total-from-comparisons");
   const firstColumnIsTotalCheckbox = document.getElementById("first-column-is-total");
+  const respectBannerStructureCheckbox = document.getElementById("respect-banner-structure");
 
   const fillOnlyTotalComparisonsCheckbox = document.getElementById("fill-only-total-comparisons");
 
@@ -853,6 +1619,12 @@ function refreshPreviousColumnComparisonState() {
   const firstColumnIsTotal = firstColumnIsTotalCheckbox
     ? firstColumnIsTotalCheckbox.checked
     : false;
+
+  const respectBannerStructure = respectBannerStructureCheckbox
+    ? respectBannerStructureCheckbox.checked
+    : false;
+
+  const hasValidTotalSource = firstColumnIsTotal || respectBannerStructure;
 
   if (previousColumnFillWrapper) {
     previousColumnFillWrapper.style.display = isPreviousColumnMode ? "block" : "none";
@@ -890,7 +1662,7 @@ function refreshPreviousColumnComparisonState() {
   }
 
   if (excludeTotalCheckbox) {
-    if (isPreviousColumnMode && !firstColumnIsTotal) {
+    if (!hasValidTotalSource) {
       excludeTotalCheckbox.checked = false;
       excludeTotalCheckbox.disabled = true;
     } else {
@@ -902,6 +1674,7 @@ function refreshPreviousColumnComparisonState() {
     const shouldShowWarning =
       isPreviousColumnMode &&
       firstColumnIsTotal &&
+      !respectBannerStructure &&
       excludeTotalCheckbox &&
       !excludeTotalCheckbox.checked;
 
@@ -1067,4 +1840,113 @@ function resetSettingsToDefaults() {
   refreshSettingsPanelState();
 
   setStatusMessage("Настройки сброшены к значениям по умолчанию.");
+}
+
+/**
+ * Applies UI rules for banner structure mode.
+ *
+ * RULE:
+ * If respect-banner-structure is enabled, manual Total placement settings
+ * are disabled because Total placement will be detected by banner engine.
+ */
+function refreshBannerStructureSettingsState() {
+  const respectBannerStructureCheckbox = document.getElementById("respect-banner-structure");
+
+  const firstColumnIsTotalCheckbox = document.getElementById("first-column-is-total");
+  const totalInEachBannerCheckbox = document.getElementById("total-in-each-banner");
+
+  if (!respectBannerStructureCheckbox) {
+    return;
+  }
+
+  const respectBannerStructure = respectBannerStructureCheckbox.checked;
+
+  if (firstColumnIsTotalCheckbox) {
+    if (respectBannerStructure) {
+      firstColumnIsTotalCheckbox.checked = false;
+      firstColumnIsTotalCheckbox.disabled = true;
+    } else {
+      firstColumnIsTotalCheckbox.disabled = false;
+    }
+  }
+
+  if (totalInEachBannerCheckbox) {
+    if (respectBannerStructure) {
+      totalInEachBannerCheckbox.checked = false;
+      totalInEachBannerCheckbox.disabled = true;
+    } else {
+      totalInEachBannerCheckbox.disabled = false;
+    }
+  }
+}
+
+function initializeBannerStructureSettings() {
+  const respectBannerStructureCheckbox = document.getElementById("respect-banner-structure");
+
+  if (respectBannerStructureCheckbox) {
+    respectBannerStructureCheckbox.addEventListener("change", refreshSettingsPanelState);
+  }
+
+  refreshSettingsPanelState();
+}
+
+/**
+ * Converts zero-based column index to Excel column letter.
+ */
+function getExcelColumnLetter(columnIndex) {
+  let dividend = columnIndex + 1;
+  let columnName = "";
+
+  while (dividend > 0) {
+    const modulo = (dividend - 1) % 26;
+    columnName = String.fromCharCode(65 + modulo) + columnName;
+    dividend = Math.floor((dividend - modulo) / 26);
+  }
+
+  return columnName;
+}
+
+function getFirstBannerStructureError(bannerStructure) {
+  if (!bannerStructure || !bannerStructure.messages) {
+    return null;
+  }
+
+  return bannerStructure.messages.find((message) => message.severity === "error") || null;
+}
+
+/**
+ * Appends or replaces trailing banner marker.
+ *
+ * Examples:
+ * - "Male" + "a" -> "Male (a)"
+ * - "Male (b)" + "a" -> "Male (a)"
+ * - "Male (a)" + "a" -> "Male (a)"
+ */
+function appendOrReplaceTrailingBannerMarker(rawText, label) {
+  const text = rawText === null || rawText === undefined ? "" : String(rawText).trim();
+
+  const marker = `(${label})`;
+  const markerPattern = /\s*\([^)]+\)\s*$/;
+
+  if (markerPattern.test(text)) {
+    return text.replace(markerPattern, ` ${marker}`);
+  }
+
+  return `${text} ${marker}`.trim();
+}
+
+/**
+ * Removes trailing banner marker.
+ *
+ * Used when a column should no longer have a banner marker,
+ * for example because Total is excluded.
+ */
+function removeTrailingBannerMarker(rawText) {
+  if (rawText === null || rawText === undefined) {
+    return "";
+  }
+
+  return String(rawText)
+    .replace(/\s*\([^)]+\)\s*$/, "")
+    .trim();
 }
