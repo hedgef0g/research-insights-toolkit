@@ -15,11 +15,35 @@ export function normalizeLabelText(rawLabel) {
     .trim();
 }
 
+function doesKeywordMatchLabel(normalizedLabel, rawKeyword) {
+  const normalizedKeyword = normalizeLabelText(rawKeyword);
+
+  if (!normalizedLabel || !normalizedKeyword) {
+    return false;
+  }
+
+  if (normalizedLabel === normalizedKeyword) {
+    return true;
+  }
+
+  // Short abbreviations are too risky for substring matching.
+  // Example: "ско" can match inside "мужской".
+  if (normalizedKeyword.length <= 3) {
+    return false;
+  }
+
+  return normalizedLabel.includes(normalizedKeyword);
+}
+
 /**
- * Checks whether normalized label contains any known keyword.
- */
+ * Checks whether normalized label matches any known keyword.
+ *
+ * Short abbreviations are matched only exactly.
+ * This prevents false positives like:
+ * - "мужской" matching "ско"
+*/
 function labelContainsAnyKeyword(normalizedLabel, keywords) {
-  return keywords.some((keyword) => normalizedLabel.includes(keyword));
+  return keywords.some((keyword) => doesKeywordMatchLabel(normalizedLabel, keyword));
 }
 
 /**

@@ -938,3 +938,910 @@ Before release, manually verify:
 - [ ] Previous-column mode does not skip over small-base columns.
 - [ ] Status panel is hidden by default and wraps long text.
 - [ ] “Запустить” remains visually primary.
+
+
+# Smoke test checklist
+
+## 1. Basic proportions
+
+Table:
+
+| Segment 1 | Segment 2 |
+|---|---|
+| 40% | 60% |
+| 100 | 100 |
+
+Settings:
+
+- `respect-banner-structure = false`
+- `first-column-is-total = false`
+- `compare-with-previous-column = false`
+
+Expected:
+
+- pairwise significance is calculated;
+- significant higher cell receives marker of the lower column;
+- normal significance fill is applied.
+
+---
+
+## 2. Confidence level selector
+
+Use the same table with borderline values.
+
+Settings:
+
+- run with `confidence-level = 95`
+- run with `confidence-level = 90`
+- run with `confidence-level = 80`
+
+Expected:
+
+- lower confidence levels produce more significant differences;
+- old markers/fills are cleared before recalculation.
+
+---
+
+## 3. One-tailed test
+
+Use borderline values where two-tailed 95% is not significant but one-tailed 95% is significant.
+
+Settings:
+
+- `one-tailed-test = false`
+- then `one-tailed-test = true`
+
+Expected:
+
+- one-tailed mode uses lower critical threshold;
+- directions and markers remain based on actual value direction;
+- one-tailed mode affects proportions, means, NPS, Total comparisons, and previous-column comparisons.
+
+---
+
+## 4. Rounding
+
+Settings:
+
+- `round-cell-values = false`
+- then `round-cell-values = true`
+
+Expected:
+
+Default:
+
+- proportions / NPS / promoters / detractors display with 1 decimal;
+- means / SD / variance display with 2 decimals.
+
+When enabled:
+
+- proportions / NPS / promoters / detractors display as integers;
+- means / SD / variance display with 1 decimal.
+
+Important:
+
+- statistics are calculated from normalized original values before display rounding.
+
+---
+
+# Metric detection
+
+### 5. Mixed table
+
+Rows:
+
+| Label | Segment 1 | Segment 2 |
+|---|---:|---:|
+| % row 1 | 40% | 60% |
+| % row 2 | 20% | 30% |
+| Base | 100 | 100 |
+| Mean | 3.5 | 4.1 |
+| SD | 1.0 | 1.2 |
+| Base | 120 | 130 |
+| NPS | 10 | 20 |
+| Promoters | 40% | 50% |
+| Detractors | 30% | 30% |
+| Base | 100 | 100 |
+
+Expected:
+
+- proportions block detected;
+- mean block detected;
+- NPS structure block detected;
+- correct marker rows only;
+- service rows do not receive markers.
+
+---
+
+## 6. Shared base
+
+Rows:
+
+| Label | Segment 1 | Segment 2 |
+|---|---:|---:|
+| % row | 40% | 60% |
+| NPS | 10 | 20 |
+| Promoters | 40% | 50% |
+| Detractors | 30% | 30% |
+| Mean | 3.5 | 4.1 |
+| SD | 1.0 | 1.2 |
+| Base | 100 | 100 |
+
+Expected:
+
+- blocks use shared base correctly;
+- detector does not skip later metrics after NPS/mean blocks.
+
+---
+
+# Label lookup
+
+## 7. Labels immediately left
+
+Selected range begins immediately after label column.
+
+Expected:
+
+- labels are read from left of selected range;
+- numeric intermediate columns are skipped when searching for text labels.
+
+---
+
+## 8. Labels on left side of sheet
+
+Settings:
+
+- `labels-on-left-side = true`
+
+Expected:
+
+- labels are read from leftmost sheet columns;
+- useful when selected range is far to the right.
+
+---
+
+# Total modes without banner structure
+
+## 9. First column is Total
+
+Table:
+
+| Total | Segment 1 | Segment 2 |
+|---:|---:|---:|
+| 50% | 40% | 60% |
+| 200 | 100 | 100 |
+
+Settings:
+
+- `first-column-is-total = true`
+- `compare-only-with-total = false`
+- `exclude-total-from-comparisons = false`
+
+Expected:
+
+- Segment 1 vs Total;
+- Segment 2 vs Total;
+- Segment 1 vs Segment 2;
+- Total column receives no ordinary letters;
+- `T` means segment is significantly higher than Total;
+- `t` means segment is significantly lower than Total.
+
+---
+
+## 10. Compare only with Total
+
+Settings:
+
+- `first-column-is-total = true`
+- `compare-only-with-total = true`
+
+Expected:
+
+- only Segment 1 vs Total and Segment 2 vs Total;
+- no segment-vs-segment letters;
+- only `T/t` markers.
+
+---
+
+## 11. Exclude Total
+
+Settings:
+
+- `first-column-is-total = true`
+- `exclude-total-from-comparisons = true`
+
+Expected:
+
+- Total is excluded from all comparisons;
+- only Segment 1 vs Segment 2;
+- no `T/t`.
+
+---
+
+## 12. Fill only for Total
+
+Settings:
+
+- `first-column-is-total = true`
+- `fill-only-total-comparisons = true`
+
+Expected:
+
+- green significance fill is applied only for cells significantly higher than Total;
+- segment-vs-segment significance may still produce markers but not normal fill;
+- lower-than-Total fill still applies where relevant.
+
+---
+
+# Small bases
+
+## 13. Small base exclusion
+
+Table:
+
+| Segment 1 | Segment 2 | Segment 3 |
+|---:|---:|---:|
+| 40% | 60% | 70% |
+| 100 | 20 | 100 |
+
+Settings:
+
+- `exclude-small-bases = true`
+- `small-base-threshold = 50`
+
+Expected:
+
+- Segment 2 is excluded from calculations;
+- Segment 2 receives small-base fill across the current calculation block;
+- Segment 1 vs Segment 3 is still calculated;
+- Segment 2 does not receive markers.
+
+---
+
+## 14. Small base in manual Total
+
+Table:
+
+| Total | Segment 1 | Segment 2 |
+|---:|---:|---:|
+| 50% | 40% | 60% |
+| 20 | 100 | 100 |
+
+Settings:
+
+- `first-column-is-total = true`
+- `exclude-small-bases = true`
+- `small-base-threshold = 50`
+
+Expected:
+
+- calculation stops;
+- status tells user to check Total base.
+
+---
+
+# Previous-column mode
+
+## 15. Basic previous-column
+
+Table:
+
+| W1 | W2 | W3 |
+|---:|---:|---:|
+| 40% | 50% | 45% |
+| 100 | 100 | 100 |
+
+Settings:
+
+- `compare-with-previous-column = true`
+
+Expected:
+
+- W2 compared with W1;
+- W3 compared with W2;
+- arrows written only into right/current column;
+- `↑` if current is significantly higher;
+- `↓` if current is significantly lower;
+- ordinary letters are not used;
+- banner letters are disabled.
+
+---
+
+## 16. Previous-column fill default
+
+Steps:
+
+1. Turn off previous-column mode.
+2. Confirm `apply-previous-column-fill` is hidden/disabled/off.
+3. Turn on previous-column mode.
+
+Expected:
+
+- `apply-previous-column-fill` becomes enabled by default;
+- user can manually turn it off;
+- if previous-column mode is turned off again, fill option resets.
+
+---
+
+## 17. Previous-column and small base
+
+Table:
+
+| W1 | W2 | W3 | W4 |
+|---:|---:|---:|---:|
+| 40% | 50% | 60% | 70% |
+| 100 | 20 | 100 | 100 |
+
+Settings:
+
+- `compare-with-previous-column = true`
+- `exclude-small-bases = true`
+- `small-base-threshold = 50`
+
+Expected:
+
+- W2 vs W1 is skipped because W2 has small base;
+- W3 vs W2 is skipped because W2 has small base;
+- W4 vs W3 is calculated;
+- no skipping over W2.
+
+---
+
+# Banner structure detection
+
+## 18. One-level banner
+
+Banner:
+
+| Segment 1 | Segment 2 |
+|---|---|
+
+Data:
+
+| Segment 1 | Segment 2 |
+|---:|---:|
+| 40% | 60% |
+| 100 | 100 |
+
+Settings:
+
+- `respect-banner-structure = true`
+
+Expected:
+
+- fallback one-level/default group;
+- calculation still works;
+- no technical banner diagnostics shown in status.
+
+---
+
+## 19. Repeated-label two-level banner
+
+Banner:
+
+| Gender | Gender | Gender | Age | Age | Age |
+|---|---|---|---|---|---|
+| Total | Male | Female | Total | 18-24 | 25-34 |
+
+Settings:
+
+- `respect-banner-structure = true`
+
+Expected:
+
+- groups detected:
+  - Gender: Total, Male, Female
+  - Age: Total, 18-24, 25-34
+- no cross-group comparisons;
+- group-local marker indexing.
+
+---
+
+## 20. Merged-like reconstructed span
+
+Upper banner row:
+
+| Age |  |  |
+|---|---|---|
+| Total | 18-24 | 25-34 |
+
+Settings:
+
+- `respect-banner-structure = true`
+
+Expected:
+
+- reconstructed span detects Age group;
+- Age group includes Total, 18-24, 25-34;
+- no technical span diagnostics shown in status.
+
+---
+
+# Banner-aware comparisons
+
+## 21. Group-aware ordinary comparisons
+
+Banner:
+
+| Gender | Gender | Gender | Age | Age | Age |
+|---|---|---|---|---|---|
+| Total | Male | Female | Total | 18-24 | 25-34 |
+
+Settings:
+
+- `respect-banner-structure = true`
+- `compare-only-with-total = false`
+- `exclude-total-from-comparisons = false`
+- `compare-with-previous-column = false`
+
+Expected:
+
+- ordinary comparisons occur only within Gender or Age;
+- no Gender-vs-Age comparisons;
+- Total columns are not part of ordinary group comparisons;
+- local Total comparisons are generated separately.
+
+---
+
+## 22. Group-local cell markers
+
+Banner:
+
+| Gender | Gender | Gender | Age | Age | Age |
+|---|---|---|---|---|---|
+| Total | Male | Female | Total | 18-24 | 25-34 |
+
+Expected local labels:
+
+- Gender:
+  - Male = `a`
+  - Female = `b`
+- Age:
+  - 18-24 = `a`
+  - 25-34 = `b`
+
+Expected:
+
+- if 25-34 is higher than 18-24, 25-34 gets marker `a`, not global marker from the full selected range.
+
+---
+
+## 23. Local Total logic
+
+Banner:
+
+| Gender | Gender | Gender | Age | Age | Age |
+|---|---|---|---|---|---|
+| Total | Male | Female | Total | 18-24 | 25-34 |
+
+Settings:
+
+- `respect-banner-structure = true`
+- no global Total
+
+Expected:
+
+- Gender Total is reference for Male/Female;
+- Age Total is reference for 18-24/25-34;
+- local Total columns do not receive ordinary letters;
+- local Total columns are excluded from ordinary group comparisons;
+- `T/t` markers are used for local Total comparisons.
+
+---
+
+## 24. Compare only with Total under banner structure
+
+Same banner as above.
+
+Settings:
+
+- `respect-banner-structure = true`
+- `compare-only-with-total = true`
+
+Expected:
+
+- only local Total comparisons;
+- no ordinary group comparisons;
+- no segment-vs-segment letters;
+- only `T/t`.
+
+---
+
+## 25. Exclude Total under banner structure
+
+Same banner as above.
+
+Settings:
+
+- `respect-banner-structure = true`
+- `exclude-total-from-comparisons = true`
+
+Expected:
+
+- all detected Total columns excluded from all comparisons;
+- no `T/t`;
+- ordinary comparisons only among non-Total columns inside each group.
+
+---
+
+## 26. Group without Total
+
+Banner:
+
+| Gender | Gender |
+|---|---|
+| Male | Female |
+
+Settings:
+
+- `respect-banner-structure = true`
+
+Expected:
+
+- group is valid;
+- ordinary group comparisons work;
+- no Total comparisons are generated;
+- not an error.
+
+---
+
+## 27. Compare only with Total but no Total found
+
+Banner:
+
+| Gender | Gender |
+|---|---|
+| Male | Female |
+
+Settings:
+
+- `respect-banner-structure = true`
+- `compare-only-with-total = true`
+
+Expected:
+
+- no valid comparison pairs;
+- status includes message that compare-only-with-Total was enabled but no Total was found.
+
+---
+
+## 28. Multiple local Totals
+
+Banner:
+
+| Gender | Gender | Gender | Gender |
+|---|---|---|---|
+| Total | Male | Total | Female |
+
+Settings:
+
+- `respect-banner-structure = true`
+
+Expected:
+
+- calculation stops;
+- status explains that multiple Totals were found in one group.
+
+---
+
+# Global Total
+
+## 29. Global Total with local Totals
+
+Banner:
+
+| Global Total | Gender | Gender | Gender | Age | Age | Age |
+|---|---|---|---|---|---|---|
+| Global Total | Total | Male | Female | Total | 18-24 | 25-34 |
+
+Settings:
+
+- `respect-banner-structure = true`
+
+Expected:
+
+- global Total detected;
+- global Total is the only Total reference;
+- local Totals are not used as group references;
+- local Totals are compared with global Total as ordinary target columns in Total-comparison logic;
+- local Totals may receive `T/t`;
+- local Totals do not receive ordinary banner letters;
+- status explains global Total behavior.
+
+---
+
+# Banner letters
+
+## 30. Banner-local letters
+
+Banner:
+
+| Gender | Gender | Gender | Age | Age | Age |
+|---|---|---|---|---|---|
+| Total | Male | Female | Total | 18-24 | 25-34 |
+
+Settings:
+
+- `respect-banner-structure = true`
+- `write-banner-letters = true`
+
+Expected lower banner row:
+
+| Total | Male (a) | Female (b) | Total | 18-24 (a) | 25-34 (b) |
+|---|---|---|---|---|---|
+
+Expected:
+
+- upper banner row is unchanged;
+- Total columns do not receive letters;
+- old trailing markers are replaced;
+- old trailing markers are removed from columns that no longer need letters.
+
+---
+
+## 31. Banner letters with global Total
+
+Banner:
+
+| Global Total | Gender | Gender | Gender | Age | Age | Age |
+|---|---|---|---|---|---|---|
+| Global Total | Total | Male | Female | Total | 18-24 | 25-34 |
+
+Settings:
+
+- `respect-banner-structure = true`
+- `write-banner-letters = true`
+
+Expected lower banner row:
+
+| Global Total | Total | Male (a) | Female (b) | Total | 18-24 (a) | 25-34 (b) |
+|---|---|---|---|---|---|---|
+
+Expected:
+
+- global Total receives no letter;
+- local Totals receive no letters;
+- segment labels are group-local.
+
+---
+
+# Banner-aware previous-column
+
+## 32. Previous-column inside banner groups
+
+Banner:
+
+| Gender | Gender | Age | Age |
+|---|---|---|---|
+| Male | Female | 18-24 | 25-34 |
+
+Settings:
+
+- `respect-banner-structure = true`
+- `compare-with-previous-column = true`
+
+Expected:
+
+- Female vs Male;
+- 25-34 vs 18-24;
+- no 18-24 vs Female cross-group comparison.
+
+---
+
+## 33. Previous-column ignores Total under banner structure
+
+Banner:
+
+| Gender | Gender | Gender | Age | Age | Age |
+|---|---|---|---|---|---|
+| Total | Male | Female | Total | 18-24 | 25-34 |
+
+Settings:
+
+- `respect-banner-structure = true`
+- `compare-with-previous-column = true`
+
+Expected:
+
+- Female vs Male;
+- 25-34 vs 18-24;
+- no Male vs Gender Total;
+- no 18-24 vs Age Total.
+
+---
+
+## 34. Previous-column with exclude Total
+
+Same banner as above.
+
+Settings:
+
+- `respect-banner-structure = true`
+- `compare-with-previous-column = true`
+- `exclude-total-from-comparisons = true`
+
+Expected:
+
+- same as previous test;
+- Total columns are excluded;
+- no jumping over Total columns.
+
+---
+
+# Wave banner auto previous-column
+
+## 35. Mixed wave and non-wave groups
+
+Banner:
+
+| Gender | Gender | Wave | Wave | Wave |
+|---|---|---|---|---|
+| Male | Female | W1 | W2 | W3 |
+
+Settings:
+
+- `respect-banner-structure = true`
+- `compare-with-previous-column = false`
+- `apply-previous-column-fill = false`
+- `write-banner-letters = true`
+
+Expected:
+
+- Gender group uses ordinary group comparison;
+- Wave group uses previous-column automatically;
+- W2 vs W1;
+- W3 vs W2;
+- no W1 vs Female;
+- no all-vs-all inside Wave group;
+- Wave arrows are filled even though UI fill checkbox is off;
+- UI previous-column checkbox remains off;
+- status mentions auto previous-column for Wave;
+- banner letters are written only for Gender group;
+- Wave lower labels receive no letters.
+
+---
+
+## 36. Non-wave group does not auto-switch
+
+Banner:
+
+| Gender | Gender | Gender |
+|---|---|---|
+| Male | Female | Other |
+
+Settings:
+
+- `respect-banner-structure = true`
+- `compare-with-previous-column = false`
+
+Expected:
+
+- ordinary group comparisons;
+- no arrows;
+- no auto previous-column status message.
+
+---
+
+## 37. Manual previous-column overrides mixed mode
+
+Banner:
+
+| Gender | Gender | Wave | Wave | Wave |
+|---|---|---|---|---|
+| Male | Female | W1 | W2 | W3 |
+
+Settings:
+
+- `respect-banner-structure = true`
+- `compare-with-previous-column = true`
+
+Expected:
+
+- previous-column inside all groups;
+- Female vs Male;
+- W2 vs W1;
+- W3 vs W2;
+- auto previous-column message not required.
+
+---
+
+## 38. Compare only with Total suppresses wave auto previous-column
+
+Banner:
+
+| Wave | Wave | Wave |
+|---|---|---|
+| Total | W1 | W2 |
+
+Settings:
+
+- `respect-banner-structure = true`
+- `compare-only-with-total = true`
+- `compare-with-previous-column = false`
+
+Expected:
+
+- only Total comparisons;
+- no auto previous-column;
+- no auto previous-column status message.
+
+---
+
+# Settings persistence
+
+## 39. Local save
+
+Steps:
+
+1. Select `settings-storage-mode = local`.
+2. Change confidence level.
+3. Enable one-tailed test.
+4. Enable several checkboxes.
+5. Change colors.
+6. Restart Excel.
+
+Expected:
+
+- settings are restored;
+- dependent UI states are refreshed;
+- invalid combinations are normalized.
+
+---
+
+## 40. Reset settings
+
+Steps:
+
+1. Save settings locally.
+2. Change several settings.
+3. Press reset.
+
+Expected:
+
+- settings return to defaults;
+- local storage is cleared;
+- status says settings were reset;
+- after Excel restart, defaults remain.
+
+---
+
+# Status messages
+
+## 41. Clean status for simple one-level banner
+
+Settings:
+
+- `respect-banner-structure = true`
+
+Expected:
+
+- Расчёт выполнен. Обработано блоков: 1.
+- No technical banner diagnostics.
+
+## 42. Status for wave auto previous-column
+
+Expected:
+
+- Расчёт выполнен. Обработано блоков: 1.
+
+- Баннер: для волновых групп автоматически применён режим “Сравнение с предыдущей колонкой”: Wave.
+
+## 43. Status for global Total
+
+Expected:
+
+- success status;
+- global Total explanatory message;
+- no detailed banner structure dump.
+
+## 44. Status for banner error
+
+Example:
+
+- multiple local Totals in one group.
+
+Expected:
+
+- calculation stops;
+- status shows concise user-facing error;
+- no technical diagnostics dump.

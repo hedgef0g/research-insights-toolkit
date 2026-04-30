@@ -5,6 +5,8 @@ import {
   normalizeNpsSpread,
 } from "./normalizers";
 
+import { getZThresholdForConfidence, getTThresholdForConfidence } from "./stat-thresholds";
+
 /**
  * Calculates statistical significance between two proportions.
  *
@@ -71,7 +73,9 @@ export function calculateProportionSignificance(
   const absoluteZScore = Math.abs(zScore);
 
   const confidenceLevel = calculationSettings.confidenceLevel;
-  const zThreshold = getZThresholdForConfidence(confidenceLevel);
+  const zThreshold = getZThresholdForConfidence(confidenceLevel, {
+    oneTailedTest: calculationSettings.oneTailedTest,
+  });
 
   // Difference is significant if absolute z-score reaches 95% threshold.
   const isSignificant = absoluteZScore >= zThreshold;
@@ -120,7 +124,8 @@ export function compareAllProportionsInRow(
   const comparisonPairs = buildColumnComparisonPairs(
     valueRow.length,
     calculationSettings,
-    calculationSettings.excludedColumnIndexes || new Set()
+    calculationSettings.excludedColumnIndexes || new Set(),
+    calculationSettings.bannerStructure || null
   );
 
   for (const comparisonPair of comparisonPairs) {
@@ -145,11 +150,15 @@ export function compareAllProportionsInRow(
       firstColumnIndex,
       secondColumnIndex,
       comparisonType: comparisonPair.comparisonType,
+      groupKey: comparisonPair.groupKey,
+      groupLabel: comparisonPair.groupLabel,
       firstValue,
       secondValue,
       firstBase,
       secondBase,
       result: significanceResult,
+      totalReferenceType: comparisonPair.totalReferenceType,
+      autoPreviousColumnFromBanner: comparisonPair.autoPreviousColumnFromBanner,
     });
   }
 
@@ -204,7 +213,8 @@ export function generateSignificanceLabels() {
 export function buildColumnComparisonPairs(
   columnCount,
   calculationSettings = {},
-  excludedColumnIndexes = new Set()
+  excludedColumnIndexes = new Set(),
+  bannerStructure = null
 ) {
   const pairs = [];
 
@@ -218,6 +228,20 @@ export function buildColumnComparisonPairs(
   const compareWithPreviousColumn = calculationSettings.compareWithPreviousColumn;
 
   const isExcluded = (columnIndex) => excludedColumnIndexes.has(columnIndex);
+
+  if (
+    calculationSettings.respectBannerStructure &&
+    bannerStructure &&
+    bannerStructure.groups &&
+    bannerStructure.groups.length > 0
+  ) {
+    return buildBannerStructureComparisonPairs(
+      columnCount,
+      calculationSettings,
+      excludedColumnIndexes,
+      bannerStructure
+    );
+  }
 
   if (compareWithPreviousColumn) {
     const startColumnIndex = firstColumnIsTotal && excludeTotalFromComparisons ? 2 : 1;
@@ -309,6 +333,208 @@ export function buildColumnComparisonPairs(
 }
 
 /**
+ * Builds ordinary comparison pairs only inside detected banner groups.
+ */
+function buildBannerGroupComparisonPairs(
+  columnCount,
+  bannerStructure,
+  excludedColumnIndexes = new Set(),
+  options = {}
+) {
+  const pairs = [];
+
+  const extraExcludePredicate = options.excludedColumnIndexesExtra;
+
+  const isExcluded = (columnIndex) => {
+    if (excludedColumnIndexes.has(columnIndex)) {
+      return true;
+    }
+
+    if (typeof extraExcludePredicate === "function") {
+      return extraExcludePredicate(columnIndex);
+    }
+
+    return false;
+  };
+
+  for (const group of bannerStructure.groups || []) {
+    const groupColumnIndexes = (group.columnIndexes || [])
+      .filter((columnIndex) => columnIndex >= 0 && columnIndex < columnCount)
+      .filter((columnIndex) => !isExcluded(columnIndex));
+
+    for (let firstIndex = 0; firstIndex < groupColumnIndexes.length; firstIndex++) {
+      const firstColumnIndex = groupColumnIndexes[firstIndex];
+
+      for (
+        let secondIndex = firstIndex + 1;
+        secondIndex < groupColumnIndexes.length;
+        secondIndex++
+      ) {
+        const secondColumnIndex = groupColumnIndexes[secondIndex];
+
+        pairs.push({
+          firstColumnIndex,
+          secondColumnIndex,
+          comparisonType: "bannerGroup",
+          groupKey: group.groupKey,
+          groupLabel: group.label,
+        });
+      }
+    }
+  }
+
+  return pairs;
+}
+
+/**
+ * Builds mixed banner group pairs.
+ *
+ * RULES:
+ * - wave groups use automatic previous-column mode;
+ * - non-wave groups use ordinary group comparisons;
+ * - Total columns are excluded from both ordinary and auto previous-column pairs;
+ * - Total comparison pairs are still built separately.
+ */
+function buildMixedBannerGroupComparisonPairs(
+  columnCount,
+  bannerStructure,
+  excludedColumnIndexes = new Set(),
+  totalColumnIndexes = new Set()
+) {
+  const pairs = [];
+  const autoPreviousColumnGroupLabels = [];
+
+  for (const group of bannerStructure.groups || []) {
+    if (shouldUseAutoPreviousColumnForBannerGroup(group)) {
+      const groupPairs = buildBannerPreviousColumnPairsForGroup(
+        group,
+        excludedColumnIndexes,
+        totalColumnIndexes,
+        { autoApplied: true }
+      );
+
+      if (groupPairs.length > 0) {
+        autoPreviousColumnGroupLabels.push(group.label);
+      }
+
+      pairs.push(...groupPairs);
+      continue;
+    }
+
+    const groupPairs = buildBannerGroupComparisonPairs(
+      columnCount,
+      {
+        ...bannerStructure,
+        groups: [group],
+      },
+      excludedColumnIndexes,
+      {
+        excludedColumnIndexesExtra: (columnIndex) =>
+          excludedColumnIndexes.has(columnIndex) || totalColumnIndexes.has(columnIndex),
+      }
+    );
+
+    pairs.push(...groupPairs);
+  }
+
+  if (autoPreviousColumnGroupLabels.length > 0) {
+    addBannerStructureMessageOnce(
+      bannerStructure,
+      "info",
+      "BANNER_AUTO_PREVIOUS_COLUMN_APPLIED",
+      `Баннер: для волновых групп автоматически применён режим “Сравнение с предыдущей колонкой”: ${autoPreviousColumnGroupLabels.join(
+        ", "
+      )}.`
+    );
+  }
+
+  return pairs;
+}
+
+/**
+ * Builds comparison pairs using detected banner structure.
+ *
+ * RULES:
+ * - ordinary comparisons are created only inside banner groups;
+ * - Total comparisons follow banner Total hierarchy;
+ * - excludeTotalFromComparisons removes all detected Total columns from all comparisons;
+ * - compareOnlyWithTotal keeps only Total comparison pairs.
+ */
+function buildBannerStructureComparisonPairs(
+  columnCount,
+  calculationSettings,
+  excludedColumnIndexes = new Set(),
+  bannerStructure
+) {
+  const pairs = [];
+
+  const totalColumnIndexes = new Set(bannerStructure.totalColumnIndexes || []);
+  const globalTotalColumnIndex =
+    bannerStructure.globalTotalColumnIndex === undefined
+      ? null
+      : bannerStructure.globalTotalColumnIndex;
+
+  const excludeTotalFromComparisons = calculationSettings.excludeTotalFromComparisons;
+  const compareOnlyWithTotal = calculationSettings.compareOnlyWithTotal;
+  const compareWithPreviousColumn = calculationSettings.compareWithPreviousColumn;
+
+  if (compareWithPreviousColumn) {
+    return buildBannerPreviousColumnComparisonPairs(
+      columnCount,
+      bannerStructure,
+      excludedColumnIndexes,
+      {
+        excludeTotalFromComparisons,
+        totalColumnIndexes,
+      }
+    );
+  }
+
+  if (!excludeTotalFromComparisons) {
+    const totalPairs = buildBannerTotalComparisonPairs(
+      columnCount,
+      bannerStructure,
+      excludedColumnIndexes
+    );
+
+    pairs.push(...totalPairs);
+
+    if (globalTotalColumnIndex !== null && globalTotalColumnIndex !== undefined) {
+      addBannerStructureMessageOnce(
+        bannerStructure,
+        "info",
+        "GLOBAL_TOTAL_USED",
+        "Найден глобальный Тотал. Сравнение с Тоталом выполняется только относительно глобального Тотала. Локальные Тоталы не используются как внутригрупповые референсы и сравнивались с глобальным Тоталом как обычные колонки."
+      );
+    }
+  }
+
+  if (compareOnlyWithTotal) {
+    if (pairs.length === 0) {
+      addBannerStructureMessageOnce(
+        bannerStructure,
+        "warning",
+        "BANNER_TOTAL_ONLY_NO_TOTAL_PAIRS",
+        "Режим “Сравнивать только с Тотал” включён, но в выделенном баннере не найден глобальный или локальный Тотал. Сравнения не выполнены."
+      );
+    }
+
+    return pairs;
+  }
+
+  const groupPairs = buildMixedBannerGroupComparisonPairs(
+    columnCount,
+    bannerStructure,
+    excludedColumnIndexes,
+    totalColumnIndexes
+  );
+
+  pairs.push(...groupPairs);
+
+  return pairs;
+}
+
+/**
  * Returns visible significance label for a selected column.
  *
  * In firstColumnIsTotal mode:
@@ -329,6 +555,89 @@ export function getSignificanceLabelForColumnIndex(columnIndex, calculationSetti
   }
 
   return labels[columnIndex] || "";
+}
+
+/**
+ * Returns significance label for a column.
+ *
+ * If banner structure is enabled, labels are local to the detected banner group.
+ * Otherwise, labels follow the existing global column indexing rules.
+ */
+function getSignificanceLabelForComparisonColumn(
+  columnIndex,
+  calculationSettings = {},
+  comparison = null
+) {
+  if (
+    calculationSettings.respectBannerStructure &&
+    calculationSettings.bannerStructure &&
+    comparison &&
+    comparison.groupKey
+  ) {
+    return getBannerGroupLocalSignificanceLabel(
+      columnIndex,
+      calculationSettings.bannerStructure,
+      comparison.groupKey,
+      calculationSettings
+    );
+  }
+
+  return getSignificanceLabelForColumnIndex(columnIndex, calculationSettings);
+}
+
+/**
+ * Returns group-local significance label.
+ *
+ * RULES:
+ * - all Total columns are skipped;
+ * - Total columns do not consume label indexes;
+ * - labels are assigned only to non-Total columns inside the group.
+ *
+ * Example:
+ * Group columns: [Total, Male, Female]
+ * Total -> ""
+ * Male -> a
+ * Female -> b
+ */
+function getBannerGroupLocalSignificanceLabel(
+  columnIndex,
+  bannerStructure,
+  groupKey,
+  calculationSettings = {}
+) {
+  const labels = generateSignificanceLabels();
+
+  const group = (bannerStructure.groups || []).find((candidate) => candidate.groupKey === groupKey);
+
+  if (!group || !group.columnIndexes) {
+    return getSignificanceLabelForColumnIndex(columnIndex, calculationSettings);
+  }
+
+  const totalColumnIndexes = new Set(bannerStructure.totalColumnIndexes || []);
+  const globalTotalColumnIndex =
+    bannerStructure.globalTotalColumnIndex === undefined
+      ? null
+      : bannerStructure.globalTotalColumnIndex;
+
+  if (columnIndex === globalTotalColumnIndex || totalColumnIndexes.has(columnIndex)) {
+    return "";
+  }
+
+  const groupSegmentColumnIndexes = group.columnIndexes.filter(
+    (candidateColumnIndex) =>
+      candidateColumnIndex !== undefined &&
+      candidateColumnIndex !== null &&
+      candidateColumnIndex !== globalTotalColumnIndex &&
+      !totalColumnIndexes.has(candidateColumnIndex)
+  );
+
+  const localIndex = groupSegmentColumnIndexes.indexOf(columnIndex);
+
+  if (localIndex < 0) {
+    return "";
+  }
+
+  return labels[localIndex] || "";
 }
 
 /**
@@ -625,7 +934,9 @@ export function calculateMeanSignificance(
   const degreesOfFreedom = degreesOfFreedomNumerator / degreesOfFreedomDenominator;
 
   const confidenceLevel = calculationSettings.confidenceLevel;
-  const tThreshold = getTThresholdForConfidence(confidenceLevel, degreesOfFreedom);
+  const tThreshold = getTThresholdForConfidence(confidenceLevel, degreesOfFreedom, {
+    oneTailedTest: calculationSettings.oneTailedTest,
+  });
   const absoluteTScore = Math.abs(tScore); // Two-tailed comparison uses absolute t.
 
   const isSignificant = absoluteTScore >= tThreshold;
@@ -669,7 +980,8 @@ export function compareAllMeansInRow(
   const comparisonPairs = buildColumnComparisonPairs(
     meanRow.length,
     calculationSettings,
-    calculationSettings.excludedColumnIndexes || new Set()
+    calculationSettings.excludedColumnIndexes || new Set(),
+    calculationSettings.bannerStructure || null
   );
 
   for (const comparisonPair of comparisonPairs) {
@@ -691,13 +1003,19 @@ export function compareAllMeansInRow(
       firstColumnIndex,
       secondColumnIndex,
       comparisonType: comparisonPair.comparisonType,
+      groupKey: comparisonPair.groupKey,
+      groupLabel: comparisonPair.groupLabel,
+      totalReferenceType: comparisonPair.totalReferenceType,
+
       firstValue: meanRow[firstColumnIndex],
       secondValue: meanRow[secondColumnIndex],
       firstSpread: spreadRow[firstColumnIndex],
       secondSpread: spreadRow[secondColumnIndex],
       firstBase: baseRow[firstColumnIndex],
       secondBase: baseRow[secondColumnIndex],
+
       result: significanceResult,
+      autoPreviousColumnFromBanner: comparisonPair.autoPreviousColumnFromBanner,
     });
   }
 
@@ -924,7 +1242,8 @@ export function compareNpsStructureBlockByRowIndexes(
   const comparisonPairs = buildColumnComparisonPairs(
     npsRow.length,
     calculationSettings,
-    calculationSettings.excludedColumnIndexes || new Set()
+    calculationSettings.excludedColumnIndexes || new Set(),
+    calculationSettings.bannerStructure || null
   );
 
   for (const comparisonPair of comparisonPairs) {
@@ -947,7 +1266,21 @@ export function compareNpsStructureBlockByRowIndexes(
       firstColumnIndex,
       secondColumnIndex,
       comparisonType: comparisonPair.comparisonType,
+      groupKey: comparisonPair.groupKey,
+      groupLabel: comparisonPair.groupLabel,
+      totalReferenceType: comparisonPair.totalReferenceType,
+
+      firstValue: npsRow[firstColumnIndex],
+      secondValue: npsRow[secondColumnIndex],
+      firstPromoters: promotersRow[firstColumnIndex],
+      secondPromoters: promotersRow[secondColumnIndex],
+      firstDetractors: detractorsRow[firstColumnIndex],
+      secondDetractors: detractorsRow[secondColumnIndex],
+      firstBase: baseRow[firstColumnIndex],
+      secondBase: baseRow[secondColumnIndex],
+
       result: significanceResult,
+      autoPreviousColumnFromBanner: comparisonPair.autoPreviousColumnFromBanner,
     });
   }
 
@@ -986,7 +1319,8 @@ export function compareNpsSpreadBlockByRowIndexes(
   const comparisonPairs = buildColumnComparisonPairs(
     npsRow.length,
     calculationSettings,
-    calculationSettings.excludedColumnIndexes || new Set()
+    calculationSettings.excludedColumnIndexes || new Set(),
+    calculationSettings.bannerStructure || null
   );
 
   for (const comparisonPair of comparisonPairs) {
@@ -1008,7 +1342,19 @@ export function compareNpsSpreadBlockByRowIndexes(
       firstColumnIndex,
       secondColumnIndex,
       comparisonType: comparisonPair.comparisonType,
+      groupKey: comparisonPair.groupKey,
+      groupLabel: comparisonPair.groupLabel,
+      totalReferenceType: comparisonPair.totalReferenceType,
+
+      firstValue: npsRow[firstColumnIndex],
+      secondValue: npsRow[secondColumnIndex],
+      firstSpread: spreadRow[firstColumnIndex],
+      secondSpread: spreadRow[secondColumnIndex],
+      firstBase: baseRow[firstColumnIndex],
+      secondBase: baseRow[secondColumnIndex],
+
       result: significanceResult,
+      autoPreviousColumnFromBanner: comparisonPair.autoPreviousColumnFromBanner,
     });
   }
 
@@ -1066,7 +1412,10 @@ export function applyComparisonResultsToFullCellResultMatrix(
         continue;
       }
 
-      if (calculationSettings.firstColumnIsTotal && comparison.comparisonType === "total") {
+      if (
+        comparison.comparisonType === "bannerTotal" ||
+        (calculationSettings.firstColumnIsTotal && comparison.comparisonType === "total")
+      ) {
         applyTotalComparisonMarkerToFullCellResultMatrix(
           fullCellResultMatrix,
           valueRowIndex,
@@ -1082,11 +1431,16 @@ export function applyComparisonResultsToFullCellResultMatrix(
         }
       }
 
-      const firstLabel = getSignificanceLabelForColumnIndex(firstColumnIndex, calculationSettings);
+      const firstLabel = getSignificanceLabelForComparisonColumn(
+        firstColumnIndex,
+        calculationSettings,
+        comparison
+      );
 
-      const secondLabel = getSignificanceLabelForColumnIndex(
+      const secondLabel = getSignificanceLabelForComparisonColumn(
         secondColumnIndex,
-        calculationSettings
+        calculationSettings,
+        comparison
       );
 
       if (!firstLabel || !secondLabel) {
@@ -1111,38 +1465,41 @@ export function applyComparisonResultsToFullCellResultMatrix(
 }
 
 /**
- * Applies special Total comparison marker.
+ * Applies Total comparison marker.
  *
  * RULES:
- * - Total column is column 0.
- * - Marker is always written into the segment column.
- * - "T" means segment is significantly higher than Total.
- * - "t" means segment is significantly lower than Total.
- * - Total marker has priority and must appear before segment markers.
+ * - firstColumnIndex is treated as Total reference for Total comparison pairs.
+ * - marker is always written into compared/target column.
+ * - "T" means target is significantly higher than Total reference.
+ * - "t" means target is significantly lower than Total reference.
  */
 function applyTotalComparisonMarkerToFullCellResultMatrix(
   fullCellResultMatrix,
   valueRowIndex,
   comparison
 ) {
-  const firstColumnIndex = comparison.firstColumnIndex;
-  const secondColumnIndex = comparison.secondColumnIndex;
+  const totalReferenceColumnIndex = comparison.firstColumnIndex;
+  const targetColumnIndex = comparison.secondColumnIndex;
 
-  const segmentColumnIndex = firstColumnIndex === 0 ? secondColumnIndex : firstColumnIndex;
-  const segmentIsFirstColumn = segmentColumnIndex === firstColumnIndex;
+  if (targetColumnIndex === totalReferenceColumnIndex) {
+    return;
+  }
 
-  const segmentIsHigher =
-    (segmentIsFirstColumn && comparison.result.direction === "first_higher") ||
-    (!segmentIsFirstColumn && comparison.result.direction === "second_higher");
+  const targetIsHigher = comparison.result.direction === "second_higher";
 
-  const totalMarker = segmentIsHigher ? "T" : "t";
+  const targetIsLower = comparison.result.direction === "first_higher";
+
+  if (!targetIsHigher && !targetIsLower) {
+    return;
+  }
+
+  const totalMarker = targetIsHigher ? "T" : "t";
 
   prependTotalMarkerToCellResult(
-    fullCellResultMatrix[valueRowIndex][segmentColumnIndex],
+    fullCellResultMatrix[valueRowIndex][targetColumnIndex],
     totalMarker
   );
 }
-
 /**
  * Applies special Total comparison marker.
  *
@@ -1206,120 +1563,6 @@ export function keepMarkersOnlyInAllowedRows(cellResultMatrix, allowedMarkerRows
   }
 
   return cellResultMatrix;
-}
-
-/**
- * Supported two-tailed z-thresholds by confidence level.
- *
- * IMPORTANT:
- * Keys are ordered from highest confidence to lowest confidence.
- */
-export const Z_THRESHOLDS_BY_CONFIDENCE_LEVEL = {
-  99: 2.576,
-  95: 1.96,
-  90: 1.645,
-  80: 1.282,
-  66.6: 0.967,
-};
-
-/**
- * Returns z-threshold for selected two-tailed confidence level.
- *
- * PURPOSE:
- * Do not silently fallback to another confidence level.
- */
-export function getZThresholdForConfidence(confidenceLevel) {
-  const confidenceKey = String(confidenceLevel);
-  const threshold = Z_THRESHOLDS_BY_CONFIDENCE_LEVEL[confidenceKey];
-
-  if (threshold === undefined) {
-    throw new Error(`Unsupported confidence level: ${confidenceLevel}`);
-  }
-
-  return threshold;
-}
-
-/**
- * Approximate two-tailed t-thresholds by confidence level.
- *
- * PURPOSE:
- * Used for means and NPS spread calculations.
- */
-export const T_THRESHOLDS_BY_CONFIDENCE_LEVEL = {
-  99: [
-    { df: 1, value: 63.657 },
-    { df: 2, value: 9.925 },
-    { df: 5, value: 4.032 },
-    { df: 10, value: 3.169 },
-    { df: 20, value: 2.845 },
-    { df: 30, value: 2.75 },
-    { df: 60, value: 2.66 },
-  ],
-  95: [
-    { df: 1, value: 12.706 },
-    { df: 2, value: 4.303 },
-    { df: 5, value: 2.571 },
-    { df: 10, value: 2.228 },
-    { df: 20, value: 2.086 },
-    { df: 30, value: 2.042 },
-    { df: 60, value: 2.0 },
-  ],
-  90: [
-    { df: 1, value: 6.314 },
-    { df: 2, value: 2.92 },
-    { df: 5, value: 2.015 },
-    { df: 10, value: 1.812 },
-    { df: 20, value: 1.725 },
-    { df: 30, value: 1.697 },
-    { df: 60, value: 1.671 },
-  ],
-  80: [
-    { df: 1, value: 3.078 },
-    { df: 2, value: 1.886 },
-    { df: 5, value: 1.476 },
-    { df: 10, value: 1.372 },
-    { df: 20, value: 1.325 },
-    { df: 30, value: 1.31 },
-    { df: 60, value: 1.296 },
-  ],
-  66.6: [
-    { df: 1, value: 1.376 },
-    { df: 2, value: 0.816 },
-    { df: 5, value: 0.727 },
-    { df: 10, value: 0.7 },
-    { df: 20, value: 0.687 },
-    { df: 30, value: 0.683 },
-    { df: 60, value: 0.677 },
-  ],
-};
-
-/**
- * Returns approximate two-tailed t-threshold for selected confidence level.
- *
- * PURPOSE:
- * For means and NPS spread calculations.
- */
-export function getTThresholdForConfidence(confidenceLevel, degreesOfFreedom) {
-  const confidenceKey = String(confidenceLevel);
-  const thresholdTable = T_THRESHOLDS_BY_CONFIDENCE_LEVEL[confidenceKey];
-
-  if (!thresholdTable) {
-    throw new Error(`Unsupported confidence level: ${confidenceLevel}`);
-  }
-
-  const zThreshold = getZThresholdForConfidence(confidenceKey);
-
-  if (degreesOfFreedom >= 60) {
-    return zThreshold;
-  }
-
-  for (const thresholdPoint of thresholdTable) {
-    if (degreesOfFreedom <= thresholdPoint.df) {
-      return thresholdPoint.value;
-    }
-  }
-
-  return zThreshold;
 }
 
 /**
@@ -1503,11 +1746,14 @@ function applyPreviousColumnArrowToCellResultMatrix(
     return;
   }
 
+  const shouldApplyPreviousColumnFill =
+    calculationSettings.applyPreviousColumnFill || comparison.autoPreviousColumnFromBanner;
+
   if (comparison.result.direction === "second_higher") {
     cellResult.previousColumnArrow = "↑";
     cellResult.previousColumnArrowDirection = "up";
 
-    if (calculationSettings.applyPreviousColumnFill) {
+    if (shouldApplyPreviousColumnFill) {
       applyFillReasonToCellResult(cellResult, CELL_FILL_REASONS.SIGNIFICANT);
     }
 
@@ -1518,8 +1764,339 @@ function applyPreviousColumnArrowToCellResultMatrix(
     cellResult.previousColumnArrow = "↓";
     cellResult.previousColumnArrowDirection = "down";
 
-    if (calculationSettings.applyPreviousColumnFill) {
+    if (shouldApplyPreviousColumnFill) {
       applyFillReasonToCellResult(cellResult, CELL_FILL_REASONS.LOWER_THAN_TOTAL);
     }
   }
+}
+
+/**
+ * Builds banner-aware Total comparison pairs.
+ *
+ * If global Total exists:
+ * - all other non-excluded columns are compared with global Total;
+ * - local Totals are ordinary columns and can be compared with global Total.
+ *
+ * If no global Total exists:
+ * - each group uses its local Total where available.
+ */
+function buildBannerTotalComparisonPairs(
+  columnCount,
+  bannerStructure,
+  excludedColumnIndexes = new Set()
+) {
+  const pairs = [];
+
+  const globalTotalColumnIndex =
+    bannerStructure.globalTotalColumnIndex === undefined
+      ? null
+      : bannerStructure.globalTotalColumnIndex;
+
+  const isExcluded = (columnIndex) => excludedColumnIndexes.has(columnIndex);
+
+  if (
+    globalTotalColumnIndex !== null &&
+    globalTotalColumnIndex !== undefined &&
+    !isExcluded(globalTotalColumnIndex)
+  ) {
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+      if (columnIndex === globalTotalColumnIndex) {
+        continue;
+      }
+
+      if (isExcluded(columnIndex)) {
+        continue;
+      }
+
+      pairs.push({
+        firstColumnIndex: globalTotalColumnIndex,
+        secondColumnIndex: columnIndex,
+        comparisonType: "bannerTotal",
+        totalReferenceType: "global",
+      });
+    }
+
+    return pairs;
+  }
+
+  for (const group of bannerStructure.groups || []) {
+    const localTotalColumnIndexes = group.localTotalColumnIndexes || [];
+
+    if (localTotalColumnIndexes.length === 0) {
+      continue;
+    }
+
+    if (localTotalColumnIndexes.length > 1) {
+      addBannerStructureMessageOnce(
+        bannerStructure,
+        "error",
+        "BANNER_MULTIPLE_LOCAL_TOTALS",
+        `В группе “${group.label}” найдено несколько Тоталов. Расчёт остановлен: невозможно однозначно определить колонку для сравнения.`
+      );
+
+      continue;
+    }
+
+    const localTotalColumnIndex = localTotalColumnIndexes[0];
+
+    if (isExcluded(localTotalColumnIndex)) {
+      continue;
+    }
+
+    for (const columnIndex of group.columnIndexes || []) {
+      if (columnIndex === localTotalColumnIndex) {
+        continue;
+      }
+
+      if (columnIndex < 0 || columnIndex >= columnCount) {
+        continue;
+      }
+
+      if (isExcluded(columnIndex)) {
+        continue;
+      }
+
+      pairs.push({
+        firstColumnIndex: localTotalColumnIndex,
+        secondColumnIndex: columnIndex,
+        comparisonType: "bannerTotal",
+        totalReferenceType: "local",
+        groupKey: group.groupKey,
+        groupLabel: group.label,
+      });
+    }
+  }
+
+  return pairs;
+}
+
+/**
+ * Adds banner message only once.
+ */
+function addBannerStructureMessageOnce(bannerStructure, severity, code, text) {
+  if (!bannerStructure) {
+    return;
+  }
+
+  if (!bannerStructure.messages) {
+    bannerStructure.messages = [];
+  }
+
+  const alreadyExists = bannerStructure.messages.some(
+    (message) => message.code === code && message.text === text
+  );
+
+  if (alreadyExists) {
+    return;
+  }
+
+  bannerStructure.messages.push({
+    severity,
+    code,
+    text,
+  });
+}
+
+/**
+ * Builds previous-column comparison pairs within detected banner groups.
+ *
+ * RULES:
+ * - compare current column only with immediately previous selected column;
+ * - both columns must belong to the same banner group;
+ * - do not cross group boundaries;
+ * - do not skip over excluded columns;
+ * - if excludeTotalFromComparisons is enabled, Total columns are excluded too.
+ */
+function buildBannerPreviousColumnComparisonPairs(
+  columnCount,
+  bannerStructure,
+  excludedColumnIndexes = new Set(),
+  options = {}
+) {
+  const pairs = [];
+
+  const totalColumnIndexes = options.totalColumnIndexes || new Set();
+
+  const isExcluded = (columnIndex) => {
+    if (excludedColumnIndexes.has(columnIndex)) {
+      return true;
+    }
+
+    if (totalColumnIndexes.has(columnIndex)) {
+      return true;
+    }
+
+    return false;
+  };
+
+  const groupKeyByColumnIndex = buildBannerGroupKeyByColumnIndex(bannerStructure);
+
+  for (let columnIndex = 1; columnIndex < columnCount; columnIndex++) {
+    const previousColumnIndex = columnIndex - 1;
+
+    if (isExcluded(previousColumnIndex) || isExcluded(columnIndex)) {
+      continue;
+    }
+
+    const previousGroupKey = groupKeyByColumnIndex.get(previousColumnIndex);
+    const currentGroupKey = groupKeyByColumnIndex.get(columnIndex);
+
+    if (!previousGroupKey || !currentGroupKey) {
+      continue;
+    }
+
+    if (previousGroupKey !== currentGroupKey) {
+      continue;
+    }
+
+    const group = (bannerStructure.groups || []).find(
+      (candidate) => candidate.groupKey === currentGroupKey
+    );
+
+    pairs.push({
+      firstColumnIndex: previousColumnIndex,
+      secondColumnIndex: columnIndex,
+      comparisonType: "previousColumn",
+      groupKey: currentGroupKey,
+      groupLabel: group ? group.label : "",
+    });
+  }
+
+  return pairs;
+}
+
+/**
+ * Builds previous-column pairs inside one banner group.
+ *
+ * RULES:
+ * - only immediate selected-neighbor columns are compared;
+ * - no cross-group comparisons;
+ * - excluded columns are not skipped over;
+ * - Total columns are excluded from this chain.
+ */
+function buildBannerPreviousColumnPairsForGroup(
+  group,
+  excludedColumnIndexes = new Set(),
+  totalColumnIndexes = new Set(),
+  options = {}
+) {
+  const pairs = [];
+
+  const autoApplied = Boolean(options.autoApplied);
+
+  const groupColumnIndexes = group.columnIndexes || [];
+
+  const isExcluded = (columnIndex) => {
+    if (excludedColumnIndexes.has(columnIndex)) {
+      return true;
+    }
+
+    if (totalColumnIndexes.has(columnIndex)) {
+      return true;
+    }
+
+    return false;
+  };
+
+  for (let index = 1; index < groupColumnIndexes.length; index++) {
+    const previousColumnIndex = groupColumnIndexes[index - 1];
+    const currentColumnIndex = groupColumnIndexes[index];
+
+    if (isExcluded(previousColumnIndex) || isExcluded(currentColumnIndex)) {
+      continue;
+    }
+
+    pairs.push({
+      firstColumnIndex: previousColumnIndex,
+      secondColumnIndex: currentColumnIndex,
+      comparisonType: "previousColumn",
+      groupKey: group.groupKey,
+      groupLabel: group.label,
+      autoPreviousColumnFromBanner: autoApplied,
+    });
+  }
+
+  return pairs;
+}
+
+/**
+ * Builds map: columnIndex -> banner group key.
+ */
+function buildBannerGroupKeyByColumnIndex(bannerStructure) {
+  const groupKeyByColumnIndex = new Map();
+
+  for (const group of bannerStructure.groups || []) {
+    for (const columnIndex of group.columnIndexes || []) {
+      groupKeyByColumnIndex.set(columnIndex, group.groupKey);
+    }
+  }
+
+  return groupKeyByColumnIndex;
+}
+
+/**
+ * Builds column label map for detected banner structure.
+ *
+ * PURPOSE:
+ * Used by banner-aware header marker writing.
+ *
+ * RULES:
+ * - labels are local to each banner group;
+ * - all Total columns are always skipped;
+ * - skipped columns do not consume label indexes;
+ * - global Total is never labeled.
+ */
+export function buildBannerLocalSignificanceLabelMap(bannerStructure, calculationSettings = {}) {
+  const labelMap = new Map();
+  const labels = generateSignificanceLabels();
+
+  if (!bannerStructure || !bannerStructure.groups) {
+    return labelMap;
+  }
+
+  const totalColumnIndexes = new Set(bannerStructure.totalColumnIndexes || []);
+  const globalTotalColumnIndex =
+    bannerStructure.globalTotalColumnIndex === undefined
+      ? null
+      : bannerStructure.globalTotalColumnIndex;
+
+  for (const group of bannerStructure.groups || []) {
+    if (
+      !calculationSettings.compareWithPreviousColumn &&
+      group.recommendedComparisonMode === "previousColumn"
+    ) {
+      continue;
+    }
+
+    let localLabelIndex = 0;
+
+    for (const columnIndex of group.columnIndexes || []) {
+      if (columnIndex === globalTotalColumnIndex) {
+        continue;
+      }
+
+      if (totalColumnIndexes.has(columnIndex)) {
+        continue;
+      }
+
+      const label = labels[localLabelIndex];
+
+      if (label) {
+        labelMap.set(columnIndex, label);
+      }
+
+      localLabelIndex++;
+    }
+  }
+
+  return labelMap;
+}
+
+/**
+ * Returns true if banner group should use automatic previous-column mode.
+ *
+ * This is used only when global compareWithPreviousColumn is OFF.
+ */
+function shouldUseAutoPreviousColumnForBannerGroup(group) {
+  return group && group.recommendedComparisonMode === "previousColumn";
 }

@@ -1,130 +1,232 @@
-# Research Insights Toolkit — Current Status
+# STATUS.md
 
-Last updated: 2026-04-30
+## Current status
 
-## Implemented
+Research Insights Toolkit MVP functionality is implemented for the Excel-first workflow.
 
-- Unified auto-detection of metric blocks.
-- Proportion significance using pooled z-test.
-- Mean significance using Welch’s t-test.
-- NPS significance from structure and spread.
-- Confidence level selector: 99%, 95%, 90%, 80%, 66.6%.
-- Marker generation with Latin and Cyrillic letters, excluding t/T/т/Т.
-- Re-run cleanup of old markers and formatting.
-- Display rounding before marker insertion.
-- Preservation of % sign when appending markers.
-- Left-side label detection.
-- Optional label detection from leftmost worksheet columns.
-- Banner marker insertion.
-- First-column Total mode:
-  - Total has no letter index.
-  - Segment indexing starts from the second selected column.
-  - Total does not receive banner markers.
-  - Total does not receive cell markers.
-- Total comparison markers:
-  - `T` = segment significantly higher than Total.
-  - `t` = segment significantly lower than Total.
-- Compare only with Total.
-- Exclude Total from comparisons.
-- Lower-than-Total fill color.
-- Fill only for Total comparisons.
-- `cellResultMatrix` replacing plain marker matrix.
-- Fill priority system:
-  - small base
-  - lower than Total
-  - normal significance
-  - none
-- Small-base handling:
-  - checked before significance calculations;
-  - small-base columns excluded from comparisons;
-  - small-base fill applied within the calculation block, including Base row;
-  - Total small base stops calculation with warning.
+The add-in currently supports:
 
-- Total comparison improvements:
-  - “Compare only with Total” mode.
-  - “Exclude Total from comparisons” mode.
-  - First selected column can be treated as Total.
-  - Total column does not receive cell markers.
-  - Total column does not receive banner markers.
-  - Segment column indexing starts after Total.
-  - `T` marker = segment is significantly higher than Total.
-  - `t` marker = segment is significantly lower than Total.
-  - Lower-than-Total fill color is supported.
-  - Optional “Fill only for Total comparisons” mode:
-    - normal significant fill is applied only to cells significantly higher than Total;
-    - segment-vs-segment markers remain visible but do not receive normal significant fill.
+- automatic metric block detection;
+- proportions significance testing;
+- means significance testing with SD or variance;
+- NPS significance testing from promoters/detractors structure;
+- NPS significance testing from SD or variance;
+- confidence level selector;
+- one-tailed / two-tailed testing;
+- local settings persistence;
+- reset to default settings;
+- small-base exclusion and fill;
+- Total comparison modes;
+- previous-column comparison mode;
+- banner-aware structure detection;
+- banner-aware group comparisons;
+- banner-aware local and global Total logic;
+- wave banner auto previous-column mode;
+- banner-local marker indexing;
+- banner letter writing into the lowest banner level;
+- clean user-facing status messages.
 
-- Cell result matrix:
-  - Replaced plain marker matrix with `cellResultMatrix`.
-  - Cell results can now store:
-    - markers;
-    - fill reason;
-    - fill priority;
-    - positive Total comparison metadata;
-    - previous-column arrow metadata.
-  - Fill priority system:
-    1. small base;
-    2. lower than Total;
-    3. normal significance;
-    4. none.
+## Implemented UI settings
 
-- Small base handling:
-  - Small bases are checked before statistical calculations.
-  - Columns with base below threshold are excluded from comparisons.
-  - Small-base fill is applied within the relevant calculation block.
-  - Small-base fill includes the Base row itself.
-  - Small-base columns do not receive significance markers.
-  - If first column is Total and Total has a small base, calculation stops with a user-facing warning.
+### Significance settings
 
-- Previous-column comparison mode:
-  - Added “Compare with previous column” mode.
-  - Compares column 2 with column 1, column 3 with column 2, and so on.
-  - Writes arrows into the right/current column only.
-  - `↑` = current column is significantly higher than previous column.
-  - `↓` = current column is significantly lower than previous column.
-  - Does not use ordinary letter markers.
-  - Does not write banner letters.
-  - Optional previous-column fill:
-    - higher values use normal significant fill;
-    - lower values use lower-than-Total fill color.
-  - Small-base filtering remains active and does not skip over excluded columns.
+Implemented:
 
-- UI improvements:
-  - Removed default Microsoft/diagnostic text from the task pane.
-  - Removed visible “Detect Metric Type” button from the user UI.
-  - Renamed “Clear Significance” to “Очистить значимости”.
-  - Added hidden-by-default status panel.
-  - Status panel appears after running calculation or clearing significance.
-  - Status text wraps within the task pane.
-  - Primary and secondary actions are visually separated:
-    - “Запустить” is the primary button;
-    - “Очистить значимости” is a secondary text-style action.
-  - Added UI mutual exclusions for incompatible modes.
-  - Added warning when previous-column mode treats Total as an ordinary previous column.
+- `confidence-level`
+- `one-tailed-test`
+- `round-cell-values`
 
-- Output formatting improvements:
-  - Percent sign is preserved when appending markers.
-  - Old arrow markers are cleaned before recalculation.
+### Previous-column comparison
 
-## Not implemented yet
+Implemented:
 
-- Banner structure detection.
-- Total in each banner.
-- Custom modal/warning panel instead of plain output messages.
-- Settings persistence.
-- Writer optimization for large tables.
-- Help page.
-- Google Sheets support.
+- `compare-with-previous-column`
+- `apply-previous-column-fill`
 
-## Current architectural rule
+Behavior:
 
-- `taskpane.js` = UI orchestration only.
-- `metric-detector.js` = row detection and calculation block planning.
-- `significance.js` = statistics, comparison planning, marker/fill result matrix.
-- `excel-writer.js` = Excel output only.
-- `normalizers.js` = raw value cleanup.
-- `dictionary.config.js` = configurable label dictionary.
+- previous-column mode writes arrows instead of letter markers;
+- arrow is written only into the right/current column;
+- upward difference uses `↑`;
+- downward difference uses `↓`;
+- fill is enabled by default when previous-column mode is selected;
+- user may manually disable previous-column fill;
+- previous-column mode disables banner letter writing;
+- previous-column mode is incompatible with compare-only-with-Total.
 
-No statistical calculations in `taskpane.js`.
-No Excel range writing in `significance.js`.
-No UI DOM access in core modules.
+### Banner settings
+
+Implemented:
+
+- `write-banner-letters`
+- `respect-banner-structure`
+
+Behavior:
+
+- without banner structure, banner letters follow selected-column indexing;
+- with banner structure, banner letters are written only to the lowest banner level;
+- upper banner levels are not modified;
+- labels are local to each detected banner group;
+- Total columns never receive ordinary banner letters;
+- wave groups using auto previous-column mode do not receive banner letters.
+
+### Label detection
+
+Implemented:
+
+- default label lookup immediately to the left of selected range;
+- optional lookup from the left side of the sheet via `labels-on-left-side`;
+- numeric columns between selected data and real text labels are skipped.
+
+### Total comparison settings
+
+Implemented:
+
+- `compare-only-with-total`
+- `exclude-total-from-comparisons`
+- `first-column-is-total`
+- `total-in-each-banner`
+
+Current behavior:
+
+- without banner structure, supported manual Total mode is primarily `first-column-is-total`;
+- with banner structure enabled, manual Total placement checkboxes are disabled;
+- Total placement is then detected from banner structure;
+- compare-only-with-Total and exclude-Total remain meaningful with banner structure.
+
+### Fill settings
+
+Implemented:
+
+- `significant-fill-color`
+- `lower-than-total-fill-color`
+- `fill-only-total-comparisons`
+- `small-base-fill-color`
+
+Fill priority:
+
+1. small base fill
+2. lower than Total fill
+3. normal significance fill
+4. no fill
+
+### Small bases
+
+Implemented:
+
+- `exclude-small-bases`
+- `small-base-threshold`
+
+Behavior:
+
+- columns with base lower than threshold are excluded before significance calculation;
+- small-base fill is applied to the whole affected column within the calculation block;
+- the base row itself is also filled;
+- if a manual first-column Total has a small base, calculation stops with an error.
+
+### Settings storage
+
+Implemented:
+
+- `settings-storage-mode = none`
+- `settings-storage-mode = local`
+- reset button
+
+Behavior:
+
+- local settings are stored in `localStorage`;
+- reset restores default settings and clears saved local settings;
+- cloud storage remains reserved for future implementation.
+
+## Banner engine status
+
+Implemented MVP:
+
+- one-level banner detection;
+- two-level banner detection;
+- repeated group label detection;
+- reconstructed span detection for merged-like headers;
+- local Total detection;
+- global Total detection;
+- group-aware ordinary comparisons;
+- group-local cell markers;
+- local Total as group reference when no global Total exists;
+- global Total as the only Total reference when detected;
+- local Totals compared with global Total when global Total exists;
+- local Totals not used as group references when global Total exists;
+- Total columns excluded from ordinary group comparisons;
+- previous-column comparison inside banner groups;
+- automatic previous-column mode for wave groups;
+- banner-aware lower-level letter writing;
+- user-visible banner messages filtered to important events only.
+
+## Wave banner behavior
+
+Wave-like groups are detected from group labels such as:
+
+- `wave`
+- `waves`
+- `волна`
+- `волны`
+- `period`
+- `periods`
+- `период`
+- `периоды`
+- `замер`
+- `замеры`
+
+When a wave group is detected and global previous-column mode is not manually enabled:
+
+- previous-column comparison is applied only inside wave groups;
+- non-wave groups continue to use ordinary group comparisons;
+- UI checkbox state is not changed;
+- previous-column fill is applied automatically for wave groups;
+- banner letters are not written for wave groups;
+- status message explains that auto previous-column was applied.
+
+Plain numeric labels such as `1, 2, 3` are not used as wave signals.
+
+## Statistical engine status
+
+Implemented:
+
+- pooled z-test for proportions;
+- Welch’s t-test for means;
+- NPS from promoter/detractor structure;
+- NPS from spread;
+- one-tailed and two-tailed threshold modes;
+- modular threshold functions using distribution quantiles.
+
+Notes:
+
+- product-specific comparison routing remains custom;
+- external/statistical libraries are used only for threshold calculation;
+- formulas remain under project control.
+
+## User-facing status messages
+
+Implemented:
+
+- default success status is concise;
+- technical banner diagnostics are hidden;
+- only user-relevant banner messages are shown.
+
+Visible banner message types include:
+
+- global Total used;
+- auto previous-column applied for wave groups;
+- compare-only-with-Total produced no valid Total pairs;
+- multiple local Totals in one group;
+- malformed or unsupported banner structure;
+- no banner rows above selection.
+
+## Known technical debt
+
+- Some old diagnostic helpers for merge/span investigation may remain in `taskpane.js` behind no active call path.
+- `formatBannerDetectionDiagnostics()` remains useful for development diagnostics but should not be used in normal user status.
+- Google Sheets support is not implemented.
+- Cloud settings storage is not implemented.
+- Full multi-level banner support beyond MVP is not implemented.
+- Report-title detection and broader table-boundary detection are not fully implemented.
+- Total outside selection is specified but may need additional edge-case hardening.
+- The add-in remains Excel-first.

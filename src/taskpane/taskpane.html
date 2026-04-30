@@ -35,13 +35,21 @@
         <div id="settings-content" class="settings-content">
           <div class="settings-group">
             <label for="confidence-level">Уровень значимости</label>
-            <select id="confidence-level">
-              <option value="99">99%</option>
-              <option value="95" selected>95%</option>
-              <option value="90">90%</option>
-              <option value="80">80%</option>
-              <option value="66.6">66.6%</option>
-            </select>
+
+            <div class="confidence-settings-row">
+              <select id="confidence-level">
+                <option value="99">99%</option>
+                <option value="95" selected>95%</option>
+                <option value="90">90%</option>
+                <option value="80">80%</option>
+                <option value="66.6">66.6%</option>
+              </select>
+
+              <label class="inline-checkbox-label" for="one-tailed-test">
+                <input type="checkbox" id="one-tailed-test" />
+                <span>Односторонний тест</span>
+              </label>
+            </div>
           </div>
 
           <div class="settings-group">
@@ -71,7 +79,7 @@
               баннере</label
             >
             <label
-              ><input type="checkbox" id="respect-banner-structure" disabled /> Учитывать структуру
+              ><input type="checkbox" id="respect-banner-structure" /> Учитывать структуру
               баннера</label
             >
             <label
@@ -159,7 +167,11 @@
             </div>
           </div>
 
-          <a href="#" id="help-link">Справка об использовании</a>
+          <a
+            href="https://hedgef0g.github.io/research-insights-toolkit/help-files/rit-help-ru.html"
+            id="help-link"
+            >Справка об использовании</a
+          >
         </div>
       </section>
 
