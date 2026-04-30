@@ -28,6 +28,62 @@ import {
 
 import { writeCellResultsToSelectedRange } from "../core/excel-writer";
 
+const LOCAL_SETTINGS_STORAGE_KEY = "rit.settings.v1";
+
+const SETTINGS_CONTROL_CONFIG = [
+  { id: "confidence-level", type: "value", settingName: "confidenceLevel" },
+
+  { id: "round-cell-values", type: "checked", settingName: "roundCellValues" },
+
+  {
+    id: "compare-with-previous-column",
+    type: "checked",
+    settingName: "compareWithPreviousColumn",
+  },
+  {
+    id: "apply-previous-column-fill",
+    type: "checked",
+    settingName: "applyPreviousColumnFill",
+  },
+
+  { id: "write-banner-letters", type: "checked", settingName: "writeBannerLetters" },
+  { id: "respect-banner-structure", type: "checked", settingName: "respectBannerStructure" },
+  { id: "labels-on-left-side", type: "checked", settingName: "labelsOnLeftSide" },
+
+  { id: "compare-only-with-total", type: "checked", settingName: "compareOnlyWithTotal" },
+  {
+    id: "exclude-total-from-comparisons",
+    type: "checked",
+    settingName: "excludeTotalFromComparisons",
+  },
+
+  { id: "first-column-is-total", type: "checked", settingName: "firstColumnIsTotal" },
+  { id: "total-in-each-banner", type: "checked", settingName: "totalInEachBanner" },
+
+  { id: "significant-fill-color", type: "value", settingName: "significantFillColor" },
+  {
+    id: "lower-than-total-fill-color",
+    type: "value",
+    settingName: "lowerThanTotalFillColor",
+  },
+
+  {
+    id: "fill-only-total-comparisons",
+    type: "checked",
+    settingName: "fillOnlyTotalComparisons",
+  },
+
+  {
+    id: "exclude-small-bases",
+    type: "checked",
+    settingName: "excludeSmallBasesFromComparisons",
+  },
+  { id: "small-base-threshold", type: "number", settingName: "smallBaseThreshold" },
+  { id: "small-base-fill-color", type: "value", settingName: "smallBaseFillColor" },
+
+  { id: "settings-storage-mode", type: "value", settingName: "settingsStorageMode" },
+];
+
 /**
  * Initializes task pane events after Office is ready.
  *
@@ -53,6 +109,9 @@ Office.onReady((info) => {
   const detectMetricTypeButton = document.getElementById("detect-metric-type"); // Diagnostic detector button.
 
   initializeSettingsPanel();
+  loadSavedSettingsIntoPanel();
+  refreshSettingsPanelState();
+  initializeSettingsPersistence();
 
   if (calculateButton) {
     calculateButton.addEventListener("click", runSignificanceFromSelection);
@@ -700,6 +759,49 @@ function updateBannerCellMarker(rawValue, marker) {
  */
 function initializePreviousColumnComparisonSettings() {
   const previousColumnCheckbox = document.getElementById("compare-with-previous-column");
+  const firstColumnIsTotalCheckbox = document.getElementById("first-column-is-total");
+  const excludeTotalCheckbox = document.getElementById("exclude-total-from-comparisons");
+
+  if (previousColumnCheckbox) {
+    previousColumnCheckbox.addEventListener("change", refreshSettingsPanelState);
+  }
+
+  if (firstColumnIsTotalCheckbox) {
+    firstColumnIsTotalCheckbox.addEventListener("change", refreshSettingsPanelState);
+  }
+
+  if (excludeTotalCheckbox) {
+    excludeTotalCheckbox.addEventListener("change", refreshSettingsPanelState);
+  }
+
+  refreshSettingsPanelState();
+}
+
+function setStatusMessage(message) {
+  const statusPanel = document.getElementById("status-panel");
+  const outputElement = document.getElementById("significance-result");
+
+  if (statusPanel) {
+    statusPanel.style.display = "block";
+  }
+
+  if (outputElement) {
+    outputElement.textContent = message || "";
+  }
+}
+
+/**
+ * Refreshes dependent settings UI state after user changes or saved settings load.
+ */
+function refreshSettingsPanelState() {
+  refreshPreviousColumnComparisonState();
+}
+
+/**
+ * Applies Previous Column comparison UI rules.
+ */
+function refreshPreviousColumnComparisonState() {
+  const previousColumnCheckbox = document.getElementById("compare-with-previous-column");
   const previousColumnFillWrapper = document.getElementById("previous-column-fill-wrapper");
   const previousColumnFillCheckbox = document.getElementById("apply-previous-column-fill");
 
@@ -717,89 +819,196 @@ function initializePreviousColumnComparisonSettings() {
     return;
   }
 
-  const updatePreviousColumnUiState = () => {
-    const isPreviousColumnMode = previousColumnCheckbox.checked;
-    const firstColumnIsTotal = firstColumnIsTotalCheckbox
-      ? firstColumnIsTotalCheckbox.checked
-      : false;
+  const isPreviousColumnMode = previousColumnCheckbox.checked;
+  const firstColumnIsTotal = firstColumnIsTotalCheckbox
+    ? firstColumnIsTotalCheckbox.checked
+    : false;
 
-    if (previousColumnFillWrapper) {
-      previousColumnFillWrapper.style.display = isPreviousColumnMode ? "block" : "none";
+  if (previousColumnFillWrapper) {
+    previousColumnFillWrapper.style.display = isPreviousColumnMode ? "block" : "none";
+  }
+
+  if (!isPreviousColumnMode && previousColumnFillCheckbox) {
+    previousColumnFillCheckbox.checked = false;
+  }
+
+  if (writeBannerLettersCheckbox) {
+    if (isPreviousColumnMode) {
+      writeBannerLettersCheckbox.checked = false;
+      writeBannerLettersCheckbox.disabled = true;
+    } else {
+      writeBannerLettersCheckbox.disabled = false;
     }
+  }
 
-    if (!isPreviousColumnMode && previousColumnFillCheckbox) {
-      previousColumnFillCheckbox.checked = false;
+  if (compareOnlyWithTotalCheckbox) {
+    if (isPreviousColumnMode) {
+      compareOnlyWithTotalCheckbox.checked = false;
+      compareOnlyWithTotalCheckbox.disabled = true;
+    } else {
+      compareOnlyWithTotalCheckbox.disabled = false;
     }
+  }
 
-    if (writeBannerLettersCheckbox) {
-      if (isPreviousColumnMode) {
-        writeBannerLettersCheckbox.checked = false;
-        writeBannerLettersCheckbox.disabled = true;
-      } else {
-        writeBannerLettersCheckbox.disabled = false;
-      }
+  if (fillOnlyTotalComparisonsCheckbox) {
+    if (isPreviousColumnMode) {
+      fillOnlyTotalComparisonsCheckbox.checked = false;
+      fillOnlyTotalComparisonsCheckbox.disabled = true;
+    } else {
+      fillOnlyTotalComparisonsCheckbox.disabled = false;
     }
-
-    if (compareOnlyWithTotalCheckbox) {
-      if (isPreviousColumnMode) {
-        compareOnlyWithTotalCheckbox.checked = false;
-        compareOnlyWithTotalCheckbox.disabled = true;
-      } else {
-        compareOnlyWithTotalCheckbox.disabled = false;
-      }
-    }
-
-    if (fillOnlyTotalComparisonsCheckbox) {
-      if (isPreviousColumnMode) {
-        fillOnlyTotalComparisonsCheckbox.checked = false;
-        fillOnlyTotalComparisonsCheckbox.disabled = true;
-      } else {
-        fillOnlyTotalComparisonsCheckbox.disabled = false;
-      }
-    }
-
-    if (excludeTotalCheckbox) {
-      if (isPreviousColumnMode && !firstColumnIsTotal) {
-        excludeTotalCheckbox.checked = false;
-        excludeTotalCheckbox.disabled = true;
-      } else {
-        excludeTotalCheckbox.disabled = false;
-      }
-    }
-
-    if (warningElement) {
-      const shouldShowWarning =
-        isPreviousColumnMode &&
-        firstColumnIsTotal &&
-        excludeTotalCheckbox &&
-        !excludeTotalCheckbox.checked;
-
-      warningElement.style.display = shouldShowWarning ? "block" : "none";
-    }
-  };
-
-  previousColumnCheckbox.addEventListener("change", updatePreviousColumnUiState);
-
-  if (firstColumnIsTotalCheckbox) {
-    firstColumnIsTotalCheckbox.addEventListener("change", updatePreviousColumnUiState);
   }
 
   if (excludeTotalCheckbox) {
-    excludeTotalCheckbox.addEventListener("change", updatePreviousColumnUiState);
+    if (isPreviousColumnMode && !firstColumnIsTotal) {
+      excludeTotalCheckbox.checked = false;
+      excludeTotalCheckbox.disabled = true;
+    } else {
+      excludeTotalCheckbox.disabled = false;
+    }
   }
 
-  updatePreviousColumnUiState();
+  if (warningElement) {
+    const shouldShowWarning =
+      isPreviousColumnMode &&
+      firstColumnIsTotal &&
+      excludeTotalCheckbox &&
+      !excludeTotalCheckbox.checked;
+
+    warningElement.style.display = shouldShowWarning ? "block" : "none";
+  }
 }
 
-function setStatusMessage(message) {
-  const statusPanel = document.getElementById("status-panel");
-  const outputElement = document.getElementById("significance-result");
+/**
+ * Initializes local settings persistence.
+ *
+ * RULES:
+ * - settings-storage-mode = local: save all settings on every change.
+ * - settings-storage-mode = none: delete saved settings.
+ * - cloud is reserved for future implementation.
+ */
+function initializeSettingsPersistence() {
+  for (const controlConfig of SETTINGS_CONTROL_CONFIG) {
+    const element = document.getElementById(controlConfig.id);
 
-  if (statusPanel) {
-    statusPanel.style.display = "block";
+    if (!element) {
+      continue;
+    }
+
+    element.addEventListener("change", () => {
+      refreshSettingsPanelState();
+      handleSettingsPersistenceAfterChange();
+    });
+
+    element.addEventListener("input", () => {
+      if (element.type === "color" || element.type === "number") {
+        refreshSettingsPanelState();
+        handleSettingsPersistenceAfterChange();
+      }
+    });
+  }
+}
+
+/**
+ * Saves or clears settings depending on selected storage mode.
+ */
+function handleSettingsPersistenceAfterChange() {
+  const settings = readCalculationSettingsFromPanel();
+
+  if (settings.settingsStorageMode === "local") {
+    saveSettingsToLocalStorage(settings);
+    return;
   }
 
-  if (outputElement) {
-    outputElement.textContent = message || "";
+  if (settings.settingsStorageMode === "none") {
+    clearSavedLocalSettings();
+  }
+}
+
+/**
+ * Loads saved settings into the panel if local saving was enabled.
+ */
+function loadSavedSettingsIntoPanel() {
+  const savedSettings = readSettingsFromLocalStorage();
+
+  if (!savedSettings) {
+    return;
+  }
+
+  if (savedSettings.settingsStorageMode !== "local") {
+    return;
+  }
+
+  applySettingsToPanel(savedSettings);
+}
+
+/**
+ * Reads saved settings from localStorage.
+ */
+function readSettingsFromLocalStorage() {
+  try {
+    const rawSettings = localStorage.getItem(LOCAL_SETTINGS_STORAGE_KEY);
+
+    if (!rawSettings) {
+      return null;
+    }
+
+    return JSON.parse(rawSettings);
+  } catch (error) {
+    console.warn("Could not read saved RIT settings.", error);
+    return null;
+  }
+}
+
+/**
+ * Saves settings to localStorage.
+ */
+function saveSettingsToLocalStorage(settings) {
+  try {
+    localStorage.setItem(LOCAL_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch (error) {
+    console.warn("Could not save RIT settings.", error);
+  }
+}
+
+/**
+ * Clears saved local settings.
+ */
+function clearSavedLocalSettings() {
+  try {
+    localStorage.removeItem(LOCAL_SETTINGS_STORAGE_KEY);
+  } catch (error) {
+    console.warn("Could not clear saved RIT settings.", error);
+  }
+}
+
+/**
+ * Applies saved settings to task pane controls.
+ */
+function applySettingsToPanel(settings) {
+  for (const controlConfig of SETTINGS_CONTROL_CONFIG) {
+    const element = document.getElementById(controlConfig.id);
+
+    if (!element) {
+      continue;
+    }
+
+    const value = settings[controlConfig.settingName];
+
+    if (value === undefined || value === null) {
+      continue;
+    }
+
+    if (controlConfig.type === "checked") {
+      element.checked = Boolean(value);
+      continue;
+    }
+
+    if (controlConfig.type === "number") {
+      element.value = String(value);
+      continue;
+    }
+
+    element.value = String(value);
   }
 }
