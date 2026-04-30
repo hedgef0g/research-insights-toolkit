@@ -147,24 +147,38 @@
 
           <div class="settings-group">
             <label for="settings-storage-mode">Сохранять настройки...</label>
-            <select id="settings-storage-mode">
-              <option value="none" selected>Не сохранять</option>
-              <option value="local" disabled>Локально</option>
-              <option value="cloud" disabled>В облаке</option>
-            </select>
+
+            <div class="settings-storage-row">
+              <select id="settings-storage-mode">
+                <option value="none" selected>Не сохранять</option>
+                <option value="local">Локально</option>
+                <option value="cloud" disabled>В облаке</option>
+              </select>
+
+              <button type="button" id="reset-settings" class="settings-reset-button">Сброс</button>
+            </div>
           </div>
 
           <a href="#" id="help-link">Справка об использовании</a>
         </div>
       </section>
 
-      <div class="action-buttons-row">
-        <button id="calculate-significance" class="primary-action-button">Запустить</button>
-        <button id="clear-significance" class="secondary-action-button">Очистить значимости</button>
-      </div>
-      <section id="status-panel" class="status-panel" style="display: none">
-        <h4>Статус</h4>
-        <pre id="significance-result"></pre>
+      <section class="action-panel">
+        <div class="action-panel-header">
+          <h3>Расчёт значимости</h3>
+        </div>
+
+        <div class="action-buttons-row">
+          <button id="calculate-significance" class="primary-action-button">Запустить</button>
+          <button id="clear-significance" class="secondary-action-button">
+            Очистить значимости
+          </button>
+        </div>
+
+        <section id="status-panel" class="status-panel" style="display: none">
+          <h4>Статус</h4>
+          <pre id="significance-result"></pre>
+        </section>
       </section>
     </main>
   </body>

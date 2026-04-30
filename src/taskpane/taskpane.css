@@ -183,8 +183,8 @@ b {
   box-sizing: border-box;
   margin-top: 12px;
   padding: 10px 12px;
-  border: 1px solid #ddd;
-  border-radius: 8px;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
   background: #fafafa;
 }
 
@@ -212,16 +212,16 @@ b {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  margin: 12px 0;
+  margin: 0;
 }
 
 .action-buttons-row button {
   box-sizing: border-box;
-  white-space: nowrap;
 }
 
 .primary-action-button {
   flex: 0 0 auto;
+  white-space: nowrap;
   padding: 10px 18px;
   border: 1px solid #0078d4;
   border-radius: 8px;
@@ -243,7 +243,7 @@ b {
 }
 
 .secondary-action-button {
-  flex: 0 0 auto;
+  flex: 0 1 140px;
   padding: 6px 8px;
   border: none;
   background: transparent;
@@ -252,6 +252,10 @@ b {
   font-weight: 600;
   text-decoration: underline;
   cursor: pointer;
+  word-break: normal;
+  overflow-wrap: normal;
+  max-width: 140px;
+  line-height: 1.2;
 }
 
 .secondary-action-button:hover {
@@ -261,4 +265,51 @@ b {
 
 .secondary-action-button:active {
   color: #000;
+}
+
+.action-panel {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.action-panel-header h3 {
+  margin: 0 0 10px 0;
+  font-size: 15px;
+}
+
+.action-panel .action-buttons-row {
+  margin: 0;
+}
+
+.settings-storage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-storage-row select {
+  width: auto;
+  flex: 1 1 auto;
+  margin-bottom: 0;
+}
+
+.settings-reset-button {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border: 1px solid #bbb;
+  border-radius: 6px;
+  background: #fff;
+  color: #444;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-reset-button:hover {
+  background: #f3f3f3;
 }
