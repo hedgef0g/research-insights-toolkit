@@ -147,11 +147,16 @@
 
           <div class="settings-group">
             <label for="settings-storage-mode">Сохранять настройки...</label>
-            <select id="settings-storage-mode">
-              <option value="none" selected>Не сохранять</option>
-              <option value="local">Локально</option>
-              <option value="cloud" disabled>В облаке</option>
-            </select>
+
+            <div class="settings-storage-row">
+              <select id="settings-storage-mode">
+                <option value="none" selected>Не сохранять</option>
+                <option value="local">Локально</option>
+                <option value="cloud" disabled>В облаке</option>
+              </select>
+
+              <button type="button" id="reset-settings" class="settings-reset-button">Сброс</button>
+            </div>
           </div>
 
           <a href="#" id="help-link">Справка об использовании</a>

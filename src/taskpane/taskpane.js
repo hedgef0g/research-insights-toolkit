@@ -84,6 +84,36 @@ const SETTINGS_CONTROL_CONFIG = [
   { id: "settings-storage-mode", type: "value", settingName: "settingsStorageMode" },
 ];
 
+const DEFAULT_CALCULATION_SETTINGS = {
+  confidenceLevel: "95",
+
+  roundCellValues: false,
+
+  compareWithPreviousColumn: false,
+  applyPreviousColumnFill: false,
+
+  writeBannerLetters: false,
+  respectBannerStructure: false,
+  labelsOnLeftSide: false,
+
+  compareOnlyWithTotal: false,
+  excludeTotalFromComparisons: false,
+
+  firstColumnIsTotal: false,
+  totalInEachBanner: false,
+
+  significantFillColor: "#E2F0D9",
+  lowerThanTotalFillColor: "#FCE4D6",
+
+  fillOnlyTotalComparisons: false,
+
+  excludeSmallBasesFromComparisons: false,
+  smallBaseThreshold: 50,
+  smallBaseFillColor: "#D0D0D0",
+
+  settingsStorageMode: "none",
+};
+
 /**
  * Initializes task pane events after Office is ready.
  *
@@ -584,6 +614,8 @@ function initializeSettingsPanel() {
   bindMutuallyExclusiveCheckboxes("first-column-is-total", "total-in-each-banner");
 
   initializePreviousColumnComparisonSettings();
+  initializeSettingsResetButton();
+  initializeSettingsToggle();
 
   const helpLink = document.getElementById("help-link");
 
@@ -596,8 +628,6 @@ function initializeSettingsPanel() {
       );
     });
   }
-
-  initializeSettingsToggle();
 }
 
 /**
@@ -1011,4 +1041,30 @@ function applySettingsToPanel(settings) {
 
     element.value = String(value);
   }
+}
+
+/**
+ * Initializes Reset settings button.
+ */
+function initializeSettingsResetButton() {
+  const resetButton = document.getElementById("reset-settings");
+
+  if (!resetButton) {
+    return;
+  }
+
+  resetButton.addEventListener("click", () => {
+    resetSettingsToDefaults();
+  });
+}
+
+/**
+ * Resets UI settings to defaults and clears saved local settings.
+ */
+function resetSettingsToDefaults() {
+  applySettingsToPanel(DEFAULT_CALCULATION_SETTINGS);
+  clearSavedLocalSettings();
+  refreshSettingsPanelState();
+
+  setStatusMessage("Настройки сброшены к значениям по умолчанию.");
 }
