@@ -88,7 +88,7 @@ export function detectBannerStructure(bannerContext, settings = {}) {
 
   markGlobalTotalColumn(columnDescriptors, globalTotalColumnIndex);
 
-  const groups = buildGroupsFromColumnDescriptors(columnDescriptors);
+  const groups = buildGroupsFromColumnDescriptors(columnDescriptors, settings);
 
   const waveGroups = groups.filter((group) => group.recommendedComparisonMode === "previousColumn");
 
@@ -266,12 +266,16 @@ function buildColumnDescriptors({ selectedColumnCount, lowerBannerRow, groupLeve
 /**
  * Builds group objects from descriptors.
  */
-function buildGroupsFromColumnDescriptors(columnDescriptors) {
+function buildGroupsFromColumnDescriptors(columnDescriptors, calculationSettings = {}) {
   const groupsByKey = new Map();
 
   for (const descriptor of columnDescriptors) {
     if (!groupsByKey.has(descriptor.comparisonGroupKey)) {
-      const isWaveGroup = isWaveGroupLabel(descriptor.comparisonGroupLabel);
+      const shouldAutoDetectWaveBanners =
+        calculationSettings && calculationSettings.autoDetectWaveBanners;
+
+      const isWaveGroup =
+        shouldAutoDetectWaveBanners && isWaveGroupLabel(descriptor.comparisonGroupLabel);
 
       groupsByKey.set(descriptor.comparisonGroupKey, {
         groupKey: descriptor.comparisonGroupKey,
@@ -293,7 +297,7 @@ function buildGroupsFromColumnDescriptors(columnDescriptors) {
 
     group.columnIndexes.push(descriptor.columnIndex);
 
-    if (descriptor.isLocalTotal) {
+    if (descriptor.isTotal && descriptor.totalType !== "global") {
       group.localTotalColumnIndexes.push(descriptor.columnIndex);
       group.hasLocalTotal = true;
     }

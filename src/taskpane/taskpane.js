@@ -61,6 +61,29 @@ function formatBannerUserMessages(bannerStructure) {
   return ["Сообщения:", ...visibleMessages.map((message) => `- ${message.text}`)].join("\n");
 }
 
+function formatBannerUserMessagesExcludingCodes(bannerStructure, excludedCodes = []) {
+  if (!bannerStructure || !bannerStructure.messages) {
+    return "";
+  }
+
+  const excludedCodeSet = new Set(excludedCodes);
+
+  const visibleMessages = bannerStructure.messages.filter(
+    (message) =>
+      USER_VISIBLE_BANNER_MESSAGE_CODES.has(message.code) && !excludedCodeSet.has(message.code)
+  );
+
+  if (visibleMessages.length === 0) {
+    return "";
+  }
+
+  if (visibleMessages.length === 1) {
+    return visibleMessages[0].text;
+  }
+
+  return ["Сообщения:", ...visibleMessages.map((message) => `- ${message.text}`)].join("\n");
+}
+
 const LOCAL_SETTINGS_STORAGE_KEY = "rit.settings.v1";
 
 const SETTINGS_CONTROL_CONFIG = [
@@ -87,6 +110,11 @@ const SETTINGS_CONTROL_CONFIG = [
 
   { id: "write-banner-letters", type: "checked", settingName: "writeBannerLetters" },
   { id: "respect-banner-structure", type: "checked", settingName: "respectBannerStructure" },
+  {
+    id: "auto-detect-wave-banners",
+    type: "checked",
+    settingName: "autoDetectWaveBanners",
+  },
   { id: "labels-on-left-side", type: "checked", settingName: "labelsOnLeftSide" },
 
   { id: "compare-only-with-total", type: "checked", settingName: "compareOnlyWithTotal" },
@@ -134,6 +162,7 @@ const DEFAULT_CALCULATION_SETTINGS = {
 
   writeBannerLetters: false,
   respectBannerStructure: false,
+  autoDetectWaveBanners: false,
   labelsOnLeftSide: false,
 
   compareOnlyWithTotal: false,
@@ -175,6 +204,9 @@ const SETTINGS_TOOLTIPS = {
 
   "respect-banner-structure":
     "Анализировать структуру баннера над выделенным диапазоном. Это позволяет сравнивать колонки только внутри групп, определять локальные и глобальные Total, а также распознавать волновые баннеры.",
+
+  "auto-detect-wave-banners":
+    "Автоматически распознавать волновые группы в баннере, например Wave, Period, Волна, Период, и применять к ним сравнение с предыдущей колонкой. Обычные группы при этом продолжают сравниваться внутри группы обычным способом.",
 
   "labels-on-left-side":
     "Искать лейблы строк не рядом с выделенным диапазоном, а в самых левых колонках листа. Полезно для широких таблиц, где данные выделены справа, а названия строк находятся далеко слева.",
@@ -339,8 +371,6 @@ async function runSignificanceFromSelection() {
 
     await context.sync();
 
-    console.timeEnd("RIT read selected values");
-
     const selectedValues = selectedRange.values;
     const selectedText = selectedRange.text;
 
@@ -428,14 +458,18 @@ async function runSignificanceFromSelection() {
         blockCalculationSettings
       );
 
-      const bannerStructureErrorMessage = getFirstBannerStructureError(bannerStructure);
+      const bannerStructureError = getFirstBannerStructureError(bannerStructure);
 
-      if (bannerStructureErrorMessage) {
-        const statusMessages = [bannerStructureErrorMessage];
+      if (bannerStructureError) {
+        const statusMessages = [bannerStructureError.text];
 
-        if (bannerStructure) {
+        const bannerUserMessages = formatBannerUserMessagesExcludingCodes(bannerStructure, [
+          bannerStructureError.code,
+        ]);
+
+        if (bannerUserMessages) {
           statusMessages.push("");
-          statusMessages.push(formatBannerDetectionDiagnostics(bannerStructure));
+          statusMessages.push(bannerUserMessages);
         }
 
         setStatusMessage(statusMessages.join("\n"));
@@ -452,7 +486,6 @@ async function runSignificanceFromSelection() {
         blockCalculationSettings
       );
     }
-    console.timeEnd("RIT calculations");
 
     const allowedMarkerRows = getAllowedMarkerRowIndexes(calculationBlocks);
 
@@ -480,7 +513,6 @@ async function runSignificanceFromSelection() {
     }
 
     await context.sync();
-    console.timeEnd("RIT final context sync");
 
     const statusMessages = [`Расчёт выполнен. Обработано блоков: ${calculationBlocks.length}.`];
 
@@ -492,7 +524,6 @@ async function runSignificanceFromSelection() {
     }
 
     setStatusMessage(statusMessages.join("\n"));
-    console.timeEnd("RIT total run");
   });
 }
 
@@ -1202,6 +1233,7 @@ function readCalculationSettingsFromPanel() {
 
     writeBannerLetters: getCheckboxValue("write-banner-letters"),
     respectBannerStructure: getCheckboxValue("respect-banner-structure"),
+    autoDetectWaveBanners: getCheckboxValue("auto-detect-wave-banners"),
     labelsOnLeftSide: getCheckboxValue("labels-on-left-side"),
 
     compareOnlyWithTotal: getCheckboxValue("compare-only-with-total"),
@@ -1851,15 +1883,24 @@ function resetSettingsToDefaults() {
  */
 function refreshBannerStructureSettingsState() {
   const respectBannerStructureCheckbox = document.getElementById("respect-banner-structure");
+  if (!respectBannerStructureCheckbox) {
+    return;
+  }
+  const respectBannerStructure = respectBannerStructureCheckbox.checked;
+
+  const autoDetectWaveBannersCheckbox = document.getElementById("auto-detect-wave-banners");
+  const autoDetectWaveBannersWrapper = document.getElementById("auto-detect-wave-banners-wrapper");
 
   const firstColumnIsTotalCheckbox = document.getElementById("first-column-is-total");
   const totalInEachBannerCheckbox = document.getElementById("total-in-each-banner");
 
-  if (!respectBannerStructureCheckbox) {
-    return;
+  if (autoDetectWaveBannersWrapper) {
+    autoDetectWaveBannersWrapper.style.display = respectBannerStructure ? "" : "none";
   }
 
-  const respectBannerStructure = respectBannerStructureCheckbox.checked;
+  if (autoDetectWaveBannersCheckbox && !respectBannerStructure) {
+    autoDetectWaveBannersCheckbox.checked = false;
+  }
 
   if (firstColumnIsTotalCheckbox) {
     if (respectBannerStructure) {
