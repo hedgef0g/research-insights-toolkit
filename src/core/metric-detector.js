@@ -41,7 +41,7 @@ function doesKeywordMatchLabel(normalizedLabel, rawKeyword) {
  * Short abbreviations are matched only exactly.
  * This prevents false positives like:
  * - "мужской" matching "ско"
-*/
+ */
 function labelContainsAnyKeyword(normalizedLabel, keywords) {
   return keywords.some((keyword) => doesKeywordMatchLabel(normalizedLabel, keyword));
 }
@@ -174,6 +174,24 @@ export function formatMetricDetectionDiagnostics(detectionResult) {
   }
 
   return outputLines.join("\n");
+}
+
+/**
+ * Searches pending proportion row indexes for the first row matching targetType.
+ *
+ * PURPOSE:
+ * Used by extended NPS detection to locate Detractors and Promoters that were
+ * already buffered as proportion rows before the NPS row was encountered.
+ */
+function findRowTypeInPending(rowDiagnostics, pendingRows, targetType) {
+  for (const rowIndex of pendingRows) {
+    const rowDiagnostic = rowDiagnostics[rowIndex];
+
+    if (rowDiagnostic?.rowType === targetType) {
+      return rowIndex;
+    }
+  }
+  return null;
 }
 
 /**
@@ -341,6 +359,43 @@ export function buildCalculationBlocks(detectionResult) {
       }
     }
 
+    // 6. Extended NPS — NPS row follows Detractors and Promoters already buffered as proportion rows
+    // Handles: 1–10, Bottom-3, Mid-4, Top-3, Detractors, [Neutral], Promoters, NPS, BASE
+    if (currentRowType === "nps") {
+      const detractorsIdx = findRowTypeInPending(
+        rowDiagnostics,
+        pendingProportionRows,
+        "detractors"
+      );
+      const promotersIdx = findRowTypeInPending(rowDiagnostics, pendingProportionRows, "promoters");
+
+      if (detractorsIdx !== null && promotersIdx !== null) {
+        const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, rowIndex);
+
+        if (baseRowIndex !== null) {
+          // All buffered rows, including Detractors and Promoters, receive proportion markers.
+          calculationBlocks.push({
+            metricType: "proportion",
+            valueRowIndexes: [...pendingProportionRows],
+            baseRowIndex,
+          });
+          pendingProportionRows.length = 0;
+
+          // NPS row uses NPS significance logic; Detractors and Promoters are its support inputs.
+          calculationBlocks.push({
+            metricType: "npsStructure",
+            valueRowIndex: rowIndex,
+            promotersRowIndex: promotersIdx,
+            detractorsRowIndex: detractorsIdx,
+            baseRowIndex,
+          });
+
+          rowIndex++;
+          continue;
+        }
+      }
+    }
+
     rowIndex++;
   }
 
@@ -360,11 +415,20 @@ export function buildCalculationBlocks(detectionResult) {
  * Checks whether row can be treated as a proportion value row.
  *
  * PURPOSE:
- * Prevent service rows like Promoters, Detractors, SD, Variance, and Base
- * from being calculated as ordinary proportions.
+ * Prevent service rows like SD, Variance, and Base from being calculated
+ * as ordinary proportions.
+ *
+ * Promoters and Detractors are treated as ordinary proportion rows and can also
+ * serve as support rows for NPS calculations.
  */
 function isProportionValueRowType(rowType) {
-  return rowType === "proportion" || rowType === "empty" || rowType === "unknownText";
+  return (
+    rowType === "proportion" ||
+    rowType === "promoters" ||
+    rowType === "detractors" ||
+    rowType === "empty" ||
+    rowType === "unknownText"
+  );
 }
 
 /**
