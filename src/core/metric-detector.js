@@ -41,7 +41,7 @@ function doesKeywordMatchLabel(normalizedLabel, rawKeyword) {
  * Short abbreviations are matched only exactly.
  * This prevents false positives like:
  * - "мужской" matching "ско"
-*/
+ */
 function labelContainsAnyKeyword(normalizedLabel, keywords) {
   return keywords.some((keyword) => doesKeywordMatchLabel(normalizedLabel, keyword));
 }
@@ -177,6 +177,24 @@ export function formatMetricDetectionDiagnostics(detectionResult) {
 }
 
 /**
+ * Searches pending proportion row indexes for the first row matching targetType.
+ *
+ * PURPOSE:
+ * Used by extended NPS detection to locate Detractors and Promoters that were
+ * already buffered as proportion rows before the NPS row was encountered.
+ */
+function findRowTypeInPending(rowDiagnostics, pendingRows, targetType) {
+  for (const rowIndex of pendingRows) {
+    const rowDiagnostic = rowDiagnostics[rowIndex];
+
+    if (rowDiagnostic?.rowType === targetType) {
+      return rowIndex;
+    }
+  }
+  return null;
+}
+
+/**
  * Finds the nearest base row below a given row.
  *
  * PURPOSE:
@@ -198,6 +216,31 @@ function findNextBaseRowIndex(rowDiagnostics, startRowIndex) {
   }
 
   return null;
+}
+
+/**
+ * Checks whether a normalized label refers to the NPS Neutral/Passive segment.
+ *
+ * PURPOSE:
+ * Identify the optional middle row in NPS-first format 2 (NPS / Promoters / Neutral / Detractors / BASE).
+ * Neutral has no dictionary entry and classifies as unknownText, so we check the label directly
+ * to avoid matching arbitrary unknownText rows.
+ */
+function isNeutralLabel(normalizedLabel) {
+  if (!normalizedLabel) {
+    return false;
+  }
+
+  const neutralKeywords = [
+    "neutral",
+    "neutrals",
+    "пассивные",
+    "пассивный",
+    "нейтральные",
+    "нейтральный",
+  ];
+
+  return neutralKeywords.some((keyword) => doesKeywordMatchLabel(normalizedLabel, keyword));
 }
 
 /**
@@ -272,39 +315,84 @@ export function buildCalculationBlocks(detectionResult) {
       }
     }
 
-    // 4. Блок NPS Структура (NPS + Промоутеры + Детракторы)
+    // 4. NPS-first format 1: NPS / Promoters / Detractors / BASE
     if (
       currentRowType === "nps" &&
-      rowIndex + 2 < rowDiagnostics.length &&
+      rowIndex + 3 < rowDiagnostics.length &&
       rowDiagnostics[rowIndex + 1].rowType === "promoters" &&
-      rowDiagnostics[rowIndex + 2].rowType === "detractors"
+      rowDiagnostics[rowIndex + 2].rowType === "detractors" &&
+      rowDiagnostics[rowIndex + 3].rowType === "base"
     ) {
-      const promotersRowIndex = rowIndex + 1;
-      const detractorsRowIndex = rowIndex + 2;
-      const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, detractorsRowIndex);
+      const promotersIdx = rowIndex + 1;
+      const detractorsIdx = rowIndex + 2;
+      const baseRowIndex = rowIndex + 3;
 
-      if (baseRowIndex !== null) {
+      if (pendingProportionRows.length > 0) {
         calculationBlocks.push({
-          metricType: "npsStructure",
-          valueRowIndex: rowIndex,
-          promotersRowIndex,
-          detractorsRowIndex,
+          metricType: "proportion",
+          valueRowIndexes: [...pendingProportionRows],
           baseRowIndex,
         });
-
-        if (pendingProportionRows.length > 0) {
-          calculationBlocks.push({
-            metricType: "proportion",
-            valueRowIndexes: [...pendingProportionRows],
-            baseRowIndex,
-          });
-          pendingProportionRows.length = 0;
-        }
-
-        // ИСПРАВЛЕНИЕ: Прыгаем только через строки текущего блока (NPS + Пром + Детр)
-        rowIndex = detractorsRowIndex + 1;
-        continue;
+        pendingProportionRows.length = 0;
       }
+
+      calculationBlocks.push({
+        metricType: "proportion",
+        valueRowIndexes: [promotersIdx, detractorsIdx],
+        baseRowIndex,
+      });
+
+      calculationBlocks.push({
+        metricType: "npsStructure",
+        valueRowIndex: rowIndex,
+        promotersRowIndex: promotersIdx,
+        detractorsRowIndex: detractorsIdx,
+        baseRowIndex,
+      });
+
+      rowIndex = baseRowIndex + 1;
+      continue;
+    }
+
+    // 4b. NPS-first format 2: NPS / Promoters / Neutral / Detractors / BASE
+    if (
+      currentRowType === "nps" &&
+      rowIndex + 4 < rowDiagnostics.length &&
+      rowDiagnostics[rowIndex + 1].rowType === "promoters" &&
+      isNeutralLabel(rowDiagnostics[rowIndex + 2].normalizedLabel) &&
+      rowDiagnostics[rowIndex + 3].rowType === "detractors" &&
+      rowDiagnostics[rowIndex + 4].rowType === "base"
+    ) {
+      const promotersIdx = rowIndex + 1;
+      const neutralIdx = rowIndex + 2;
+      const detractorsIdx = rowIndex + 3;
+      const baseRowIndex = rowIndex + 4;
+
+      if (pendingProportionRows.length > 0) {
+        calculationBlocks.push({
+          metricType: "proportion",
+          valueRowIndexes: [...pendingProportionRows],
+          baseRowIndex,
+        });
+        pendingProportionRows.length = 0;
+      }
+
+      calculationBlocks.push({
+        metricType: "proportion",
+        valueRowIndexes: [promotersIdx, neutralIdx, detractorsIdx],
+        baseRowIndex,
+      });
+
+      calculationBlocks.push({
+        metricType: "npsStructure",
+        valueRowIndex: rowIndex,
+        promotersRowIndex: promotersIdx,
+        detractorsRowIndex: detractorsIdx,
+        baseRowIndex,
+      });
+
+      rowIndex = baseRowIndex + 1;
+      continue;
     }
 
     // 5. Блок NPS Spread (NPS + Разброс)
@@ -341,6 +429,43 @@ export function buildCalculationBlocks(detectionResult) {
       }
     }
 
+    // 6. Extended NPS — NPS row follows Detractors and Promoters already buffered as proportion rows
+    // Handles: 1–10, Bottom-3, Mid-4, Top-3, Detractors, [Neutral], Promoters, NPS, BASE
+    if (currentRowType === "nps") {
+      const detractorsIdx = findRowTypeInPending(
+        rowDiagnostics,
+        pendingProportionRows,
+        "detractors"
+      );
+      const promotersIdx = findRowTypeInPending(rowDiagnostics, pendingProportionRows, "promoters");
+
+      if (detractorsIdx !== null && promotersIdx !== null) {
+        const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, rowIndex);
+
+        if (baseRowIndex !== null) {
+          // All buffered rows, including Detractors and Promoters, receive proportion markers.
+          calculationBlocks.push({
+            metricType: "proportion",
+            valueRowIndexes: [...pendingProportionRows],
+            baseRowIndex,
+          });
+          pendingProportionRows.length = 0;
+
+          // NPS row uses NPS significance logic; Detractors and Promoters are its support inputs.
+          calculationBlocks.push({
+            metricType: "npsStructure",
+            valueRowIndex: rowIndex,
+            promotersRowIndex: promotersIdx,
+            detractorsRowIndex: detractorsIdx,
+            baseRowIndex,
+          });
+
+          rowIndex++;
+          continue;
+        }
+      }
+    }
+
     rowIndex++;
   }
 
@@ -360,11 +485,20 @@ export function buildCalculationBlocks(detectionResult) {
  * Checks whether row can be treated as a proportion value row.
  *
  * PURPOSE:
- * Prevent service rows like Promoters, Detractors, SD, Variance, and Base
- * from being calculated as ordinary proportions.
+ * Prevent service rows like SD, Variance, and Base from being calculated
+ * as ordinary proportions.
+ *
+ * Promoters and Detractors are treated as ordinary proportion rows and can also
+ * serve as support rows for NPS calculations.
  */
 function isProportionValueRowType(rowType) {
-  return rowType === "proportion" || rowType === "empty" || rowType === "unknownText";
+  return (
+    rowType === "proportion" ||
+    rowType === "promoters" ||
+    rowType === "detractors" ||
+    rowType === "empty" ||
+    rowType === "unknownText"
+  );
 }
 
 /**
@@ -381,7 +515,6 @@ function isProportionValueRowType(rowType) {
  * Markers are NOT allowed in:
  * - base rows
  * - SD / variance rows
- * - promoters / detractors rows
  */
 export function getAllowedMarkerRowIndexes(calculationBlocks) {
   const allowedMarkerRows = new Set(); // Rows where marker letters may be written.
