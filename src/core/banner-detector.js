@@ -19,22 +19,42 @@
  * - depend on Office.js.
  */
 
-const TOTAL_LABEL_KEYWORDS = ["total", "итого", "всего", "all", "overall"];
-const WAVE_GROUP_LABEL_KEYWORDS = [
-  "wave",
-  "waves",
-  "волна",
-  "волны",
-  "period",
-  "periods",
-  "период",
-  "периоды",
-  "замер",
-  "замеры",
-];
+import { BANNER_DICTIONARY } from "./config/dictionary.config";
+
+const TOTAL_LABEL_KEYWORDS = BANNER_DICTIONARY.totalLabels;
+const WAVE_GROUP_LABEL_KEYWORDS = BANNER_DICTIONARY.waveGroupLabels;
 
 const DEFAULT_GROUP_KEY = "group:default";
 const DEFAULT_GROUP_LABEL = "Default";
+
+const BANNER_MODE = {
+  ONE_LEVEL: "oneLevel",
+  TWO_LEVEL: "twoLevel",
+  FALLBACK: "fallback",
+};
+
+const MESSAGE_SEVERITY = {
+  DEBUG: "debug",
+  INFO: "info",
+  WARNING: "warning",
+  ERROR: "error",
+};
+
+const TOTAL_TYPE = {
+  LOCAL: "local",
+  GLOBAL: "global",
+};
+
+const GROUP_SEMANTIC_TYPE = {
+  DEFAULT: "default",
+  WAVE: "wave",
+};
+
+const RECOMMENDED_COMPARISON_MODE = {
+  DEFAULT: "default",
+  PREVIOUS_COLUMN: "previousColumn",
+  MIXED: "mixed",
+};
 
 /**
  * Main banner detection entry point.
@@ -49,7 +69,7 @@ export function detectBannerStructure(bannerContext, settings = {}) {
   if (!selectedColumnCount || selectedColumnCount < 1) {
     return createFallbackBannerStructure(selectedColumnCount, [
       createBannerMessage(
-        "warning",
+        MESSAGE_SEVERITY.WARNING,
         "BANNER_EMPTY_SELECTION",
         "Баннер: не удалось определить количество колонок выделения."
       ),
@@ -59,7 +79,7 @@ export function detectBannerStructure(bannerContext, settings = {}) {
   if (!lowerBannerRow || lowerBannerRow.length === 0) {
     return createFallbackBannerStructure(selectedColumnCount, [
       createBannerMessage(
-        "warning",
+        MESSAGE_SEVERITY.WARNING,
         "BANNER_LOWER_LEVEL_NOT_FOUND",
         "Баннер: строка непосредственно над выделением не найдена. Используется fallback-группа."
       ),
@@ -90,12 +110,14 @@ export function detectBannerStructure(bannerContext, settings = {}) {
 
   const groups = buildGroupsFromColumnDescriptors(columnDescriptors, settings);
 
-  const waveGroups = groups.filter((group) => group.recommendedComparisonMode === "previousColumn");
+  const waveGroups = groups.filter(
+    (group) => group.recommendedComparisonMode === RECOMMENDED_COMPARISON_MODE.PREVIOUS_COLUMN
+  );
 
   if (waveGroups.length > 0) {
     messages.push(
       createBannerMessage(
-        "info",
+        MESSAGE_SEVERITY.INFO,
         "BANNER_WAVE_GROUPS_DETECTED",
         `Баннер: обнаружены волновые группы: ${waveGroups.map((group) => group.label).join(", ")}.`
       )
@@ -106,11 +128,11 @@ export function detectBannerStructure(bannerContext, settings = {}) {
     .filter((descriptor) => descriptor.isTotal)
     .map((descriptor) => descriptor.columnIndex);
 
-  const mode = groupLevelResult.groupLevel ? "twoLevel" : "oneLevel";
+  const mode = groupLevelResult.groupLevel ? BANNER_MODE.TWO_LEVEL : BANNER_MODE.ONE_LEVEL;
 
   messages.push(
     createBannerMessage(
-      "debug",
+      MESSAGE_SEVERITY.DEBUG,
       "BANNER_DETECTED",
       formatBannerDetectedMessage({
         mode,
@@ -129,7 +151,10 @@ export function detectBannerStructure(bannerContext, settings = {}) {
     globalTotalColumnIndex,
     totalColumnIndexes,
     hasWaveGroups: waveGroups.length > 0,
-    recommendedComparisonMode: waveGroups.length > 0 ? "mixed" : "default",
+    recommendedComparisonMode:
+      waveGroups.length > 0
+        ? RECOMMENDED_COMPARISON_MODE.MIXED
+        : RECOMMENDED_COMPARISON_MODE.DEFAULT,
     messages,
   };
 }
@@ -247,7 +272,7 @@ function buildColumnDescriptors({ selectedColumnCount, lowerBannerRow, groupLeve
       comparisonGroupLabel: groupLevel ? groupLabel : DEFAULT_GROUP_LABEL,
 
       isTotal,
-      totalType: isTotal ? "local" : null,
+      totalType: isTotal ? TOTAL_TYPE.LOCAL : null,
 
       isGlobalTotal: false,
       isLocalTotal: isTotal,
@@ -288,8 +313,11 @@ function buildGroupsFromColumnDescriptors(columnDescriptors, calculationSettings
         localTotalColumnIndexes: [],
         hasLocalTotal: false,
 
-        semanticType: isWaveGroup ? "wave" : "default",
-        recommendedComparisonMode: isWaveGroup ? "previousColumn" : "default",
+        semanticType: isWaveGroup ? GROUP_SEMANTIC_TYPE.WAVE : GROUP_SEMANTIC_TYPE.DEFAULT,
+
+        recommendedComparisonMode: isWaveGroup
+          ? RECOMMENDED_COMPARISON_MODE.PREVIOUS_COLUMN
+          : RECOMMENDED_COMPARISON_MODE.DEFAULT,
       });
     }
 
@@ -297,7 +325,7 @@ function buildGroupsFromColumnDescriptors(columnDescriptors, calculationSettings
 
     group.columnIndexes.push(descriptor.columnIndex);
 
-    if (descriptor.isTotal && descriptor.totalType !== "global") {
+    if (descriptor.isTotal && descriptor.totalType !== TOTAL_TYPE.GLOBAL) {
       group.localTotalColumnIndexes.push(descriptor.columnIndex);
       group.hasLocalTotal = true;
     }
@@ -321,7 +349,7 @@ function detectMeaningfulGroupLevel(upperScanRows, lowerBannerRow, selectedColum
     return {
       groupLevel: null,
       message: createBannerMessage(
-        "debug",
+        MESSAGE_SEVERITY.DEBUG,
         "BANNER_ONE_LEVEL_FALLBACK",
         "Баннер: верхний уровень групп не найден. Используется один уровень баннера."
       ),
@@ -356,7 +384,7 @@ function detectMeaningfulGroupLevel(upperScanRows, lowerBannerRow, selectedColum
   return {
     groupLevel: null,
     message: createBannerMessage(
-      "info",
+      MESSAGE_SEVERITY.INFO,
       "BANNER_ONE_LEVEL_FALLBACK",
       "Баннер: верхний уровень групп не найден. Используется один уровень баннера."
     ),
@@ -410,7 +438,7 @@ function detectReconstructedSpanGroupLevel(
       detectionMethod: "reconstructedSpan",
     },
     message: createBannerMessage(
-      "info",
+      MESSAGE_SEVERITY.INFO,
       "BANNER_RECONSTRUCTED_SPAN_LEVEL_FOUND",
       `Баннер: найден верхний уровень групп по merged-like span на строке ${rowIndex + 1} над нижним уровнем.`
     ),
@@ -491,7 +519,7 @@ function createFallbackBannerStructure(selectedColumnCount, messages = []) {
 
   return {
     isDetected: false,
-    mode: "fallback",
+    mode: BANNER_MODE.FALLBACK,
     columnDescriptors,
     groups: [
       {
@@ -748,7 +776,7 @@ function detectRepeatedLabelGroupLevelInRow(row, selectedColumnCount, rowIndex) 
       detectionMethod: "repeatedLabels",
     },
     message: createBannerMessage(
-      "info",
+      MESSAGE_SEVERITY.INFO,
       "BANNER_REPEATED_GROUP_LEVEL_FOUND",
       `Баннер: найден верхний уровень групп по повторяющимся значениям на строке ${rowIndex + 1} над нижним уровнем.`
     ),
@@ -813,7 +841,7 @@ function markGlobalTotalColumn(columnDescriptors, globalTotalColumnIndex) {
   }
 
   descriptor.isTotal = true;
-  descriptor.totalType = "global";
+  descriptor.totalType = TOTAL_TYPE.GLOBAL;
 
   descriptor.isGlobalTotal = true;
   descriptor.isLocalTotal = false;

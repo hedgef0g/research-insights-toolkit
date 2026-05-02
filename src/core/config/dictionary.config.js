@@ -62,3 +62,20 @@ export const METRIC_DICTIONARY = [
     keywords: ["%", "percent", "percentage", "share", "доля", "процент", "проценты"],
   },
 ];
+
+export const BANNER_DICTIONARY = {
+  totalLabels: ["total", "итого", "всего", "all", "overall"],
+
+  waveGroupLabels: [
+    "wave",
+    "waves",
+    "волна",
+    "волны",
+    "period",
+    "periods",
+    "период",
+    "периоды",
+    "замер",
+    "замеры",
+  ],
+};
