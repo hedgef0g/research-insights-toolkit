@@ -219,6 +219,31 @@ function findNextBaseRowIndex(rowDiagnostics, startRowIndex) {
 }
 
 /**
+ * Checks whether a normalized label refers to the NPS Neutral/Passive segment.
+ *
+ * PURPOSE:
+ * Identify the optional middle row in NPS-first format 2 (NPS / Promoters / Neutral / Detractors / BASE).
+ * Neutral has no dictionary entry and classifies as unknownText, so we check the label directly
+ * to avoid matching arbitrary unknownText rows.
+ */
+function isNeutralLabel(normalizedLabel) {
+  if (!normalizedLabel) {
+    return false;
+  }
+
+  const neutralKeywords = [
+    "neutral",
+    "neutrals",
+    "пассивные",
+    "пассивный",
+    "нейтральные",
+    "нейтральный",
+  ];
+
+  return neutralKeywords.some((keyword) => doesKeywordMatchLabel(normalizedLabel, keyword));
+}
+
+/**
  * Builds calculation blocks from detected row labels.
  *
  * PURPOSE:
@@ -290,39 +315,84 @@ export function buildCalculationBlocks(detectionResult) {
       }
     }
 
-    // 4. Блок NPS Структура (NPS + Промоутеры + Детракторы)
+    // 4. NPS-first format 1: NPS / Promoters / Detractors / BASE
     if (
       currentRowType === "nps" &&
-      rowIndex + 2 < rowDiagnostics.length &&
+      rowIndex + 3 < rowDiagnostics.length &&
       rowDiagnostics[rowIndex + 1].rowType === "promoters" &&
-      rowDiagnostics[rowIndex + 2].rowType === "detractors"
+      rowDiagnostics[rowIndex + 2].rowType === "detractors" &&
+      rowDiagnostics[rowIndex + 3].rowType === "base"
     ) {
-      const promotersRowIndex = rowIndex + 1;
-      const detractorsRowIndex = rowIndex + 2;
-      const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, detractorsRowIndex);
+      const promotersIdx = rowIndex + 1;
+      const detractorsIdx = rowIndex + 2;
+      const baseRowIndex = rowIndex + 3;
 
-      if (baseRowIndex !== null) {
+      if (pendingProportionRows.length > 0) {
         calculationBlocks.push({
-          metricType: "npsStructure",
-          valueRowIndex: rowIndex,
-          promotersRowIndex,
-          detractorsRowIndex,
+          metricType: "proportion",
+          valueRowIndexes: [...pendingProportionRows],
           baseRowIndex,
         });
-
-        if (pendingProportionRows.length > 0) {
-          calculationBlocks.push({
-            metricType: "proportion",
-            valueRowIndexes: [...pendingProportionRows],
-            baseRowIndex,
-          });
-          pendingProportionRows.length = 0;
-        }
-
-        // ИСПРАВЛЕНИЕ: Прыгаем только через строки текущего блока (NPS + Пром + Детр)
-        rowIndex = detractorsRowIndex + 1;
-        continue;
+        pendingProportionRows.length = 0;
       }
+
+      calculationBlocks.push({
+        metricType: "proportion",
+        valueRowIndexes: [promotersIdx, detractorsIdx],
+        baseRowIndex,
+      });
+
+      calculationBlocks.push({
+        metricType: "npsStructure",
+        valueRowIndex: rowIndex,
+        promotersRowIndex: promotersIdx,
+        detractorsRowIndex: detractorsIdx,
+        baseRowIndex,
+      });
+
+      rowIndex = baseRowIndex + 1;
+      continue;
+    }
+
+    // 4b. NPS-first format 2: NPS / Promoters / Neutral / Detractors / BASE
+    if (
+      currentRowType === "nps" &&
+      rowIndex + 4 < rowDiagnostics.length &&
+      rowDiagnostics[rowIndex + 1].rowType === "promoters" &&
+      isNeutralLabel(rowDiagnostics[rowIndex + 2].normalizedLabel) &&
+      rowDiagnostics[rowIndex + 3].rowType === "detractors" &&
+      rowDiagnostics[rowIndex + 4].rowType === "base"
+    ) {
+      const promotersIdx = rowIndex + 1;
+      const neutralIdx = rowIndex + 2;
+      const detractorsIdx = rowIndex + 3;
+      const baseRowIndex = rowIndex + 4;
+
+      if (pendingProportionRows.length > 0) {
+        calculationBlocks.push({
+          metricType: "proportion",
+          valueRowIndexes: [...pendingProportionRows],
+          baseRowIndex,
+        });
+        pendingProportionRows.length = 0;
+      }
+
+      calculationBlocks.push({
+        metricType: "proportion",
+        valueRowIndexes: [promotersIdx, neutralIdx, detractorsIdx],
+        baseRowIndex,
+      });
+
+      calculationBlocks.push({
+        metricType: "npsStructure",
+        valueRowIndex: rowIndex,
+        promotersRowIndex: promotersIdx,
+        detractorsRowIndex: detractorsIdx,
+        baseRowIndex,
+      });
+
+      rowIndex = baseRowIndex + 1;
+      continue;
     }
 
     // 5. Блок NPS Spread (NPS + Разброс)
@@ -445,7 +515,6 @@ function isProportionValueRowType(rowType) {
  * Markers are NOT allowed in:
  * - base rows
  * - SD / variance rows
- * - promoters / detractors rows
  */
 export function getAllowedMarkerRowIndexes(calculationBlocks) {
   const allowedMarkerRows = new Set(); // Rows where marker letters may be written.
