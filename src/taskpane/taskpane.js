@@ -697,7 +697,7 @@ async function loadBannerContextForSelectedRange(context, selectedRange, calcula
       upperScanRows: [],
       messages: [
         {
-          severity: "warning",
+          severity: MESSAGE_SEVERITY.WARNING,
           code: "BANNER_NO_ROWS_ABOVE_SELECTION",
           text: "Баннер: над выделенным диапазоном нет строк для анализа.",
         },
