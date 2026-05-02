@@ -18,7 +18,7 @@ The current stable workflow relies on manual selected-range calculation. The use
 - `src/core/banner-detector.js` — Platform-independent banner structure detection.
 - `src/core/significance.js` — Statistical tests, comparison routing, marker creation, and fill reasons.
 - `src/core/stat-thresholds.js` — Determines statistical critical thresholds.
-- `src/core/config/dictionary.config.js` — Config-driven metric dictionary.
+- `src/core/config/dictionary.config.js` — Config-driven metric and banner dictionaries.
 - `src/core/excel-writer.js` — Handles writing values and formatting back to Excel.
 
 ## Core vs Office.js Boundary
@@ -48,6 +48,7 @@ Changes to these files require extra care:
 - Preserve current UX status-message rules.
 - If broader changes seem needed, stop and describe them instead of implementing.
 - Do not rewrite `significance.js` wholesale.
+- Never let agents merge directly; the human owner makes the final merge decision.
 
 ## Recommended Future Architecture Direction
 - Shared text normalization utilities (planned, replacing raw values).
