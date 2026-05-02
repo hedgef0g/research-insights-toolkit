@@ -74,6 +74,8 @@
 - Clean user-facing status messages:
   - technical banner diagnostics are hidden from normal status output;
   - only relevant banner messages are shown to the user.
+- Optional wave banner auto-detection setting.
+  - Wave auto previous-column mode is now disabled by default.
 
 #### Improved
 
@@ -87,6 +89,7 @@
 - User status output is now concise:
   - simple successful calculations show only the success message;
   - wave/global Total/banner errors add only user-relevant messages.
+- Updated Russian help page.
 
 #### Fixed
 
