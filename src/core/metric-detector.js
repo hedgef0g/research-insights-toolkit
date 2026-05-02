@@ -290,38 +290,59 @@ export function buildCalculationBlocks(detectionResult) {
       }
     }
 
-    // 4. Блок NPS Структура (NPS + Промоутеры + Детракторы)
-    if (
-      currentRowType === "nps" &&
-      rowIndex + 2 < rowDiagnostics.length &&
-      rowDiagnostics[rowIndex + 1].rowType === "promoters" &&
-      rowDiagnostics[rowIndex + 2].rowType === "detractors"
-    ) {
-      const promotersRowIndex = rowIndex + 1;
-      const detractorsRowIndex = rowIndex + 2;
-      const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, detractorsRowIndex);
+    // 4. NPS-first format: NPS followed by support rows (Promoters, optional Neutral, Detractors) then BASE
+    if (currentRowType === "nps") {
+      const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, rowIndex);
 
       if (baseRowIndex !== null) {
-        calculationBlocks.push({
-          metricType: "npsStructure",
-          valueRowIndex: rowIndex,
-          promotersRowIndex,
-          detractorsRowIndex,
-          baseRowIndex,
-        });
+        const supportRowIndexes = [];
+        let promotersIdx = null;
+        let detractorsIdx = null;
 
-        if (pendingProportionRows.length > 0) {
-          calculationBlocks.push({
-            metricType: "proportion",
-            valueRowIndexes: [...pendingProportionRows],
-            baseRowIndex,
-          });
-          pendingProportionRows.length = 0;
+        for (let i = rowIndex + 1; i < baseRowIndex; i++) {
+          const supportRowType = rowDiagnostics[i].rowType;
+
+          if (supportRowType === "promoters") {
+            promotersIdx = i;
+          }
+
+          if (supportRowType === "detractors") {
+            detractorsIdx = i;
+          }
+
+          if (isProportionValueRowType(supportRowType)) {
+            supportRowIndexes.push(i);
+          }
         }
 
-        // ИСПРАВЛЕНИЕ: Прыгаем только через строки текущего блока (NPS + Пром + Детр)
-        rowIndex = detractorsRowIndex + 1;
-        continue;
+        if (promotersIdx !== null && detractorsIdx !== null) {
+          if (pendingProportionRows.length > 0) {
+            calculationBlocks.push({
+              metricType: "proportion",
+              valueRowIndexes: [...pendingProportionRows],
+              baseRowIndex,
+            });
+            pendingProportionRows.length = 0;
+          }
+
+          // Support rows (Promoters, [Neutral], Detractors) receive ordinary proportion markers.
+          calculationBlocks.push({
+            metricType: "proportion",
+            valueRowIndexes: supportRowIndexes,
+            baseRowIndex,
+          });
+
+          calculationBlocks.push({
+            metricType: "npsStructure",
+            valueRowIndex: rowIndex,
+            promotersRowIndex: promotersIdx,
+            detractorsRowIndex: detractorsIdx,
+            baseRowIndex,
+          });
+
+          rowIndex = baseRowIndex + 1;
+          continue;
+        }
       }
     }
 
@@ -445,7 +466,6 @@ function isProportionValueRowType(rowType) {
  * Markers are NOT allowed in:
  * - base rows
  * - SD / variance rows
- * - promoters / detractors rows
  */
 export function getAllowedMarkerRowIndexes(calculationBlocks) {
   const allowedMarkerRows = new Set(); // Rows where marker letters may be written.
