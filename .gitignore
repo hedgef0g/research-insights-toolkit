@@ -3,6 +3,3 @@ dist/
 coverage/
 .env
 *.log
-
-# Claude local workspace
-.claude/
