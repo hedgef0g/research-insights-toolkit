@@ -1923,3 +1923,11 @@ Expected:
 - calculation stops;
 - status shows concise user-facing error;
 - no technical diagnostics dump.
+
+## Means + SD/Base
+## Means + variance/Base
+## NPS-first
+## extended NPS
+## Run → Clear significance
+## numeric output conventions: 28, 28%, 0.28
+## selected range guardrail warning-only behavior
