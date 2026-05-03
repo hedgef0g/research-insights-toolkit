@@ -1485,6 +1485,8 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
   bannerStructure,
   calculationSettings
 ) {
+  const BANNER_UPPER_SCAN_LIMIT = 5;
+
   selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
 
   await context.sync();
@@ -1529,6 +1531,32 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
     nextBannerTexts.push(appendOrReplaceTrailingBannerMarker(currentText, label));
   }
 
+  // When a lower banner cell is blank but carries a label, the visible banner
+  // header lives in a row above (multi-row banner layout). Load upper rows so
+  // we can redirect the marker write to the nearest non-empty cell above.
+  const upperScanRowCount = Math.min(BANNER_UPPER_SCAN_LIMIT, selectedStartRowIndex - 1);
+  const needsUpperScan =
+    upperScanRowCount > 0 &&
+    currentBannerTexts.some((text, i) => (text || "") === "" && labelMap.has(i));
+
+  let upperScanTexts = [];
+
+  if (needsUpperScan) {
+    const upperScanRange = selectedRange.worksheet.getRangeByIndexes(
+      selectedStartRowIndex - 1 - upperScanRowCount,
+      selectedStartColumnIndex,
+      upperScanRowCount,
+      selectedColumnCount
+    );
+
+    upperScanRange.load("text");
+
+    await context.sync();
+
+    // Reverse so index 0 = row immediately above the lower banner row.
+    upperScanTexts = upperScanRange.text.slice().reverse();
+  }
+
   const cellWriteQueue = [];
 
   for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
@@ -1539,27 +1567,52 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
       continue;
     }
 
-    const cell = selectedRange.worksheet.getRangeByIndexes(
-      selectedStartRowIndex - 1,
-      selectedStartColumnIndex + columnIndex,
-      1,
-      1
-    );
-    const mergedArea = cell.getMergedAreasOrNullObject();
+    // Lower banner cell is blank but this column has a label: find the nearest
+    // non-empty cell above and write the marker there instead.
+    if (currentText === "" && labelMap.get(columnIndex)) {
+      const label = labelMap.get(columnIndex);
+      let queued = false;
 
-    mergedArea.load(["isNullObject", "rowIndex", "columnIndex"]);
-    cellWriteQueue.push({ nextText, cell, mergedArea });
+      for (let rowOffset = 0; rowOffset < upperScanTexts.length; rowOffset++) {
+        const upperCellText =
+          (upperScanTexts[rowOffset] && upperScanTexts[rowOffset][columnIndex]) || "";
+
+        if (upperCellText !== "") {
+          cellWriteQueue.push({
+            rowIndex: selectedStartRowIndex - 2 - rowOffset,
+            colIndex: selectedStartColumnIndex + columnIndex,
+            text: appendOrReplaceTrailingBannerMarker(upperCellText, label),
+          });
+          queued = true;
+          break;
+        }
+      }
+
+      if (!queued) {
+        // No non-empty cell found above; fall back to the lower banner row.
+        cellWriteQueue.push({
+          rowIndex: selectedStartRowIndex - 1,
+          colIndex: selectedStartColumnIndex + columnIndex,
+          text: nextText,
+        });
+      }
+
+      continue;
+    }
+
+    // Normal case: lower banner cell is non-empty; write in place.
+    cellWriteQueue.push({
+      rowIndex: selectedStartRowIndex - 1,
+      colIndex: selectedStartColumnIndex + columnIndex,
+      text: nextText,
+    });
   }
 
-  await context.sync();
+  for (const { rowIndex, colIndex, text } of cellWriteQueue) {
+    const cell = selectedRange.worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1);
 
-  for (const { nextText, cell, mergedArea } of cellWriteQueue) {
-    const target = mergedArea.isNullObject
-      ? cell
-      : selectedRange.worksheet.getRangeByIndexes(mergedArea.rowIndex, mergedArea.columnIndex, 1, 1);
-
-    target.numberFormat = [["@"]];
-    target.values = [[nextText]];
+    cell.numberFormat = [["@"]];
+    cell.values = [[text]];
   }
 
   await context.sync();
