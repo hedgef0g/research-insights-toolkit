@@ -1485,6 +1485,8 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
   bannerStructure,
   calculationSettings
 ) {
+  const DEBUG_BANNER_LETTER_WRITES = true;
+
   selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
 
   await context.sync();
@@ -1502,6 +1504,11 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
   }
 
   const labelMap = buildBannerLocalSignificanceLabelMap(bannerStructure, calculationSettings);
+
+  if (DEBUG_BANNER_LETTER_WRITES) {
+    console.log("[BannerLetterDiag] labelMap size:", labelMap.size);
+    console.log("[BannerLetterDiag] labelMap entries:", [...labelMap.entries()]);
+  }
 
   const bannerRange = selectedRange.worksheet.getRangeByIndexes(
     selectedStartRowIndex - 1,
@@ -1529,6 +1536,11 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
     nextBannerTexts.push(appendOrReplaceTrailingBannerMarker(currentText, label));
   }
 
+  if (DEBUG_BANNER_LETTER_WRITES) {
+    console.log("[BannerLetterDiag] currentBannerTexts:", currentBannerTexts);
+    console.log("[BannerLetterDiag] nextBannerTexts:", nextBannerTexts);
+  }
+
   const cellWriteQueue = [];
 
   for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
@@ -1539,30 +1551,74 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
       continue;
     }
 
-    const cell = selectedRange.worksheet.getRangeByIndexes(
-      selectedStartRowIndex - 1,
-      selectedStartColumnIndex + columnIndex,
-      1,
-      1
-    );
+    const origRowIndex = selectedStartRowIndex - 1;
+    const origColumnIndex = selectedStartColumnIndex + columnIndex;
+    const cell = selectedRange.worksheet.getRangeByIndexes(origRowIndex, origColumnIndex, 1, 1);
     const mergedArea = cell.getMergedAreasOrNullObject();
 
     mergedArea.load(["isNullObject", "rowIndex", "columnIndex"]);
-    cellWriteQueue.push({ nextText, cell, mergedArea });
+    cellWriteQueue.push({ columnIndex, currentText, nextText, origRowIndex, origColumnIndex, cell, mergedArea });
+  }
+
+  if (DEBUG_BANNER_LETTER_WRITES) {
+    console.log("[BannerLetterDiag] cellWriteQueue length:", cellWriteQueue.length);
+    for (const entry of cellWriteQueue) {
+      console.log(
+        `[BannerLetterDiag] queued col=${entry.columnIndex}`,
+        `currentText="${entry.currentText}"`,
+        `nextText="${entry.nextText}"`,
+        `origTarget row=${entry.origRowIndex} col=${entry.origColumnIndex}`
+      );
+    }
+    // NOTE: getMergedAreasOrNullObject() returns RangeAreas (ExcelApi 1.9+), not Range.
+    // RangeAreas does not natively expose rowIndex/columnIndex as direct properties.
+    // If mergedArea.rowIndex/columnIndex log as undefined, the merge redirect silently
+    // falls back to the original cell (same as PR #24 behaviour).
+    // Follow-up if needed: use mergedArea.areas.getItemAt(0).rowIndex instead.
+    console.warn(
+      "[BannerLetterDiag] NOTE: mergedArea is RangeAreas — rowIndex/columnIndex may be undefined. " +
+        "Check values in the per-entry logs below after sync."
+    );
   }
 
   await context.sync();
 
-  for (const { nextText, cell, mergedArea } of cellWriteQueue) {
-    const target = mergedArea.isNullObject
-      ? cell
-      : selectedRange.worksheet.getRangeByIndexes(mergedArea.rowIndex, mergedArea.columnIndex, 1, 1);
+  for (const { columnIndex, nextText, origRowIndex, origColumnIndex, cell, mergedArea } of cellWriteQueue) {
+    const isMerged = !mergedArea.isNullObject;
+    const redirectRowIndex = isMerged ? mergedArea.rowIndex : origRowIndex;
+    const redirectColumnIndex = isMerged ? mergedArea.columnIndex : origColumnIndex;
+
+    if (DEBUG_BANNER_LETTER_WRITES) {
+      console.log(
+        `[BannerLetterDiag] writing col=${columnIndex}`,
+        `nextText="${nextText}"`,
+        `isMerged=${isMerged}`,
+        `mergedArea.rowIndex=${mergedArea.rowIndex}`,
+        `mergedArea.columnIndex=${mergedArea.columnIndex}`,
+        `redirectTarget row=${redirectRowIndex} col=${redirectColumnIndex}`
+      );
+    }
+
+    const target = isMerged
+      ? selectedRange.worksheet.getRangeByIndexes(redirectRowIndex, redirectColumnIndex, 1, 1)
+      : cell;
 
     target.numberFormat = [["@"]];
     target.values = [[nextText]];
   }
 
-  await context.sync();
+  try {
+    await context.sync();
+
+    if (DEBUG_BANNER_LETTER_WRITES) {
+      console.log("[BannerLetterDiag] final context.sync() succeeded.");
+    }
+  } catch (error) {
+    console.warn(
+      "[BannerLetterDiag] final context.sync() FAILED:",
+      error && error.message ? error.message : error
+    );
+  }
 }
 
 /**
