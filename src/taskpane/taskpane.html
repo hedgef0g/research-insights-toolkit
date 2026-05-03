@@ -26,6 +26,24 @@
 
   <body class="ms-font-m ms-welcome ms-Fabric">
     <main id="app-body" class="ms-welcome__main" style="display: none">
+      <section class="action-panel">
+        <div class="action-panel-header">
+          <h3>Расчёт значимости</h3>
+        </div>
+
+        <div class="action-buttons-row">
+          <button id="calculate-significance" class="primary-action-button">Запустить</button>
+          <button id="clear-significance" class="secondary-action-button">
+            Очистить значимости
+          </button>
+        </div>
+
+        <section id="status-panel" class="status-panel" style="display: none">
+          <h4>Статус</h4>
+          <pre id="significance-result"></pre>
+        </section>
+      </section>
+
       <section class="settings-panel">
         <button type="button" id="settings-toggle" class="settings-toggle">
           <span>Настройки</span>
@@ -179,24 +197,6 @@
             >Справка об использовании</a
           >
         </div>
-      </section>
-
-      <section class="action-panel">
-        <div class="action-panel-header">
-          <h3>Расчёт значимости</h3>
-        </div>
-
-        <div class="action-buttons-row">
-          <button id="calculate-significance" class="primary-action-button">Запустить</button>
-          <button id="clear-significance" class="secondary-action-button">
-            Очистить значимости
-          </button>
-        </div>
-
-        <section id="status-panel" class="status-panel" style="display: none">
-          <h4>Статус</h4>
-          <pre id="significance-result"></pre>
-        </section>
       </section>
     </main>
   </body>
