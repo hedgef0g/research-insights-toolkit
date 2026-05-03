@@ -15,6 +15,7 @@ import {
   compareNpsStructureBlockByRowIndexes,
   compareNpsSpreadBlockByRowIndexes,
   removeSignificanceMarkersFromMatrix,
+  removeSignificanceMarkersFromText,
   generateSignificanceLabels,
   buildBannerLocalSignificanceLabelMap,
 } from "../core/significance";
@@ -27,7 +28,7 @@ import {
   getAllowedMarkerRowIndexes,
 } from "../core/metric-detector";
 
-import { writeCellResultsToSelectedRange } from "../core/excel-writer";
+import { writeCellResultsToSelectedRange, resolveNumericOutput } from "../core/excel-writer";
 
 import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core/banner-detector";
 
@@ -40,6 +41,9 @@ const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
   "BANNER_MALFORMED_STRUCTURE",
   "BANNER_NO_ROWS_ABOVE_SELECTION",
 ]);
+
+const SELECTED_RANGE_GUARDRAIL_WARNING_TEXT =
+  "Похоже, вы выделили лейблы строк или шапку вместе с данными. Сейчас RIT ожидает выделение только числовой части таблицы.";
 
 function formatBannerUserMessages(bannerStructure) {
   if (!bannerStructure || !bannerStructure.messages) {
@@ -59,6 +63,34 @@ function formatBannerUserMessages(bannerStructure) {
   }
 
   return ["Сообщения:", ...visibleMessages.map((message) => `- ${message.text}`)].join("\n");
+}
+
+function formatSelectedRangeGuardrailMessages(warnings) {
+  if (!warnings || warnings.length === 0) {
+    return "";
+  }
+
+  const uniqueTexts = Array.from(new Set(warnings.map((warning) => warning.text).filter(Boolean)));
+
+  if (uniqueTexts.length === 1) {
+    return uniqueTexts[0];
+  }
+
+  return ["Предупреждения:", ...uniqueTexts.map((text) => `- ${text}`)].join("\n");
+}
+
+function appendSelectedRangeGuardrailMessages(statusMessages, warnings) {
+  const guardrailMessage = formatSelectedRangeGuardrailMessages(warnings);
+
+  if (!guardrailMessage) {
+    return statusMessages;
+  }
+
+  return [...statusMessages, "", guardrailMessage];
+}
+
+function formatStatusWithSelectedRangeGuardrails(message, warnings) {
+  return appendSelectedRangeGuardrailMessages([message], warnings).join("\n");
 }
 
 function formatBannerUserMessagesExcludingCodes(bannerStructure, excludedCodes = []) {
@@ -293,6 +325,205 @@ Office.onReady((info) => {
 });
 
 /**
+ * Detects high-confidence signs that labels or header rows were included in the data range.
+ */
+function detectSelectedRangeGuardrails(selectedText, cleanedValues) {
+  const values = Array.isArray(cleanedValues) ? cleanedValues : [];
+  const rowCount = values.length;
+  const columnCount = rowCount > 0 && Array.isArray(values[0]) ? values[0].length : 0;
+
+  if (rowCount < 2 || columnCount < 2) {
+    return [];
+  }
+
+  const warnings = [];
+  const allCells = getSelectedRangeCells(selectedText, values, 0, 0, rowCount, columnCount);
+  const allStats = analyzeSelectedRangeCells(allCells);
+
+  if (rowCount >= 3 && columnCount >= 3) {
+    const firstColumnStats = analyzeSelectedRangeCells(
+      getSelectedRangeCells(selectedText, values, 0, 0, rowCount, 1)
+    );
+    const rightSideStats = analyzeSelectedRangeCells(
+      getSelectedRangeCells(selectedText, values, 0, 1, rowCount, columnCount - 1)
+    );
+
+    if (
+      firstColumnStats.nonEmptyCount >= Math.max(2, Math.ceil(rowCount * 0.5)) &&
+      firstColumnStats.textRatio >= 0.7 &&
+      rightSideStats.nonEmptyCount >= Math.max(4, Math.ceil(rowCount * (columnCount - 1) * 0.5)) &&
+      rightSideStats.numericRatio >= 0.7
+    ) {
+      warnings.push({
+        code: "SELECTED_RANGE_LIKELY_LEFT_LABEL_COLUMN",
+        severity: "warning",
+        text: SELECTED_RANGE_GUARDRAIL_WARNING_TEXT,
+        rowIndex: null,
+        columnIndex: 0,
+        evidence: {
+          firstColumnTextRatio: roundGuardrailRatio(firstColumnStats.textRatio),
+          rightSideNumericRatio: roundGuardrailRatio(rightSideStats.numericRatio),
+          firstColumnTextCount: firstColumnStats.textCount,
+          rightSideNumericCount: rightSideStats.numericCount,
+        },
+      });
+    }
+
+    const firstRowStats = analyzeSelectedRangeCells(
+      getSelectedRangeCells(selectedText, values, 0, 0, 1, columnCount)
+    );
+    const lowerRowsStats = analyzeSelectedRangeCells(
+      getSelectedRangeCells(selectedText, values, 1, 0, rowCount - 1, columnCount)
+    );
+
+    if (
+      firstRowStats.nonEmptyCount >= Math.max(2, Math.ceil(columnCount * 0.5)) &&
+      firstRowStats.textRatio >= 0.6 &&
+      lowerRowsStats.nonEmptyCount >= Math.max(4, Math.ceil((rowCount - 1) * columnCount * 0.5)) &&
+      lowerRowsStats.numericRatio >= 0.7
+    ) {
+      warnings.push({
+        code: "SELECTED_RANGE_LIKELY_TOP_HEADER_ROW",
+        severity: "warning",
+        text: SELECTED_RANGE_GUARDRAIL_WARNING_TEXT,
+        rowIndex: 0,
+        columnIndex: null,
+        evidence: {
+          firstRowTextRatio: roundGuardrailRatio(firstRowStats.textRatio),
+          lowerRowsNumericRatio: roundGuardrailRatio(lowerRowsStats.numericRatio),
+          firstRowTextCount: firstRowStats.textCount,
+          lowerRowsNumericCount: lowerRowsStats.numericCount,
+        },
+      });
+    }
+  }
+
+  if (
+    warnings.length === 0 &&
+    allStats.totalCount >= 12 &&
+    allStats.textCount >= 4 &&
+    allStats.textRatio >= 0.25 &&
+    allStats.numericRatio >= 0.5
+  ) {
+    warnings.push({
+      code: "SELECTED_RANGE_TEXT_HEAVY",
+      severity: "warning",
+      text: SELECTED_RANGE_GUARDRAIL_WARNING_TEXT,
+      rowIndex: null,
+      columnIndex: null,
+      evidence: {
+        textRatio: roundGuardrailRatio(allStats.textRatio),
+        numericRatio: roundGuardrailRatio(allStats.numericRatio),
+        textCount: allStats.textCount,
+        numericCount: allStats.numericCount,
+      },
+    });
+  }
+
+  return warnings;
+}
+
+function getSelectedRangeCells(selectedText, values, startRow, startColumn, rowCount, columnCount) {
+  const cells = [];
+
+  for (let rowOffset = 0; rowOffset < rowCount; rowOffset++) {
+    const rowIndex = startRow + rowOffset;
+
+    for (let columnOffset = 0; columnOffset < columnCount; columnOffset++) {
+      const columnIndex = startColumn + columnOffset;
+
+      cells.push({
+        value: values && values[rowIndex] ? values[rowIndex][columnIndex] : undefined,
+        text: selectedText && selectedText[rowIndex] ? selectedText[rowIndex][columnIndex] : undefined,
+      });
+    }
+  }
+
+  return cells;
+}
+
+function analyzeSelectedRangeCells(cells) {
+  const stats = {
+    totalCount: cells.length,
+    nonEmptyCount: 0,
+    blankCount: 0,
+    numericCount: 0,
+    textCount: 0,
+    numericRatio: 0,
+    textRatio: 0,
+  };
+
+  for (const cell of cells) {
+    const cellValue = getGuardrailCellValue(cell);
+
+    if (isBlankLikeCellValue(cellValue)) {
+      stats.blankCount++;
+      continue;
+    }
+
+    stats.nonEmptyCount++;
+
+    if (isNumericLikeCellValue(cellValue)) {
+      stats.numericCount++;
+      continue;
+    }
+
+    if (isTextLikeCellValue(cellValue)) {
+      stats.textCount++;
+    }
+  }
+
+  if (stats.nonEmptyCount > 0) {
+    stats.numericRatio = stats.numericCount / stats.nonEmptyCount;
+    stats.textRatio = stats.textCount / stats.nonEmptyCount;
+  }
+
+  return stats;
+}
+
+function getGuardrailCellValue(cell) {
+  if (!cell) {
+    return "";
+  }
+
+  if (!isBlankLikeCellValue(cell.value)) {
+    return cell.value;
+  }
+
+  return cell.text;
+}
+
+function isBlankLikeCellValue(value) {
+  return value === null || value === undefined || String(value).trim() === "";
+}
+
+function isNumericLikeCellValue(value) {
+  if (isBlankLikeCellValue(value)) {
+    return false;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+
+  const normalizedValue = String(value)
+    .trim()
+    .replace(/\s/g, "")
+    .replace("%", "")
+    .replace(",", ".");
+
+  return normalizedValue !== "" && !Number.isNaN(Number(normalizedValue));
+}
+
+function isTextLikeCellValue(value) {
+  return !isBlankLikeCellValue(value) && !isNumericLikeCellValue(value);
+}
+
+function roundGuardrailRatio(value) {
+  return Math.round(value * 100) / 100;
+}
+
+/**
  * Reads selected Excel range, detects metric blocks, calculates pairwise significance,
  * and writes significance letters only into actual value rows.
  *
@@ -380,6 +611,7 @@ async function runSignificanceFromSelection() {
     }
 
     const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
+    const selectedRangeGuardrailWarnings = detectSelectedRangeGuardrails(selectedText, cleanedValues);
 
     selectedRange.values = cleanedValues;
 
@@ -401,7 +633,12 @@ async function runSignificanceFromSelection() {
     const calculationBlocks = buildCalculationBlocks(detectionResult); // List of metric blocks to calculate.
 
     if (!calculationBlocks || calculationBlocks.length === 0) {
-      setStatusMessage("Could not detect any calculation blocks.");
+      setStatusMessage(
+        formatStatusWithSelectedRangeGuardrails(
+          "Could not detect any calculation blocks.",
+          selectedRangeGuardrailWarnings
+        )
+      );
       return;
     }
 
@@ -442,7 +679,12 @@ async function runSignificanceFromSelection() {
       );
 
       if (smallBaseResult.errorMessage) {
-        setStatusMessage(smallBaseResult.errorMessage);
+        setStatusMessage(
+          formatStatusWithSelectedRangeGuardrails(
+            smallBaseResult.errorMessage,
+            selectedRangeGuardrailWarnings
+          )
+        );
         return;
       }
 
@@ -472,7 +714,11 @@ async function runSignificanceFromSelection() {
           statusMessages.push(bannerUserMessages);
         }
 
-        setStatusMessage(statusMessages.join("\n"));
+        setStatusMessage(
+          appendSelectedRangeGuardrailMessages(statusMessages, selectedRangeGuardrailWarnings).join(
+            "\n"
+          )
+        );
         return;
       }
 
@@ -523,7 +769,9 @@ async function runSignificanceFromSelection() {
       statusMessages.push(bannerUserMessages);
     }
 
-    setStatusMessage(statusMessages.join("\n"));
+    setStatusMessage(
+      appendSelectedRangeGuardrailMessages(statusMessages, selectedRangeGuardrailWarnings).join("\n")
+    );
   });
 }
 
@@ -588,24 +836,55 @@ function calculateBlockResults(cleanedValues, calculationBlock, calculationSetti
  */
 async function clearSignificanceFromSelection() {
   await Excel.run(async (context) => {
-    const selectedRange = context.workbook.getSelectedRange(); // Current selected Excel range.
+    const selectedRange = context.workbook.getSelectedRange();
 
-    selectedRange.load("values"); // Load current cell values.
+    selectedRange.load(["values", "numberFormat"]);
 
     await context.sync();
 
-    const selectedValues = selectedRange.values; // Current values, possibly with markers.
-    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues); // Values without markers.
+    const selectedValues = selectedRange.values;
+    const selectedNumberFormats = selectedRange.numberFormat;
 
-    selectedRange.values = cleanedValues;
+    const nextValues = [];
+    const nextNumberFormats = [];
 
-    // Reset formatting applied by significance macro.
+    for (let rowIndex = 0; rowIndex < selectedValues.length; rowIndex++) {
+      const valueRow = [];
+      const formatRow = [];
+
+      for (let columnIndex = 0; columnIndex < selectedValues[rowIndex].length; columnIndex++) {
+        const rawValue = selectedValues[rowIndex][columnIndex];
+
+        if (typeof rawValue === "number") {
+          valueRow.push(rawValue);
+          formatRow.push(selectedNumberFormats[rowIndex][columnIndex]);
+          continue;
+        }
+
+        const cleanedText = removeSignificanceMarkersFromText(rawValue);
+        const resolved = resolveNumericOutput(cleanedText);
+
+        if (resolved !== null) {
+          valueRow.push(resolved.value);
+          formatRow.push(resolved.format);
+        } else {
+          valueRow.push(cleanedText);
+          formatRow.push("@");
+        }
+      }
+
+      nextValues.push(valueRow);
+      nextNumberFormats.push(formatRow);
+    }
+
+    selectedRange.numberFormat = nextNumberFormats;
+    selectedRange.values = nextValues;
+
     selectedRange.format.font.bold = false;
     selectedRange.format.fill.clear();
 
     await context.sync();
 
-    const outputElement = document.getElementById("significance-result");
     setStatusMessage("Significance markers removed.");
   });
 }
@@ -1485,6 +1764,8 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
   bannerStructure,
   calculationSettings
 ) {
+  const BANNER_UPPER_SCAN_LIMIT = 5;
+
   selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
 
   await context.sync();
@@ -1529,8 +1810,89 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
     nextBannerTexts.push(appendOrReplaceTrailingBannerMarker(currentText, label));
   }
 
-  bannerRange.numberFormat = [nextBannerTexts.map(() => "@")];
-  bannerRange.values = [nextBannerTexts];
+  // When a lower banner cell is blank but carries a label, the visible banner
+  // header lives in a row above (multi-row banner layout). Load upper rows so
+  // we can redirect the marker write to the nearest non-empty cell above.
+  const upperScanRowCount = Math.min(BANNER_UPPER_SCAN_LIMIT, selectedStartRowIndex - 1);
+  const needsUpperScan =
+    upperScanRowCount > 0 &&
+    currentBannerTexts.some((text, i) => (text || "") === "" && labelMap.has(i));
+
+  let upperScanTexts = [];
+
+  if (needsUpperScan) {
+    const upperScanRange = selectedRange.worksheet.getRangeByIndexes(
+      selectedStartRowIndex - 1 - upperScanRowCount,
+      selectedStartColumnIndex,
+      upperScanRowCount,
+      selectedColumnCount
+    );
+
+    upperScanRange.load("text");
+
+    await context.sync();
+
+    // Reverse so index 0 = row immediately above the lower banner row.
+    upperScanTexts = upperScanRange.text.slice().reverse();
+  }
+
+  const cellWriteQueue = [];
+
+  for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
+    const nextText = nextBannerTexts[columnIndex] || "";
+    const currentText = currentBannerTexts[columnIndex] || "";
+
+    if (nextText === "" && currentText === "") {
+      continue;
+    }
+
+    // Lower banner cell is blank but this column has a label: find the nearest
+    // non-empty cell above and write the marker there instead.
+    if (currentText === "" && labelMap.get(columnIndex)) {
+      const label = labelMap.get(columnIndex);
+      let queued = false;
+
+      for (let rowOffset = 0; rowOffset < upperScanTexts.length; rowOffset++) {
+        const upperCellText =
+          (upperScanTexts[rowOffset] && upperScanTexts[rowOffset][columnIndex]) || "";
+
+        if (upperCellText !== "") {
+          cellWriteQueue.push({
+            rowIndex: selectedStartRowIndex - 2 - rowOffset,
+            colIndex: selectedStartColumnIndex + columnIndex,
+            text: appendOrReplaceTrailingBannerMarker(upperCellText, label),
+          });
+          queued = true;
+          break;
+        }
+      }
+
+      if (!queued) {
+        // No non-empty cell found above; fall back to the lower banner row.
+        cellWriteQueue.push({
+          rowIndex: selectedStartRowIndex - 1,
+          colIndex: selectedStartColumnIndex + columnIndex,
+          text: nextText,
+        });
+      }
+
+      continue;
+    }
+
+    // Normal case: lower banner cell is non-empty; write in place.
+    cellWriteQueue.push({
+      rowIndex: selectedStartRowIndex - 1,
+      colIndex: selectedStartColumnIndex + columnIndex,
+      text: nextText,
+    });
+  }
+
+  for (const { rowIndex, colIndex, text } of cellWriteQueue) {
+    const cell = selectedRange.worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1);
+
+    cell.numberFormat = [["@"]];
+    cell.values = [[text]];
+  }
 
   await context.sync();
 }

@@ -20,6 +20,7 @@
  */
 
 import { BANNER_DICTIONARY } from "./config/dictionary.config";
+import { normalizeLookupText, normalizeDisplayText } from "./string-utils";
 
 const TOTAL_LABEL_KEYWORDS = BANNER_DICTIONARY.totalLabels;
 const WAVE_GROUP_LABEL_KEYWORDS = BANNER_DICTIONARY.waveGroupLabels;
@@ -419,6 +420,19 @@ function detectReconstructedSpanGroupLevel(
     };
   }
 
+  const hasMergedDownSingleColumnSpan = spans.some(
+    (span) =>
+      span.columnIndexes.length === 1 &&
+      !normalizeRawBannerCellValue(lowerBannerRow[span.startColumnIndex])
+  );
+
+  if (hasMergedDownSingleColumnSpan) {
+    return {
+      groupLevel: null,
+      message: null,
+    };
+  }
+
   const labels = Array(selectedColumnCount).fill("");
   const spansByColumnIndex = {};
 
@@ -556,27 +570,14 @@ function isTotalBannerLabel(normalizedLabel) {
  * Normalizes banner labels for matching.
  */
 function normalizeBannerLabel(rawLabel) {
-  if (rawLabel === null || rawLabel === undefined) {
-    return "";
-  }
-
-  return String(rawLabel)
-    .toLowerCase()
-    .replace(/ё/g, "е")
-    .replace(/[.,:;()]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeLookupText(rawLabel);
 }
 
 /**
  * Normalizes raw cell value but keeps user-facing text.
  */
 function normalizeRawBannerCellValue(rawValue) {
-  if (rawValue === null || rawValue === undefined) {
-    return "";
-  }
-
-  return String(rawValue).trim();
+  return normalizeDisplayText(rawValue);
 }
 
 /**
@@ -814,6 +815,15 @@ function detectGlobalTotalColumnIndex(columnDescriptors) {
   );
 
   if (groupLabelIsTotal) {
+    const firstGroupKey = firstDescriptor.comparisonGroupKey;
+    const firstGroupSize = columnDescriptors.filter(
+      (descriptor) => descriptor.comparisonGroupKey === firstGroupKey
+    ).length;
+
+    if (firstGroupSize > 1) {
+      return null;
+    }
+
     return firstDescriptor.columnIndex;
   }
 
