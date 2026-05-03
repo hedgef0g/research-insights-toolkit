@@ -98,7 +98,7 @@ Then change confidence level or input values so that previous significant differ
 
 # 3. NPS Tests
 
-## 3.1. NPS from structure
+## 3.1. NPS-first format
 
 ### Input
 
@@ -116,12 +116,70 @@ Then change confidence level or input values so that previous significant differ
   - promoter = +1;
   - passive = 0;
   - detractor = -1.
-- Markers are written only into the NPS row.
-- Promoters, Detractors, and Base rows receive no markers.
+- NPS receives NPS significance markers.
+- Promoters receives ordinary proportion markers.
+- Detractors receives ordinary proportion markers.
+- Base receives no marker.
 
 ---
 
-## 3.2. NPS from spread
+## 3.2. NPS-first with Neutral
+
+### Input
+
+| Label | A | B | C |
+|---|---:|---:|---:|
+| NPS | 30 | 45 | 25 |
+| Promoters | 50% | 60% | 45% |
+| Neutral | 30% | 25% | 35% |
+| Detractors | 20% | 15% | 20% |
+| Base | 500 | 500 | 500 |
+
+### Expected
+
+- NPS is recalculated from Promoters - Detractors.
+- NPS is treated as mean of:
+  - promoter = +1;
+  - passive = 0;
+  - detractor = -1.
+- NPS receives NPS significance markers.
+- Promoters receives ordinary proportion markers.
+- Neutral receives ordinary proportion markers.
+- Detractors receives ordinary proportion markers.
+- Base receives no marker.
+
+---
+
+## 3.3. Extended NPS format
+
+### Input
+
+| Label | A | B | C |
+|---|---:|---:|---:|
+| Top-3 | 50% | 60% | 45% |
+| Detractors | 20% | 15% | 20% |
+| Neutral | 30% | 25% | 35% |
+| Promoters | 50% | 60% | 45% |
+| NPS | 30 | 45 | 25 |
+| Base | 500 | 500 | 500 |
+
+### Expected
+
+- NPS is recalculated from Promoters - Detractors.
+- NPS is treated as mean of:
+  - promoter = +1;
+  - passive = 0;
+  - detractor = -1.
+- Top-3 receive ordinary proportion markers.
+- Detractors receives ordinary proportion markers.
+- Neutral receives ordinary proportion markers.
+- Promoters receives ordinary proportion markers.
+- NPS receives NPS significance markers.
+- Base receives no marker.
+
+---
+
+## 3.4. NPS + SD / Base
 
 ### Input
 
@@ -134,8 +192,28 @@ Then change confidence level or input values so that previous significant differ
 ### Expected
 
 - NPS spread logic is used.
-- Markers are written only into the NPS row.
-- SD and Base rows receive no markers.
+- NPS receives NPS spread significance markers.
+- SD receives no marker.
+- Base receives no marker.
+
+---
+
+## 3.5. NPS + variance / Base
+
+### Input
+
+| Label | A | B | C |
+|---|---:|---:|---:|
+| NPS | 30 | 45 | 25 |
+| Variance | 0.64 | 0.49 | 0.64 |
+| Base | 500 | 500 | 500 |
+
+### Expected
+
+- NPS spread logic is used.
+- NPS receives NPS spread significance markers.
+- Variance receives no marker.
+- Base receives no marker.
 
 ---
 
@@ -905,7 +983,7 @@ Metric labels remain in the leftmost sheet columns.
 - Detector builds calculation blocks correctly.
 - Shared base is used for appropriate blocks.
 - After detecting Mean / NPS / spread structures, detector does not skip to Base and accidentally miss later blocks.
-- Service rows do not receive markers.
+- Service rows do not receive markers. (Promoters and Detractors are not considered service rows here and can receive markers).
 - Small-base fill applies only within the relevant calculation block.
 
 ---
@@ -1048,7 +1126,7 @@ Expected:
 - proportions block detected;
 - mean block detected;
 - NPS structure block detected;
-- correct marker rows only;
+- correct marker rows only (including Promoters and Detractors);
 - service rows do not receive markers.
 
 ---
