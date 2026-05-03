@@ -1529,8 +1529,18 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
     nextBannerTexts.push(appendOrReplaceTrailingBannerMarker(currentText, label));
   }
 
-  bannerRange.numberFormat = [nextBannerTexts.map(() => "@")];
-  bannerRange.values = [nextBannerTexts];
+  for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
+    const nextText = nextBannerTexts[columnIndex] || "";
+    const currentText = currentBannerTexts[columnIndex] || "";
+
+    if (nextText === "" && currentText === "") {
+      continue;
+    }
+
+    const cell = bannerRange.getCell(0, columnIndex);
+    cell.numberFormat = [["@"]];
+    cell.values = [[nextText]];
+  }
 
   await context.sync();
 }
