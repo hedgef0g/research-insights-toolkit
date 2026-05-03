@@ -44,8 +44,18 @@ export function writeCellResultsToSelectedRange(
           : "";
 
       if (!cellResult) {
-        valueRow.push(currentText);
-        numberFormatRow.push("@");
+        const parsedCurrent = parseOutputNumber(currentText);
+
+        if (parsedCurrent !== null) {
+          valueRow.push(
+            parsedCurrent.hasPercentSign ? parsedCurrent.numericValue / 100 : parsedCurrent.numericValue
+          );
+          numberFormatRow.push(getNumberFormatForRowType(rowTypeByIndex.get(rowIndex), calculationSettings));
+        } else {
+          valueRow.push(currentText);
+          numberFormatRow.push("@");
+        }
+
         boldRow.push(false);
         fillReasonRow.push("none");
         continue;
@@ -70,8 +80,22 @@ export function writeCellResultsToSelectedRange(
         ? `${roundedDisplayedValue} ${outputMarkerText}`.trim()
         : roundedDisplayedValue;
 
-      valueRow.push(nextValue);
-      numberFormatRow.push("@");
+      if (outputMarkerText) {
+        valueRow.push(nextValue);
+        numberFormatRow.push("@");
+      } else {
+        const parsedRounded = parseOutputNumber(roundedDisplayedValue);
+
+        if (parsedRounded !== null) {
+          valueRow.push(
+            parsedRounded.hasPercentSign ? parsedRounded.numericValue / 100 : parsedRounded.numericValue
+          );
+          numberFormatRow.push(getNumberFormatForRowType(rowTypeByIndex.get(rowIndex), calculationSettings));
+        } else {
+          valueRow.push(roundedDisplayedValue);
+          numberFormatRow.push("@");
+        }
+      }
 
       boldRow.push(
         Boolean(
@@ -232,6 +256,30 @@ function getDecimalPlacesForRowType(rowType, calculationSettings) {
   }
 
   return null;
+}
+
+/**
+ * Returns an Excel number format string for a given row type.
+ *
+ * PURPOSE:
+ * Unmarked output cells should be written as numeric values rather than text.
+ * This helper provides the appropriate display format so the visible output
+ * matches what formatDisplayedValueForOutput would have shown as a string.
+ */
+function getNumberFormatForRowType(rowType, calculationSettings) {
+  const shouldRound = calculationSettings && calculationSettings.roundCellValues;
+
+  const shareLikeTypes = ["proportion", "nps", "promoters", "detractors"];
+
+  if (shareLikeTypes.includes(rowType)) {
+    return shouldRound ? "0%" : "0.0%";
+  }
+
+  if (rowType === "mean" || rowType === "standardDeviation" || rowType === "variance") {
+    return shouldRound ? "0.0" : "0.00";
+  }
+
+  return "General";
 }
 
 function applyGroupedBoldFormatting(selectedRange, boldMask) {
