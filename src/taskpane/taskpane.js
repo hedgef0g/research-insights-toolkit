@@ -1529,6 +1529,8 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
     nextBannerTexts.push(appendOrReplaceTrailingBannerMarker(currentText, label));
   }
 
+  const cellWriteQueue = [];
+
   for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
     const nextText = nextBannerTexts[columnIndex] || "";
     const currentText = currentBannerTexts[columnIndex] || "";
@@ -1537,9 +1539,27 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
       continue;
     }
 
-    const cell = bannerRange.getCell(0, columnIndex);
-    cell.numberFormat = [["@"]];
-    cell.values = [[nextText]];
+    const cell = selectedRange.worksheet.getRangeByIndexes(
+      selectedStartRowIndex - 1,
+      selectedStartColumnIndex + columnIndex,
+      1,
+      1
+    );
+    const mergedArea = cell.getMergedAreasOrNullObject();
+
+    mergedArea.load(["isNullObject", "rowIndex", "columnIndex"]);
+    cellWriteQueue.push({ nextText, cell, mergedArea });
+  }
+
+  await context.sync();
+
+  for (const { nextText, cell, mergedArea } of cellWriteQueue) {
+    const target = mergedArea.isNullObject
+      ? cell
+      : selectedRange.worksheet.getRangeByIndexes(mergedArea.rowIndex, mergedArea.columnIndex, 1, 1);
+
+    target.numberFormat = [["@"]];
+    target.values = [[nextText]];
   }
 
   await context.sync();
