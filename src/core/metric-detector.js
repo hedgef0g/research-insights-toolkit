@@ -1,18 +1,10 @@
 import { METRIC_DICTIONARY } from "./config/dictionary.config"; // Импортируем наш конфиг
+import { normalizeLookupText } from "./string-utils";
 
 export const LABEL_SCAN_COLUMNS_LEFT = 2;
 
 export function normalizeLabelText(rawLabel) {
-  if (rawLabel === null || rawLabel === undefined) {
-    return "";
-  }
-
-  return String(rawLabel)
-    .toLowerCase()
-    .replace(/ё/g, "е")
-    .replace(/[.,:;()]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeLookupText(rawLabel);
 }
 
 function doesKeywordMatchLabel(normalizedLabel, rawKeyword) {

@@ -20,6 +20,7 @@
  */
 
 import { BANNER_DICTIONARY } from "./config/dictionary.config";
+import { normalizeLookupText, normalizeDisplayText } from "./string-utils";
 
 const TOTAL_LABEL_KEYWORDS = BANNER_DICTIONARY.totalLabels;
 const WAVE_GROUP_LABEL_KEYWORDS = BANNER_DICTIONARY.waveGroupLabels;
@@ -556,27 +557,14 @@ function isTotalBannerLabel(normalizedLabel) {
  * Normalizes banner labels for matching.
  */
 function normalizeBannerLabel(rawLabel) {
-  if (rawLabel === null || rawLabel === undefined) {
-    return "";
-  }
-
-  return String(rawLabel)
-    .toLowerCase()
-    .replace(/ё/g, "е")
-    .replace(/[.,:;()]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeLookupText(rawLabel);
 }
 
 /**
  * Normalizes raw cell value but keeps user-facing text.
  */
 function normalizeRawBannerCellValue(rawValue) {
-  if (rawValue === null || rawValue === undefined) {
-    return "";
-  }
-
-  return String(rawValue).trim();
+  return normalizeDisplayText(rawValue);
 }
 
 /**
