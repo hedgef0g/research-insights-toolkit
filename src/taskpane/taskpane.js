@@ -15,6 +15,7 @@ import {
   compareNpsStructureBlockByRowIndexes,
   compareNpsSpreadBlockByRowIndexes,
   removeSignificanceMarkersFromMatrix,
+  removeSignificanceMarkersFromText,
   generateSignificanceLabels,
   buildBannerLocalSignificanceLabelMap,
 } from "../core/significance";
@@ -27,7 +28,7 @@ import {
   getAllowedMarkerRowIndexes,
 } from "../core/metric-detector";
 
-import { writeCellResultsToSelectedRange } from "../core/excel-writer";
+import { writeCellResultsToSelectedRange, resolveNumericOutput } from "../core/excel-writer";
 
 import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core/banner-detector";
 
@@ -588,24 +589,55 @@ function calculateBlockResults(cleanedValues, calculationBlock, calculationSetti
  */
 async function clearSignificanceFromSelection() {
   await Excel.run(async (context) => {
-    const selectedRange = context.workbook.getSelectedRange(); // Current selected Excel range.
+    const selectedRange = context.workbook.getSelectedRange();
 
-    selectedRange.load("values"); // Load current cell values.
+    selectedRange.load(["values", "numberFormat"]);
 
     await context.sync();
 
-    const selectedValues = selectedRange.values; // Current values, possibly with markers.
-    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues); // Values without markers.
+    const selectedValues = selectedRange.values;
+    const selectedNumberFormats = selectedRange.numberFormat;
 
-    selectedRange.values = cleanedValues;
+    const nextValues = [];
+    const nextNumberFormats = [];
 
-    // Reset formatting applied by significance macro.
+    for (let rowIndex = 0; rowIndex < selectedValues.length; rowIndex++) {
+      const valueRow = [];
+      const formatRow = [];
+
+      for (let columnIndex = 0; columnIndex < selectedValues[rowIndex].length; columnIndex++) {
+        const rawValue = selectedValues[rowIndex][columnIndex];
+
+        if (typeof rawValue === "number") {
+          valueRow.push(rawValue);
+          formatRow.push(selectedNumberFormats[rowIndex][columnIndex]);
+          continue;
+        }
+
+        const cleanedText = removeSignificanceMarkersFromText(rawValue);
+        const resolved = resolveNumericOutput(cleanedText);
+
+        if (resolved !== null) {
+          valueRow.push(resolved.value);
+          formatRow.push(resolved.format);
+        } else {
+          valueRow.push(cleanedText);
+          formatRow.push("@");
+        }
+      }
+
+      nextValues.push(valueRow);
+      nextNumberFormats.push(formatRow);
+    }
+
+    selectedRange.numberFormat = nextNumberFormats;
+    selectedRange.values = nextValues;
+
     selectedRange.format.font.bold = false;
     selectedRange.format.fill.clear();
 
     await context.sync();
 
-    const outputElement = document.getElementById("significance-result");
     setStatusMessage("Significance markers removed.");
   });
 }

@@ -268,7 +268,7 @@ function getDecimalPlacesForRowType(rowType, calculationSettings) {
  *
  * This ensures "28%" stays "28%" and "0.281" stays "0.281" regardless of row type.
  */
-function resolveNumericOutput(displayString) {
+export function resolveNumericOutput(displayString) {
   const parsed = parseOutputNumber(displayString);
 
   if (parsed === null) {
