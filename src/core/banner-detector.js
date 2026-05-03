@@ -420,6 +420,19 @@ function detectReconstructedSpanGroupLevel(
     };
   }
 
+  const hasMergedDownSingleColumnSpan = spans.some(
+    (span) =>
+      span.columnIndexes.length === 1 &&
+      !normalizeRawBannerCellValue(lowerBannerRow[span.startColumnIndex])
+  );
+
+  if (hasMergedDownSingleColumnSpan) {
+    return {
+      groupLevel: null,
+      message: null,
+    };
+  }
+
   const labels = Array(selectedColumnCount).fill("");
   const spansByColumnIndex = {};
 
