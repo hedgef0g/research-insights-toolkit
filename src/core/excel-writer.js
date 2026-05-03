@@ -44,13 +44,11 @@ export function writeCellResultsToSelectedRange(
           : "";
 
       if (!cellResult) {
-        const parsedCurrent = parseOutputNumber(currentText);
+        const resolvedCurrent = resolveNumericOutput(currentText);
 
-        if (parsedCurrent !== null) {
-          valueRow.push(
-            parsedCurrent.hasPercentSign ? parsedCurrent.numericValue / 100 : parsedCurrent.numericValue
-          );
-          numberFormatRow.push(getNumberFormatForRowType(rowTypeByIndex.get(rowIndex), calculationSettings));
+        if (resolvedCurrent !== null) {
+          valueRow.push(resolvedCurrent.value);
+          numberFormatRow.push(resolvedCurrent.format);
         } else {
           valueRow.push(currentText);
           numberFormatRow.push("@");
@@ -84,13 +82,11 @@ export function writeCellResultsToSelectedRange(
         valueRow.push(nextValue);
         numberFormatRow.push("@");
       } else {
-        const parsedRounded = parseOutputNumber(roundedDisplayedValue);
+        const resolvedRounded = resolveNumericOutput(roundedDisplayedValue);
 
-        if (parsedRounded !== null) {
-          valueRow.push(
-            parsedRounded.hasPercentSign ? parsedRounded.numericValue / 100 : parsedRounded.numericValue
-          );
-          numberFormatRow.push(getNumberFormatForRowType(rowTypeByIndex.get(rowIndex), calculationSettings));
+        if (resolvedRounded !== null) {
+          valueRow.push(resolvedRounded.value);
+          numberFormatRow.push(resolvedRounded.format);
         } else {
           valueRow.push(roundedDisplayedValue);
           numberFormatRow.push("@");
@@ -259,27 +255,40 @@ function getDecimalPlacesForRowType(rowType, calculationSettings) {
 }
 
 /**
- * Returns an Excel number format string for a given row type.
+ * Resolves numeric value and Excel format for an unmarked output cell.
  *
  * PURPOSE:
- * Unmarked output cells should be written as numeric values rather than text.
- * This helper provides the appropriate display format so the visible output
- * matches what formatDisplayedValueForOutput would have shown as a string.
+ * Unmarked cells should be written as numeric Excel values to avoid
+ * "number stored as text" warnings. The format is derived from the display
+ * string itself so the visible convention is preserved exactly:
+ * - strings with "%" use percent format and divide by 100 for Excel storage;
+ * - strings without "%" use a plain decimal format matching the string's precision;
+ * - integers use "General";
+ * - non-numeric strings (labels, empty) return null → caller falls back to text.
+ *
+ * This ensures "28%" stays "28%" and "0.281" stays "0.281" regardless of row type.
  */
-function getNumberFormatForRowType(rowType, calculationSettings) {
-  const shouldRound = calculationSettings && calculationSettings.roundCellValues;
+function resolveNumericOutput(displayString) {
+  const parsed = parseOutputNumber(displayString);
 
-  const shareLikeTypes = ["proportion", "nps", "promoters", "detractors"];
-
-  if (shareLikeTypes.includes(rowType)) {
-    return shouldRound ? "0%" : "0.0%";
+  if (parsed === null) {
+    return null;
   }
 
-  if (rowType === "mean" || rowType === "standardDeviation" || rowType === "variance") {
-    return shouldRound ? "0.0" : "0.00";
+  const cleanText = String(displayString).trim().replace("%", "").trim();
+  const dotIndex = cleanText.indexOf(".");
+  const decimalPlaces = dotIndex >= 0 ? cleanText.length - dotIndex - 1 : 0;
+
+  if (parsed.hasPercentSign) {
+    const format = decimalPlaces === 0 ? "0%" : `0.${"0".repeat(decimalPlaces)}%`;
+    return { value: parsed.numericValue / 100, format };
   }
 
-  return "General";
+  if (decimalPlaces === 0) {
+    return { value: parsed.numericValue, format: "General" };
+  }
+
+  return { value: parsed.numericValue, format: `0.${"0".repeat(decimalPlaces)}` };
 }
 
 function applyGroupedBoldFormatting(selectedRange, boldMask) {
