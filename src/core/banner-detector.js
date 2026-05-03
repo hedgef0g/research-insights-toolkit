@@ -802,6 +802,15 @@ function detectGlobalTotalColumnIndex(columnDescriptors) {
   );
 
   if (groupLabelIsTotal) {
+    const firstGroupKey = firstDescriptor.comparisonGroupKey;
+    const firstGroupSize = columnDescriptors.filter(
+      (descriptor) => descriptor.comparisonGroupKey === firstGroupKey
+    ).length;
+
+    if (firstGroupSize > 1) {
+      return null;
+    }
+
     return firstDescriptor.columnIndex;
   }
 
