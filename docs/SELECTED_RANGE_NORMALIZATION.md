@@ -54,12 +54,12 @@ The normalized model separates the user's raw visual selection into logical area
 
 Because core modules like `significance.js` will operate on the `normalizedDataWindow` grid, any markers or fills generated must map back to the correct absolute Excel coordinates.
 - The system must maintain a mapping function: `(normalizedRow, normalizedCol) -> (excelRow, excelCol)`.
-- `excel-writer.js` must be updated to use this mapping when translating the logical calculation blocks into physical Excel cell updates.
+- This coordinate mapping is a requirement for future Run integration, with the exact integration point left to a dedicated implementation issue.
 
 ## 8. Confidence and Ambiguity Policy
 
 - **High Confidence:** If the normalization engine clearly identifies the boundaries (e.g., solid numeric block surrounded by text), it proceeds silently.
-- **Low Confidence / Ambiguity:** If boundaries are unclear (e.g., heavy mix of numbers and text in label columns), the system should fall back to the **Strict Data Selection** assumption or halt and warn the user.
+- **Low Confidence / Ambiguity:** Low-confidence cases should fall back to current strict selected-range behavior and surface a non-blocking warning. Blocking confirmation belongs to a separate UX/modal issue if ever needed.
 - **Rule of Least Surprise:** When in doubt, prefer the current manual behavior over guessing incorrectly.
 
 ## 9. Relationship to Current Warning-Only Guardrails
@@ -75,17 +75,17 @@ Because core modules like `significance.js` will operate on the `normalizedDataW
 ## 11. Implementation Phases
 
 We recommend a **model-first implementation path**:
-1.  **Phase 1: Pure Model & Telemetry.** Build the normalization engine. Run it silently alongside the current workflow. Log its output versus the actual user selections to gauge accuracy without affecting the UI or calculations.
+1.  **Phase 1: Pure model / diagnostics only.** Build the normalization engine. Run it silently alongside the current workflow. Log its output versus the actual user selections to gauge accuracy without affecting the UI or calculations.
 2.  **Phase 2: Preview UI Integration.** Expose the normalized model in a read-only Table Preview UI. Allow users to confirm the engine's guesses.
 3.  **Phase 3: Opt-in Execution.** Add a setting to "Auto-detect table boundaries" that wires the normalized model into the core execution flow.
-4.  **Phase 4: Default Behavior.** Make full-table selection the default, removing the old warning-only guardrails.
+4.  **Phase 4: Default Behavior.** Consider default Run integration only after preview/opt-in behavior proves reliable, while preserving strict selected-range workflow.
 
 ## 12. First Safe Coding Issue
 
-**Issue: Create the Normalization Engine (Silent Mode)**
-- Implement the boundary detection logic in a new file (e.g., `src/core/range-normalizer.js`).
+**Issue: Create the Normalization Engine (Pure Read-Only Module)**
+- Implement the boundary detection logic in a new pure read-only normalized selection model module.
 - Write unit tests for the engine using mock Excel data grids covering the supported selection patterns.
-- Do *not* wire this into `taskpane.js` execution yet.
+- Explicitly forbidden: Changes to taskpane Run flow, `excel-writer.js`, `significance.js`, `banner-detector` behavior, and `metric-detector` behavior.
 
 ## 13. Major Regression Risks
 
@@ -103,3 +103,11 @@ Before any normalization logic is merged into the execution path, these scenario
 3.  **Full table with title:** Select a table including a top-row report title. Ensure the title is ignored and the banner is correctly identified below it.
 4.  **Numeric labels:** A table where the row labels are numeric (e.g., years: 2021, 2022). The engine must not consume these as the data body.
 5.  **Small base tables:** Ensure small-base formatting correctly targets the `normalizedDataWindow` and doesn't bleed into the `rowLabelArea`.
+6.  **Data + two left row-label columns:** Ensure both columns are identified as labels and not data.
+7.  **Multi-row / merged-like banner:** Ensure multi-level headers are correctly identified as the banner area.
+8.  **NPS-first:** Ensure normal metric detection works.
+9.  **Extended NPS:** Ensure multi-row scales are correctly isolated.
+10. **Means + SD/Base:** Ensure base/SD are correctly excluded from markers.
+11. **Local/global Total banner:** Ensure total columns are correctly mapped in coordinate system.
+12. **Previous-column / wave layout:** Ensure automatic wave behavior maps correctly.
+13. **Values already containing significance markers from a previous run:** Ensure the normalization engine is not confused by text markers within the numeric data area.
