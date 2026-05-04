@@ -24,7 +24,6 @@ Automatic worksheet/workbook scanning is still not implemented.
 - Banner detection and banner-letter placement are separate concerns.
 
 ## Core vs Office.js Boundary
-- `src/taskpane/taskpane.js` interacts directly with Office.js to read from and write to Excel.
 - `src/core/*` modules (like `significance.js`, `metric-detector.js`, `banner-detector.js`) are pure JavaScript logic and should remain Office.js-free. They should not contain direct Office.js API calls or UI DOM access.
 - **Architectural Constraints:** No statistical calculations in `taskpane.js` (UI orchestration only). No Excel range writing in `significance.js`. No UI DOM access in core modules.
 
