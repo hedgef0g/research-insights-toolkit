@@ -64,8 +64,9 @@ Because core modules like `significance.js` will operate on the `normalizedDataW
 
 ## 9. Relationship to Current Warning-Only Guardrails
 
-- Current warning-only guardrails alert the user if they suspect a bad selection (e.g., "Selection looks like a full table").
-- These guardrails will be phased out and replaced by the normalization engine, which will handle the selection gracefully instead of warning.
+- Current warning-only guardrails are a temporary safety net.
+- Once normalization proves reliable, they may be reduced, reframed, or reused as fallback diagnostics.
+- They should not become the primary product solution.
 
 ## 10. Relationship to Table Preview Model
 
@@ -75,7 +76,7 @@ Because core modules like `significance.js` will operate on the `normalizedDataW
 ## 11. Implementation Phases
 
 We recommend a **model-first implementation path**:
-1.  **Phase 1: Pure model / diagnostics only.** Build the normalization engine. Run it silently alongside the current workflow. Log its output versus the actual user selections to gauge accuracy without affecting the UI or calculations.
+1.  **Phase 1: Pure model / diagnostics only.** Build the normalization engine. Run it silently alongside the current workflow. Expose its output only through dev diagnostics or future preview, without changing Run behavior.
 2.  **Phase 2: Preview UI Integration.** Expose the normalized model in a read-only Table Preview UI. Allow users to confirm the engine's guesses.
 3.  **Phase 3: Opt-in Execution.** Add a setting to "Auto-detect table boundaries" that wires the normalized model into the core execution flow.
 4.  **Phase 4: Default Behavior.** Consider default Run integration only after preview/opt-in behavior proves reliable, while preserving strict selected-range workflow.
