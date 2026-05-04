@@ -1923,3 +1923,38 @@ Expected:
 - calculation stops;
 - status shows concise user-facing error;
 - no technical diagnostics dump.
+
+## Means + SD/Base
+Setup: Table containing a Mean row and a Standard Deviation (SD) or Base row directly beneath it.
+Expected behavior: The Mean row receives significance markers or spread indicators based on calculations. The SD and Base rows receive no significance markers.
+Key regression risk: Markers accidentally appearing on the SD or Base rows instead of the Mean row.
+
+## Means + variance/Base
+Setup: Table containing a Mean row and a Variance or Base row directly beneath it.
+Expected behavior: The Mean row receives significance markers or spread indicators based on calculations. The Variance and Base rows receive no significance markers.
+Key regression risk: Markers accidentally appearing on the Variance or Base rows.
+
+## NPS-first
+Setup: Table with an NPS row followed immediately by Promoters, Detractors, and Base rows.
+Expected behavior: The NPS row receives specific NPS significance spread markers. Promoters and Detractors receive ordinary proportion markers. The Base row receives no markers.
+Key regression risk: The NPS row failing to receive markers, or Promoters/Detractors receiving the wrong marker type.
+
+## extended NPS
+Setup: Table with an NPS row, alongside Scale rows, buckets, support rows, and a Base row.
+Expected behavior: Scale rows, buckets, and support rows receive ordinary proportion markers. The NPS row receives NPS significance markers. The Base row receives no markers.
+Key regression risk: Ordinary proportion markers incorrectly applying to the NPS row instead of the specific NPS markers.
+
+## Run → Clear significance
+Setup: A table that has already been calculated (markers and fills exist). Select the range and click the clear significance button.
+Expected behavior: All significance markers (letters, arrows) and formatting (bolding, fills) are completely removed from the selected cells.
+Key regression risk: Leftover formatting or trailing marker artifacts (e.g. ` b`) remaining in cells.
+
+## numeric output conventions: 28, 28%, 0.28
+Setup: A table containing values typed as plain numbers (28), formatted as percentages (28%), and formatted as decimals (0.28). Select the table and Run significance.
+Expected behavior: Unmarked cells perfectly preserve their original Excel numeric values and display formats. Marker-bearing cells maintain the visual numeric string convention before the appended letter (e.g., `28% b` instead of `0.28 b`).
+Key regression risk: The add-in converting the entire selected range (including unmarked cells) to text, or breaking percentage formatting into plain decimals.
+
+## selected range guardrail warning-only behavior
+Setup: Manually select a range that inadvertently includes the table title, question text, or top header row (outside the numeric data area). Click Run.
+Expected behavior: The calculation proceeds normally based on the selection. A warning is displayed in the taskpane status output indicating that non-data rows may have been included, but the Run is not blocked or aborted. The selection is not automatically trimmed.
+Key regression risk: The guardrail warning blocking the calculation, or the add-in attempting to automatically resize the user's manual selection.

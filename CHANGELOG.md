@@ -2,6 +2,29 @@
 
 ## [Current Development Stage]
 
+### Stabilization Release
+
+#### Added
+- Warning-only selected range guardrails (temporary safety net).
+- Shared agent instructions added to `AGENTS.md` and referenced in `CLAUDE.md`.
+
+#### Improved
+- Numeric output preservation for unmarked cells (avoids converting the whole selected range to text).
+- Preservation of display conventions: `28` remains plain, `28%` remains percent, `0.28` remains decimal-share.
+- Clear significance numeric restoration (`21% b` clears to `21%`, `28.1 b` clears to `28.1`, `0.281 b` clears to `0.281`).
+- Run / Clear actions moved near the top of the taskpane.
+
+#### Fixed
+- Banner-aware comparisons now handle the first pair inside a multi-column group more correctly.
+- Multi-row / merged-like banner group detection was improved.
+- Banner letters are now written to visible banner labels when labels are located above the row directly adjacent to the data.
+
+#### Notes
+- Selected range normalization is not implemented yet.
+- Worksheet/workbook auto-scan is not implemented.
+- Full-table selection support is future product/spec work.
+
+
 ### 30.04.2026 — Banner-aware MVP and completed UI settings logic
 
 #### Added
