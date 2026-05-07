@@ -872,4 +872,5 @@ A-6. This spec presumes the existing Run pipeline (manual selected-range,
 Run button, marker-and-fill output) and does not add new entry points.
 
 A-7. Google Sheets and the future automatic worksheet/workbook scanner are
-out o
+out of scope for this spec, but this spec must not block platform-neutral
+implementation later.
