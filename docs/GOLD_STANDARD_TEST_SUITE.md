@@ -47,8 +47,20 @@ The suite does NOT replace manual smoke testing. Both are required.
 - Expected-output files are not added in this issue; they are placeholders.
 - Runtime code is not modified.
 - Existing test behavior is not changed.
-- UNSUPPORTED and FUTURE structures in TABLE_STRUCTURE_MATRIX.md are noted but not
-  assigned test cases until the structures are implemented.
+
+### FUTURE and BLOCKED-BY-SPEC cases
+
+This document is a planning artifact. Cases may be included with status FUTURE or
+BLOCKED-BY-SPEC even when the runtime feature is not implemented. This allows the
+planned coverage to be visible before implementation begins.
+
+- FUTURE cases have a defined expected behavior in TABLE_STRUCTURE_MATRIX.md but
+  no implementation yet. They must not be marked COMPLETE until the runtime feature
+  reaches SUPPORTED status.
+- BLOCKED-BY-SPEC cases require a spec decision before implementation can start.
+  Expected behavior cannot be fully defined until the spec is finalized.
+- UNSUPPORTED structures from TABLE_STRUCTURE_MATRIX.md (explicitly by-design
+  non-features) are not assigned case IDs.
 
 ---
 
@@ -64,7 +76,15 @@ Each test case is a self-contained record. The canonical form uses the following
     Table type     Metric type(s) present: Proportion, Mean, NPS, Mixed.
     Metric config  Active settings: confidence level, tailed mode, Total mode,
                    previous-column, small-base threshold, banner mode.
-    Status         PLANNED | WORKBOOK PENDING | COMPLETE
+    Status         PLANNED | FUTURE | BLOCKED-BY-SPEC | WORKBOOK PENDING | COMPLETE
+
+                   PLANNED         -- behavior is implemented; workbook not yet made.
+                   FUTURE          -- runtime feature not yet implemented; case is
+                                      a planning placeholder.
+                   BLOCKED-BY-SPEC -- spec decision required before expected output
+                                      can be defined.
+                   WORKBOOK PENDING -- behavior implemented; workbook in progress.
+                   COMPLETE        -- workbook and expected-output file both exist.
 
 ### 3.2. Input table
 
@@ -296,15 +316,68 @@ Each case references the matrix section(s) it exercises.
              Matrix ref: 4 (Base row with small base), 1.3
              Covers: excluded column receives small-base fill on all NPS block rows.
 
-### 4.7. Base edge cases
+### 4.7. Base structure and edge cases
 
-    GST-060  Zero base in one column (missing base PARTIAL case).
-             Matrix ref: 6 (Missing Base = 0 or blank)
+Background: TABLE_STRUCTURE_MATRIX.md section 4 defines a planned base priority order
+that is not yet fully implemented -- Effective Base > Unweighted Base > plain Base >
+Weighted Base fallback with warning. Cases GST-062 to GST-066 cover this priority
+ladder. Cases GST-060 and GST-061 cover edge conditions.
+
+    GST-060  Zero base in one column (missing base PARTIAL case). Status: PLANNED.
+             Matrix ref: 4, 6 (Missing Base = 0 or blank)
              Covers: no crash; result written as non-significant; behavior noted.
 
-    GST-061  Multiple Base rows in one block (first used, PARTIAL).
+    GST-061  Multiple Base rows in one block (first used, PARTIAL). Status: PLANNED.
              Matrix ref: 4 (Multiple Base rows in one block)
              Covers: first Base row is used; behavior noted.
+
+    GST-062  Weighted Base only (non-integer values, e.g. 487.3). Status: PLANNED.
+             Matrix ref: 4 (Weighted Base)
+             Matrix status: PARTIAL -- no explicit weighted-base path; value used
+             as-is in z-test denominator.
+             Covers: calculation proceeds with non-integer base; no explicit
+                     weighted-base warning is shown in current implementation;
+                     statistical validity depends on researcher's weighting method.
+             Note: when the dedicated weighted-base path is implemented this case
+                   must be updated to verify the warning and the correct path.
+
+    GST-063  Unweighted Base alongside Weighted Base in same selection.
+             Status: PLANNED.
+             Matrix ref: 4 (Unweighted Base, Weighted Base)
+             Covers: when both base types appear in different blocks, the unweighted
+                     base takes priority over weighted base per the planned priority
+                     order; expected behavior once the priority logic is implemented.
+             Note: PLANNED because current behavior uses whatever base row is found
+                   first; priority logic is not yet implemented.
+
+    GST-064  Effective Base present (highest priority in planned order).
+             Status: FUTURE.
+             Matrix ref: 4 (Effective Base)
+             Matrix status: FUTURE -- no dedicated effective-base row keyword or
+             logic exists yet.
+             Covers: when an Effective Base row is detected, it takes precedence
+                     over Unweighted Base and Weighted Base; significance test uses
+                     Effective Base value as the denominator.
+             Prerequisite: Effective Base keyword must be added to dictionary.config.js
+                           and detection/calculation paths must be implemented.
+
+    GST-065  Plain Base fallback when no Unweighted or Effective Base is present.
+             Status: PLANNED.
+             Matrix ref: 4 (Unweighted Base / plain Base)
+             Covers: a row labeled "Base" (not detected as Weighted or Effective)
+                     is used as-is; this is the current standard behavior and
+                     must remain stable after the priority ladder is implemented.
+
+    GST-066  Weighted Base as lowest-priority fallback with explicit warning.
+             Status: BLOCKED-BY-SPEC.
+             Matrix ref: 4 (Weighted Base)
+             Covers: when no Unweighted or Effective Base is found, Weighted Base
+                     is used as the fallback and a warning is shown to the user
+                     indicating that the base is weighted and statistical validity
+                     should be verified.
+             Prerequisite: weighted-base detection path and warning message must
+                           be specified and implemented before expected output can
+                           be defined.
 
 ### 4.8. Messy table cases
 
@@ -335,6 +408,54 @@ Each case references the matrix section(s) it exercises.
              Matrix ref: 1.1, 1.2, 1.3 (mixed)
              Covers: all three block types detected and calculated correctly;
                      shared Base resolved; no markers on service rows.
+
+### 4.11. Count row cases
+
+Background: TABLE_STRUCTURE_MATRIX.md section 5.1 defines count rows (n=,
+count-equivalent keywords) as a FUTURE metric type. Count rows are distinct from
+Base rows and must not trigger significance calculations automatically. A derived
+proportion path (count + Base -> proportion) is identified but requires explicit
+opt-in and a separate spec decision.
+
+    GST-100  Counts-only table (rows labeled n= or count, no percent rows).
+             Status: FUTURE.
+             Matrix ref: 5.1 (Count row)
+             Covers: count rows must be detected as COUNT type; no significance
+                     markers must be written to count rows; no calculation block
+                     must be formed for count rows alone.
+             Prerequisite: COUNT row type must be added to the metric detector
+                           before this case can be run.
+
+    GST-101  Count + percent table (count row alongside labeled proportion rows).
+             Status: FUTURE.
+             Matrix ref: 5.1 (Count row), 1.1 (Proportion)
+             Covers: proportion rows receive normal significance markers; count row
+                     receives no markers regardless of its position in the table;
+                     count row must not be misidentified as a Base row.
+             Prerequisite: same as GST-100.
+
+    GST-102  Count + Base table where derived proportion may be possible later.
+             Status: BLOCKED-BY-SPEC.
+             Matrix ref: 5.1 (Count row), 4 (Base Structures)
+             Covers: a table where count rows and a Base row are present but no
+                     explicit percent row exists. The matrix notes that derived
+                     proportion calculation (count / Base) may be supported in
+                     future with explicit opt-in and trust-first behavior.
+             Expected constraint: no significance must be calculated and no markers
+                                  written in this scenario until the opt-in spec
+                                  is defined and implemented.
+             Prerequisite: spec decision required on opt-in mechanism, trust model,
+                           and derived proportion calculation path.
+
+    GST-103  Count rows in a mixed table must not receive markers.
+             Status: FUTURE.
+             Matrix ref: 5.1 (Count row), 1.1, 1.2, 1.3
+             Covers: a table containing count rows alongside supported metric rows
+                     (proportions, means, NPS). The proportion/mean/NPS rows
+                     receive their normal markers; count rows receive no markers
+                     under any circumstance; count rows must not break block
+                     detection for the surrounding supported rows.
+             Prerequisite: same as GST-100.
 
 ---
 
@@ -480,16 +601,18 @@ A case is considered valid when:
 
 ## 8. Known limitations of this plan
 
-- No workbook files or expected-output files exist yet. All cases in section 4 are
-  PLANNED status.
+- No workbook files or expected-output files exist yet. Cases in section 4 carry
+  status PLANNED, FUTURE, or BLOCKED-BY-SPEC as noted inline.
 - The expected-output schema in section 5 is a draft. Field names and structure may
   change when the first workbooks are produced.
-- UNSUPPORTED and FUTURE structures from TABLE_STRUCTURE_MATRIX.md are not assigned
-  case IDs here. They will be added when the structures are implemented.
-- The weighted base (PARTIAL) and Effective Base (FUTURE) cases are not yet assigned
-  because the detection and calculation paths are not finalized.
-- Count row handling (FUTURE in matrix section 5.1) is excluded until the behavior
-  is defined.
+- UNSUPPORTED structures (explicitly by-design non-features) in
+  TABLE_STRUCTURE_MATRIX.md are not assigned case IDs. FUTURE and PARTIAL structures
+  are assigned cases with appropriate status flags (see section 2).
+- Base priority ladder cases (GST-062 to GST-066) are included as PLANNED, FUTURE,
+  or BLOCKED-BY-SPEC. None can be marked COMPLETE until the relevant runtime feature
+  reaches SUPPORTED status in STATUS.md.
+- Count row cases (GST-100 to GST-103) are included as FUTURE or BLOCKED-BY-SPEC.
+  GST-102 additionally requires a spec decision before expected output can be written.
 - Google Sheets and cloud settings are excluded as they are not implemented.
 - This document does not prescribe a test runner. Automation tooling is a future
   issue once the case inventory and schema are validated against real runs.
