@@ -656,9 +656,6 @@ A case is considered valid when:
                                      weighted / effective bases. Cases GST-067,
                                      GST-068, GST-069, and GST-072 depend on
                                      the behavior described in that spec.
-                                     Note: spec is on branch
-                                     chore/spec-issue-17-multi-col-and-weighted-bases
-                                     and is not yet merged to main.
 
 ---
 
@@ -675,9 +672,8 @@ A case is considered valid when:
   or BLOCKED-BY-SPEC. None can be marked COMPLETE until the relevant runtime feature
   reaches SUPPORTED status in STATUS.md.
 - Extended base priority cases (GST-067, GST-072) and multi-column label cases
-  (GST-068, GST-069) are FUTURE. All depend on docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md,
-  which is not yet merged. None can be marked COMPLETE until the runtime feature
-  reaches SUPPORTED status.
+  (GST-068, GST-069) are FUTURE. All depend on docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md.
+  None can be marked COMPLETE until the runtime feature reaches SUPPORTED status.
 - Count row cases (GST-100 to GST-103) are included as FUTURE or BLOCKED-BY-SPEC.
   GST-102 additionally requires a spec decision before expected output can be written.
 - Google Sheets and cloud settings are excluded as they are not implemented.

@@ -119,7 +119,7 @@
 | Single label column immediately left of selection | SUPPORTED | Default behavior. | -- |
 | Labels separated from data by numeric columns | SUPPORTED | Detector skips numeric intermediate columns when searching for text labels. | -- |
 | Labels in leftmost sheet columns (labels-on-left-side mode) | SUPPORTED | Enabled via labels-on-left-side setting; reads labels from left edge of sheet. | -- |
-| Multi-column label area (spanning two text columns) | UNSUPPORTED | Only one label column is read. Second label column is ignored. | FUTURE: multi-column label support. Spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md (unmerged). GST coverage: GST-068, GST-069. |
+| Multi-column label area (spanning two text columns) | UNSUPPORTED | Only one label column is read. Second label column is ignored. | FUTURE: multi-column label support. Spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md. GST coverage: GST-068, GST-069. |
 | No label column anywhere | PARTIAL | Detector proceeds without row-type keywords; may fall back to heuristics or misidentify rows. | Metric detection accuracy degrades. Ensure labels are present. |
 
 ### 3.3. Adjacent Tables
@@ -134,13 +134,13 @@
 
 ## 4. Base Structures
 
-Planned base priority order (not fully implemented yet): Effective Base > Unweighted Base > plain Base > Weighted Base fallback with warning. Effective Base and Weighted Base support are core correctness features, not premium or deferred features. Full spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md (unmerged, branch chore/spec-issue-17-multi-col-and-weighted-bases). GST coverage: GST-062 to GST-067, GST-072.
+Planned base priority order (not fully implemented yet): Effective Base > Unweighted Base > plain Base > Weighted Base fallback with warning. Effective Base and Weighted Base support are core correctness features, not premium or deferred features. Full spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md. GST coverage: GST-062 to GST-067, GST-072.
 
 | Structure | Status | Current behavior | Risk / notes |
 |---|---|---|---|
 | Unweighted Base (plain integer counts) | SUPPORTED | Standard behavior. | -- |
-| Weighted Base (non-integer, e.g. 487.3) | PARTIAL | No explicit weighted-base path. Value is used as-is in z-test denominator. Statistical validity depends on weighting method used by the researcher. | FUTURE: weighted base support planned. Intended role: fallback with warning when no Effective Base is present. Spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md (unmerged). GST: GST-062, GST-063, GST-066. |
-| Effective Base | FUTURE | No dedicated effective-base row keyword or logic yet. | Core correctness feature. Planned MVP-core support. Intended as the highest-priority base type. Spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md (unmerged). GST: GST-064, GST-067, GST-072. |
+| Weighted Base (non-integer, e.g. 487.3) | PARTIAL | No explicit weighted-base path. Value is used as-is in z-test denominator. Statistical validity depends on weighting method used by the researcher. | FUTURE: weighted base support planned. Intended role: fallback with warning when no Effective Base is present. Spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md. GST: GST-062, GST-063, GST-066. |
+| Effective Base | FUTURE | No dedicated effective-base row keyword or logic yet. | Core correctness feature. Planned MVP-core support. Intended as the highest-priority base type. Spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md. GST: GST-064, GST-067, GST-072. |
 | Shared Base (one Base row for multiple metric rows above) | SUPPORTED | Detector resolves shared Base correctly. | -- |
 | Missing Base row | UNSUPPORTED | Block cannot be formed. Calculation skipped for that block. | Always include a Base row per block or as shared Base. |
 | Base row with small base (below threshold) | SUPPORTED | Column excluded from comparisons; small-base fill applied across block; Total small-base stops calculation with message. | -- |
@@ -241,6 +241,6 @@ Planned base priority order (not fully implemented yet): Effective Base > Unweig
 - **Total outside selection** is partially designed but may need edge-case hardening.
 - **Check-table / data quality validation** mode is specified in docs/table-preview-model.md but not yet implemented.
 - **Selected range normalization** spec is in docs/SELECTED_RANGE_NORMALIZATION.md; implementation not started.
-- **Effective Base and Weighted Base** support are core correctness features. Planned base priority: Effective > Unweighted > plain Base > Weighted with warning. Full spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md (unmerged).
-- **Multi-column label area** support is FUTURE. Spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md (unmerged). GST coverage: GST-068, GST-069.
+- **Effective Base and Weighted Base** support are core correctness features. Planned base priority: Effective > Unweighted > plain Base > Weighted with warning. Full spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md.
+- **Multi-column label area** support is FUTURE. Spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md. GST coverage: GST-068, GST-069.
 - This matrix reflects the current stabilization state. Update this document when new structures are implemented or when validation behavior changes.
