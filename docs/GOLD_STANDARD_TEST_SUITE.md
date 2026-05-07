@@ -379,7 +379,61 @@ ladder. Cases GST-060 and GST-061 cover edge conditions.
                            be specified and implemented before expected output can
                            be defined.
 
-### 4.8. Messy table cases
+    GST-067  Effective Base + Unweighted Base + Weighted Base all present in one
+             selection. Status: FUTURE.
+             Matrix ref: 4 (Effective Base, Unweighted Base, Weighted Base)
+             Spec ref: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md
+             Covers: priority ladder is exercised end-to-end: Effective Base is
+                     selected as the denominator; Unweighted Base and Weighted Base
+                     rows are present but not used for calculation; markers are
+                     correct; no spurious warnings from the lower-priority rows.
+             Prerequisite: Effective Base keyword, detection, and the full base
+                           priority logic must be implemented before expected output
+                           can be defined.
+
+    GST-072  Small base on Effective Base column while the displayed Weighted Base
+             value for the same column is above the small-base threshold.
+             Status: FUTURE.
+             Matrix ref: 4 (Effective Base, Base row with small base)
+             Spec ref: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md
+             Covers: small-base exclusion is driven by the priority-selected base
+                     (Effective Base in this case), not the displayed Weighted Base;
+                     the column is correctly excluded even though the Weighted Base
+                     value alone would not trigger exclusion.
+             Prerequisite: same as GST-067.
+
+### 4.8. Multi-column label cases
+
+Background: TABLE_STRUCTURE_MATRIX.md section 3.2 defines multi-column label support
+as FUTURE. Spec is in docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md. Cases GST-068
+and GST-069 cover label disambiguation and span-fill behavior. Both are FUTURE cases;
+no runtime support for multi-column labels exists yet.
+
+    GST-068  Multi-column label area disambiguates two blocks that share the same
+             primary label text "%". Status: FUTURE.
+             Matrix ref: 3.2 (Multi-column label area)
+             Spec ref: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md
+             Covers: when the first label column contains "%" for two separate
+                     metric blocks, the second label column provides a disambiguating
+                     sub-label; the detector uses the combined label to assign the
+                     correct row type to each block; each block receives correct
+                     markers independently.
+             Prerequisite: multi-column label reading must be implemented and
+                           two-column label concatenation logic must be specified
+                           before expected output can be defined.
+
+    GST-069  Two-column label with span-fill on continuation rows.
+             Status: FUTURE.
+             Matrix ref: 3.2 (Multi-column label area)
+             Spec ref: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md
+             Covers: a label block where the first label column has a value only on
+                     the first row and continuation rows are blank (span-fill
+                     pattern); the detector propagates the first-row label to
+                     continuation rows correctly; row-type assignment is correct
+                     for all rows in the span.
+             Prerequisite: same as GST-068.
+
+### 4.9. Messy table cases
 
     GST-070  Selection includes empty rows between blocks (PARTIAL).
              Matrix ref: 3.1 (Selection includes empty rows between blocks)
@@ -389,7 +443,7 @@ ladder. Cases GST-060 and GST-061 cover edge conditions.
              Matrix ref: 3.1 (Selection includes title / question text row)
              Covers: guardrail warning emitted; Run proceeds; selection not trimmed.
 
-### 4.9. Numeric output and display cases
+### 4.10. Numeric output and display cases
 
     GST-080  Plain numeric values (28), percent values (28%), decimal values (0.28)
              mixed in one table.
@@ -402,14 +456,14 @@ ladder. Cases GST-060 and GST-061 cover edge conditions.
              Covers: display decimal precision per metric type; calculations use
                      original values.
 
-### 4.10. Mixed block cases
+### 4.11. Mixed block cases
 
     GST-090  Table with Proportion + Mean + NPS blocks sharing one Base row.
              Matrix ref: 1.1, 1.2, 1.3 (mixed)
              Covers: all three block types detected and calculated correctly;
                      shared Base resolved; no markers on service rows.
 
-### 4.11. Count row cases
+### 4.12. Count row cases
 
 Background: TABLE_STRUCTURE_MATRIX.md section 5.1 defines count rows (n=,
 count-equivalent keywords) as a FUTURE metric type. Count rows are distinct from
@@ -597,6 +651,15 @@ A case is considered valid when:
                                      Cases GST-070 and GST-071 depend on the
                                      behavior described in that spec.
 
+    docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md
+                                     Spec for multi-column row labels and
+                                     weighted / effective bases. Cases GST-067,
+                                     GST-068, GST-069, and GST-072 depend on
+                                     the behavior described in that spec.
+                                     Note: spec is on branch
+                                     chore/spec-issue-17-multi-col-and-weighted-bases
+                                     and is not yet merged to main.
+
 ---
 
 ## 8. Known limitations of this plan
@@ -611,6 +674,10 @@ A case is considered valid when:
 - Base priority ladder cases (GST-062 to GST-066) are included as PLANNED, FUTURE,
   or BLOCKED-BY-SPEC. None can be marked COMPLETE until the relevant runtime feature
   reaches SUPPORTED status in STATUS.md.
+- Extended base priority cases (GST-067, GST-072) and multi-column label cases
+  (GST-068, GST-069) are FUTURE. All depend on docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md,
+  which is not yet merged. None can be marked COMPLETE until the runtime feature
+  reaches SUPPORTED status.
 - Count row cases (GST-100 to GST-103) are included as FUTURE or BLOCKED-BY-SPEC.
   GST-102 additionally requires a spec decision before expected output can be written.
 - Google Sheets and cloud settings are excluded as they are not implemented.
