@@ -142,6 +142,40 @@ For investigation-only tasks:
 - Do not push.
 - A clean agent worktree is acceptable if it is based on latest `main`.
 
+## Validation artifacts
+
+Three process artifacts live in `docs/`. Use them for non-trivial code changes touching detection, significance, preview/check logic, Excel writing, table structures, bases, or UI/status behavior.
+
+### TABLE_STRUCTURE_MATRIX.md
+
+`docs/TABLE_STRUCTURE_MATRIX.md` is the structure coverage source.
+
+- Check it to determine whether a table structure is supported, partial, unsupported, or future.
+- Do not mark a structure supported without evidence in this file.
+
+### GOLD_STANDARD_TEST_SUITE.md
+
+`docs/GOLD_STANDARD_TEST_SUITE.md` is the validation planning source.
+
+- High-risk PRs must identify affected GST cases.
+- New detection or calculation behavior should add or update planned GST cases where needed.
+
+### PR_TECHNICAL_DEBT_REPORT.md
+
+`docs/PR_TECHNICAL_DEBT_REPORT.md` is required for non-trivial PRs.
+
+- Fill it in or include equivalent content in the PR body or a PR comment.
+- "No known technical debt" is acceptable only when justified.
+
+### Non-trivial PR checklist
+
+Non-trivial PRs should report:
+
+- affected table-structure matrix areas;
+- affected gold-standard cases;
+- shortcuts, heuristics, or limitations;
+- follow-up issues if needed.
+
 ## Validation
 
 For code changes, run:
