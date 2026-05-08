@@ -55,6 +55,36 @@ export const METRIC_DICTIONARY = [
   },
   {
     rowType: "base",
+    baseSubtype: "effective",
+    keywords: [
+      "effective base",
+      "effective n",
+      "эффективная база",
+      "эффективное n",
+    ],
+  },
+  {
+    rowType: "base",
+    baseSubtype: "unweighted",
+    keywords: [
+      "unweighted base",
+      "unweighted n",
+      "невзвешенная база",
+      "невзвешенное n",
+    ],
+  },
+  {
+    rowType: "base",
+    baseSubtype: "weighted",
+    keywords: [
+      "weighted base",
+      "weighted n",
+      "взвешенная база",
+      "взвешенное n",
+    ],
+  },
+  {
+    rowType: "base",
     keywords: ["base", "база", "основание", "выборка", "количество", "кол во"],
   },
   {
