@@ -262,6 +262,58 @@ function attachBaseSubtype(block, rowDiagnostics, baseRowIndex) {
 }
 
 /**
+ * Attempts to parse NPS-first pattern (format 1 or 2) at rowIndex.
+ *
+ * FORMAT 1: NPS / Promoters / Detractors / BASE
+ * FORMAT 2: NPS / Promoters / Neutral / Detractors / BASE
+ *
+ * RETURNS:
+ * { npsIdx, promotersIdx, detractorsIdx, baseRowIndex, hasNeutral, neutralIdx? }
+ * or null if pattern does not match.
+ */
+function tryParseNpsFirstBlock(rowDiagnostics, rowIndex) {
+  const currentRowType = rowDiagnostics[rowIndex]?.rowType;
+  if (currentRowType !== "nps") {
+    return null;
+  }
+
+  // Format 1: NPS / Promoters / Detractors / BASE
+  if (
+    rowIndex + 3 < rowDiagnostics.length &&
+    rowDiagnostics[rowIndex + 1].rowType === "promoters" &&
+    rowDiagnostics[rowIndex + 2].rowType === "detractors" &&
+    rowDiagnostics[rowIndex + 3].rowType === "base"
+  ) {
+    return {
+      npsIdx: rowIndex,
+      promotersIdx: rowIndex + 1,
+      detractorsIdx: rowIndex + 2,
+      baseRowIndex: rowIndex + 3,
+      hasNeutral: false,
+    };
+  }
+
+  // Format 2: NPS / Promoters / Neutral / Detractors / BASE
+  if (
+    rowIndex + 4 < rowDiagnostics.length &&
+    rowDiagnostics[rowIndex + 1].rowType === "promoters" &&
+    isNeutralLabel(rowDiagnostics[rowIndex + 2].normalizedLabel) &&
+    rowDiagnostics[rowIndex + 3].rowType === "detractors" &&
+    rowDiagnostics[rowIndex + 4].rowType === "base"
+  ) {
+    return {
+      npsIdx: rowIndex,
+      promotersIdx: rowIndex + 1,
+      neutralIdx: rowIndex + 2,
+      detractorsIdx: rowIndex + 3,
+      baseRowIndex: rowIndex + 4,
+      hasNeutral: true,
+    };
+  }
+
+  return null;
+}
+/**
  * Returns a numeric priority for a base row. Lower value = higher priority.
  * Priority: Effective (0) > Unweighted (1) > plain Base (2) > Weighted (3).
  */
@@ -382,17 +434,11 @@ export function buildCalculationBlocks(detectionResult) {
       }
     }
 
-    // 4. NPS-first format 1: NPS / Promoters / Detractors / BASE
-    if (
-      currentRowType === "nps" &&
-      rowIndex + 3 < rowDiagnostics.length &&
-      rowDiagnostics[rowIndex + 1].rowType === "promoters" &&
-      rowDiagnostics[rowIndex + 2].rowType === "detractors" &&
-      rowDiagnostics[rowIndex + 3].rowType === "base"
-    ) {
-      const promotersIdx = rowIndex + 1;
-      const detractorsIdx = rowIndex + 2;
-      const baseRowIndex = rowIndex + 3;
+
+    // 4. NPS-first (format 1 and 2, unified handler)
+    const npsFirstBlock = tryParseNpsFirstBlock(rowDiagnostics, rowIndex);
+    if (npsFirstBlock !== null) {
+      const baseRowIndex = selectBestFromConsecutiveBases(rowDiagnostics, npsFirstBlock.baseRowIndex);
 
       if (pendingProportionRows.length > 0) {
         calculationBlocks.push(
@@ -404,58 +450,20 @@ export function buildCalculationBlocks(detectionResult) {
         pendingProportionRows.length = 0;
       }
 
+      const proportionValueIndexes = npsFirstBlock.hasNeutral
+        ? [npsFirstBlock.promotersIdx, npsFirstBlock.neutralIdx, npsFirstBlock.detractorsIdx]
+        : [npsFirstBlock.promotersIdx, npsFirstBlock.detractorsIdx];
+
       calculationBlocks.push(
         attachBaseSubtype(
-          { metricType: "proportion", valueRowIndexes: [promotersIdx, detractorsIdx], baseRowIndex },
+          { metricType: "proportion", valueRowIndexes: proportionValueIndexes, baseRowIndex },
           rowDiagnostics, baseRowIndex
         )
       );
 
       calculationBlocks.push(
         attachBaseSubtype(
-          { metricType: "npsStructure", valueRowIndex: rowIndex, promotersRowIndex: promotersIdx, detractorsRowIndex: detractorsIdx, baseRowIndex },
-          rowDiagnostics, baseRowIndex
-        )
-      );
-
-      rowIndex = baseRowIndex + 1;
-      continue;
-    }
-
-    // 4b. NPS-first format 2: NPS / Promoters / Neutral / Detractors / BASE
-    if (
-      currentRowType === "nps" &&
-      rowIndex + 4 < rowDiagnostics.length &&
-      rowDiagnostics[rowIndex + 1].rowType === "promoters" &&
-      isNeutralLabel(rowDiagnostics[rowIndex + 2].normalizedLabel) &&
-      rowDiagnostics[rowIndex + 3].rowType === "detractors" &&
-      rowDiagnostics[rowIndex + 4].rowType === "base"
-    ) {
-      const promotersIdx = rowIndex + 1;
-      const neutralIdx = rowIndex + 2;
-      const detractorsIdx = rowIndex + 3;
-      const baseRowIndex = rowIndex + 4;
-
-      if (pendingProportionRows.length > 0) {
-        calculationBlocks.push(
-          attachBaseSubtype(
-            { metricType: "proportion", valueRowIndexes: [...pendingProportionRows], baseRowIndex },
-            rowDiagnostics, baseRowIndex
-          )
-        );
-        pendingProportionRows.length = 0;
-      }
-
-      calculationBlocks.push(
-        attachBaseSubtype(
-          { metricType: "proportion", valueRowIndexes: [promotersIdx, neutralIdx, detractorsIdx], baseRowIndex },
-          rowDiagnostics, baseRowIndex
-        )
-      );
-
-      calculationBlocks.push(
-        attachBaseSubtype(
-          { metricType: "npsStructure", valueRowIndex: rowIndex, promotersRowIndex: promotersIdx, detractorsRowIndex: detractorsIdx, baseRowIndex },
+          { metricType: "npsStructure", valueRowIndex: npsFirstBlock.npsIdx, promotersRowIndex: npsFirstBlock.promotersIdx, detractorsRowIndex: npsFirstBlock.detractorsIdx, baseRowIndex },
           rowDiagnostics, baseRowIndex
         )
       );
