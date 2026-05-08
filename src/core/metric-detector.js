@@ -58,10 +58,14 @@ export function classifyMetricLabel(rawLabel) {
   // Проходимся по словарю. Как только находим совпадение — возвращаем тип.
   for (const dictionaryEntry of METRIC_DICTIONARY) {
     if (labelContainsAnyKeyword(normalizedLabel, dictionaryEntry.keywords)) {
-      return {
+      const result = {
         rowType: dictionaryEntry.rowType,
         normalizedLabel,
       };
+      if (dictionaryEntry.baseSubtype !== undefined) {
+        result.baseSubtype = dictionaryEntry.baseSubtype;
+      }
+      return result;
     }
   }
 
@@ -131,13 +135,17 @@ export function detectMetricRowsFromLeftLabels(selectedValues, leftLabelValues) 
     const rawLabel = extractRowLabelFromLeftCells(leftLabelRowValues); // Best label candidate.
     const classification = classifyMetricLabel(rawLabel); // Row type detection result.
 
-    rowDiagnostics.push({
+    const rowDiagnostic = {
       rowIndex,
       displayRowNumber: rowIndex + 1,
       rawLabel,
       normalizedLabel: classification.normalizedLabel,
       rowType: classification.rowType,
-    });
+    };
+    if (classification.baseSubtype !== undefined) {
+      rowDiagnostic.baseSubtype = classification.baseSubtype;
+    }
+    rowDiagnostics.push(rowDiagnostic);
   }
 
   return {
@@ -236,6 +244,24 @@ function isNeutralLabel(normalizedLabel) {
 }
 
 /**
+ * Returns the baseSubtype for a detected base row, if any.
+ */
+function getBaseSubtype(rowDiagnostics, baseRowIndex) {
+  return rowDiagnostics[baseRowIndex]?.baseSubtype;
+}
+
+/**
+ * Attaches baseSubtype to a block object when the base row carries one.
+ */
+function attachBaseSubtype(block, rowDiagnostics, baseRowIndex) {
+  const baseSubtype = getBaseSubtype(rowDiagnostics, baseRowIndex);
+  if (baseSubtype !== undefined) {
+    block.baseSubtype = baseSubtype;
+  }
+  return block;
+}
+
+/**
  * Builds calculation blocks from detected row labels.
  *
  * PURPOSE:
@@ -262,11 +288,12 @@ export function buildCalculationBlocks(detectionResult) {
     // 2. Строка Базы: закрываем висящие проценты, если они есть
     if (currentRowType === "base") {
       if (pendingProportionRows.length > 0) {
-        calculationBlocks.push({
-          metricType: "proportion",
-          valueRowIndexes: [...pendingProportionRows],
-          baseRowIndex: rowIndex,
-        });
+        calculationBlocks.push(
+          attachBaseSubtype(
+            { metricType: "proportion", valueRowIndexes: [...pendingProportionRows], baseRowIndex: rowIndex },
+            rowDiagnostics, rowIndex
+          )
+        );
         pendingProportionRows.length = 0;
       }
       rowIndex++;
@@ -284,20 +311,20 @@ export function buildCalculationBlocks(detectionResult) {
       const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, spreadRowIndex);
 
       if (baseRowIndex !== null) {
-        calculationBlocks.push({
-          metricType: "mean",
-          valueRowIndex: rowIndex,
-          spreadRowIndex,
-          spreadType: rowDiagnostics[spreadRowIndex].rowType,
-          baseRowIndex,
-        });
+        calculationBlocks.push(
+          attachBaseSubtype(
+            { metricType: "mean", valueRowIndex: rowIndex, spreadRowIndex, spreadType: rowDiagnostics[spreadRowIndex].rowType, baseRowIndex },
+            rowDiagnostics, baseRowIndex
+          )
+        );
 
         if (pendingProportionRows.length > 0) {
-          calculationBlocks.push({
-            metricType: "proportion",
-            valueRowIndexes: [...pendingProportionRows],
-            baseRowIndex,
-          });
+          calculationBlocks.push(
+            attachBaseSubtype(
+              { metricType: "proportion", valueRowIndexes: [...pendingProportionRows], baseRowIndex },
+              rowDiagnostics, baseRowIndex
+            )
+          );
           pendingProportionRows.length = 0;
         }
 
@@ -320,27 +347,28 @@ export function buildCalculationBlocks(detectionResult) {
       const baseRowIndex = rowIndex + 3;
 
       if (pendingProportionRows.length > 0) {
-        calculationBlocks.push({
-          metricType: "proportion",
-          valueRowIndexes: [...pendingProportionRows],
-          baseRowIndex,
-        });
+        calculationBlocks.push(
+          attachBaseSubtype(
+            { metricType: "proportion", valueRowIndexes: [...pendingProportionRows], baseRowIndex },
+            rowDiagnostics, baseRowIndex
+          )
+        );
         pendingProportionRows.length = 0;
       }
 
-      calculationBlocks.push({
-        metricType: "proportion",
-        valueRowIndexes: [promotersIdx, detractorsIdx],
-        baseRowIndex,
-      });
+      calculationBlocks.push(
+        attachBaseSubtype(
+          { metricType: "proportion", valueRowIndexes: [promotersIdx, detractorsIdx], baseRowIndex },
+          rowDiagnostics, baseRowIndex
+        )
+      );
 
-      calculationBlocks.push({
-        metricType: "npsStructure",
-        valueRowIndex: rowIndex,
-        promotersRowIndex: promotersIdx,
-        detractorsRowIndex: detractorsIdx,
-        baseRowIndex,
-      });
+      calculationBlocks.push(
+        attachBaseSubtype(
+          { metricType: "npsStructure", valueRowIndex: rowIndex, promotersRowIndex: promotersIdx, detractorsRowIndex: detractorsIdx, baseRowIndex },
+          rowDiagnostics, baseRowIndex
+        )
+      );
 
       rowIndex = baseRowIndex + 1;
       continue;
@@ -361,27 +389,28 @@ export function buildCalculationBlocks(detectionResult) {
       const baseRowIndex = rowIndex + 4;
 
       if (pendingProportionRows.length > 0) {
-        calculationBlocks.push({
-          metricType: "proportion",
-          valueRowIndexes: [...pendingProportionRows],
-          baseRowIndex,
-        });
+        calculationBlocks.push(
+          attachBaseSubtype(
+            { metricType: "proportion", valueRowIndexes: [...pendingProportionRows], baseRowIndex },
+            rowDiagnostics, baseRowIndex
+          )
+        );
         pendingProportionRows.length = 0;
       }
 
-      calculationBlocks.push({
-        metricType: "proportion",
-        valueRowIndexes: [promotersIdx, neutralIdx, detractorsIdx],
-        baseRowIndex,
-      });
+      calculationBlocks.push(
+        attachBaseSubtype(
+          { metricType: "proportion", valueRowIndexes: [promotersIdx, neutralIdx, detractorsIdx], baseRowIndex },
+          rowDiagnostics, baseRowIndex
+        )
+      );
 
-      calculationBlocks.push({
-        metricType: "npsStructure",
-        valueRowIndex: rowIndex,
-        promotersRowIndex: promotersIdx,
-        detractorsRowIndex: detractorsIdx,
-        baseRowIndex,
-      });
+      calculationBlocks.push(
+        attachBaseSubtype(
+          { metricType: "npsStructure", valueRowIndex: rowIndex, promotersRowIndex: promotersIdx, detractorsRowIndex: detractorsIdx, baseRowIndex },
+          rowDiagnostics, baseRowIndex
+        )
+      );
 
       rowIndex = baseRowIndex + 1;
       continue;
@@ -398,20 +427,20 @@ export function buildCalculationBlocks(detectionResult) {
       const baseRowIndex = findNextBaseRowIndex(rowDiagnostics, spreadRowIndex);
 
       if (baseRowIndex !== null) {
-        calculationBlocks.push({
-          metricType: "npsSpread",
-          valueRowIndex: rowIndex,
-          spreadRowIndex,
-          spreadType: rowDiagnostics[spreadRowIndex].rowType,
-          baseRowIndex,
-        });
+        calculationBlocks.push(
+          attachBaseSubtype(
+            { metricType: "npsSpread", valueRowIndex: rowIndex, spreadRowIndex, spreadType: rowDiagnostics[spreadRowIndex].rowType, baseRowIndex },
+            rowDiagnostics, baseRowIndex
+          )
+        );
 
         if (pendingProportionRows.length > 0) {
-          calculationBlocks.push({
-            metricType: "proportion",
-            valueRowIndexes: [...pendingProportionRows],
-            baseRowIndex,
-          });
+          calculationBlocks.push(
+            attachBaseSubtype(
+              { metricType: "proportion", valueRowIndexes: [...pendingProportionRows], baseRowIndex },
+              rowDiagnostics, baseRowIndex
+            )
+          );
           pendingProportionRows.length = 0;
         }
 
@@ -436,21 +465,21 @@ export function buildCalculationBlocks(detectionResult) {
 
         if (baseRowIndex !== null) {
           // All buffered rows, including Detractors and Promoters, receive proportion markers.
-          calculationBlocks.push({
-            metricType: "proportion",
-            valueRowIndexes: [...pendingProportionRows],
-            baseRowIndex,
-          });
+          calculationBlocks.push(
+            attachBaseSubtype(
+              { metricType: "proportion", valueRowIndexes: [...pendingProportionRows], baseRowIndex },
+              rowDiagnostics, baseRowIndex
+            )
+          );
           pendingProportionRows.length = 0;
 
           // NPS row uses NPS significance logic; Detractors and Promoters are its support inputs.
-          calculationBlocks.push({
-            metricType: "npsStructure",
-            valueRowIndex: rowIndex,
-            promotersRowIndex: promotersIdx,
-            detractorsRowIndex: detractorsIdx,
-            baseRowIndex,
-          });
+          calculationBlocks.push(
+            attachBaseSubtype(
+              { metricType: "npsStructure", valueRowIndex: rowIndex, promotersRowIndex: promotersIdx, detractorsRowIndex: detractorsIdx, baseRowIndex },
+              rowDiagnostics, baseRowIndex
+            )
+          );
 
           rowIndex++;
           continue;
