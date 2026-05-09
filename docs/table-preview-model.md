@@ -126,7 +126,13 @@ All fields from every metricType are present; fields that do not apply are `null
 
 | Code | Severity | Condition |
 |---|---|---|
-| `NUMERIC_LIKE_LABEL` | warning | Row label looks like a number or range but was not matched to a known type |
+| `NUMERIC_LIKE_LABEL` | warning | Row label looks like an isolated numeric range (e.g. "20-29") but was not matched to a known type; suppressed when neighboring rows also have range-like labels (category block) |
+| `SUSPICIOUS_NUMERIC_LABEL` | warning | Row label looks like a single numeric value (e.g. "42", "3.5", "61,00") and may be an uncoded value or export/labeling artifact; suppressed inside a numeric category block (range labels such as 20-29 or single-numeric scale labels such as 1 / 2 / 3 / 4) |
+| `SUSPICIOUS_ALL_100_ROW` | warning | Row contains 100% or equivalent (1.0) across all or most columns and is not a recognized base/NPS/mean/SD/variance row; may be a service, test, or uncoded row |
+| `MISSING_ROW_LABEL_WITH_DATA` | warning | Row has at least 2 non-empty numeric cells but its label is empty, whitespace-only, or a symbol-only placeholder (e.g. "-", ".", "*"); skips recognized metric/service rows |
+| `SUSPICIOUS_ERROR_LABEL` | warning | Row label contains a spreadsheet formula error (#N/A, #VALUE!, #REF!, #DIV/0!, etc.) or a programming error string (null, NaN, undefined, [object Object]); fires on all non-empty rows |
+| `SUSPICIOUS_PLACEHOLDER_LABEL` | warning | Row label matches a placeholder or test-row keyword in English (todo, tbd, test¹, dummy, placeholder, temp, delete, remove, ignore, xxx, asdf, qwerty, lorem ipsum) or Russian (тест¹, тестовая строка², удалить, не использовать, заглушка, временно, черновик); skips metric/service rows. ¹ "test"/"тест" fire only when the word starts the label (e.g. "test", "test row") — not when it follows a noun (e.g. "Concept Test", "Product Test"). ² "тестовая" fires only as "тестовая строка/тестовая_строка/тестовая-строка" — not for research labels like "Тестовая концепция" or "Тестовая упаковка" |
+| `SUSPICIOUS_CODE_LIKE_LABEL` | warning | Row label looks like a raw variable or code name (e.g. q1_1, Q12_3, var_005, brand_99, d1r3); no spaces allowed; skips metric/service rows. Underscore alone is not sufficient — requires /_\d+$/ (ends with _digits) or /^[a-zA-Z]{1,3}\d+_/ (short-prefix + digits before underscore). Labels like Top_2_Box, No_answer, Brand_A do not fire. |
 | `GLOBAL_TOTAL_BASE_TOO_SMALL` | critical | Global Total base < any other column base |
 | `LOCAL_TOTAL_BASE_TOO_SMALL` | critical | Local Total base < any member base in its group |
 | `LOCAL_TOTAL_BASE_LESS_THAN_SUM` | warning | Local Total base < sum of group member bases |
