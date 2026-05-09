@@ -35,6 +35,62 @@ const NPS_MISMATCH_ROUNDING_TOLERANCE = 0.02;
 // Differences above this threshold are elevated from warning to critical.
 const NPS_MISMATCH_CRITICAL_THRESHOLD = 0.05;
 
+// All-100 row detection thresholds.
+const ALL_100_MIN_COLUMNS = 2;
+const ALL_100_MIN_FRACTION = 0.8;
+
+// Row types recognized as metric/service rows — exempt from the all-100 check.
+const METRIC_SERVICE_ROW_TYPES = new Set([
+  "base",
+  "nps",
+  "npsScore",
+  "mean",
+  "sd",
+  "standardDeviation",
+  "variance",
+]);
+
+// Spreadsheet formula errors and programming error strings that must not appear as
+// client-facing row labels.
+const ERROR_LABEL_PATTERNS = [
+  /^#(N\/A|VALUE!|REF!|DIV\/0!|NUM!|NAME\?|NULL!|GETTING_DATA)$/i,
+  /\bnull\b/i,
+  /\bnan\b/i,
+  /\bundefined\b/i,
+  /\[object\s+object\]/i,
+];
+
+// Placeholder and test-row keywords (English and Russian).
+//
+// "test" and "тест" are restricted to start-of-string to avoid false positives
+// on legitimate research concepts such as "Concept Test" or "Product Test".
+// "тестовая" is matched only when followed by "строка" (with space/dash/underscore)
+// to avoid flagging valid labels like "Тестовая концепция" or "Тестовая упаковка".
+// Cyrillic patterns use start-of-string anchors instead of \b because JavaScript
+// \b is ASCII-only and does not form word boundaries around Cyrillic characters.
+const PLACEHOLDER_LABEL_PATTERNS = [
+  /\btodo\b/i,
+  /\btbd\b/i,
+  /^test(?:[\s\-_]|$)/i,
+  /\bdummy\b/i,
+  /\bplaceholder\b/i,
+  /\btemp\b/i,
+  /\bdelete\b/i,
+  /\bremove\b/i,
+  /\bignore\b/i,
+  /\bxxx\b/i,
+  /\basdf\b/i,
+  /\bqwerty\b/i,
+  /lorem\s+ipsum/i,
+  /^тест(?:[\s\-_]|$)/i,
+  /^тестовая[\s\-_]строка/i,
+  /^удалить(?:[\s\-_]|$)/i,
+  /^не\s+использовать(?:[\s\-_]|$)/i,
+  /^заглушка(?:[\s\-_]|$)/i,
+  /^временно(?:[\s\-_]|$)/i,
+  /^черновик(?:[\s\-_]|$)/i,
+];
+
 // ─── Main export ───────────────────────────────────────────────────────────
 
 /**
@@ -70,6 +126,12 @@ export function buildTablePreviewModel(input) {
   // Data quality analysis.
   const dataQualityIssues = [
     ...checkNumericLikeLabels(rowDiagnostics),
+    ...checkSuspiciousNumericLabels(rowDiagnostics),
+    ...checkSuspiciousAll100Rows(safeValues, rowDiagnostics),
+    ...checkMissingRowLabelWithData(safeValues, rowDiagnostics),
+    ...checkSuspiciousErrorLabels(rowDiagnostics),
+    ...checkSuspiciousPlaceholderLabels(rowDiagnostics),
+    ...checkSuspiciousCodeLikeLabels(rowDiagnostics),
     ...checkBaseConsistency(safeValues, calculationBlocks, bannerStructure),
     ...checkNpsMismatch(safeValues, calculationBlocks),
   ];
@@ -301,24 +363,30 @@ function enrichNpsBlocksWithNeutralRow(previewBlocks) {
 // ─── Data quality checks ───────────────────────────────────────────────────
 
 /**
- * Flags row labels that look purely numeric or like numeric ranges and were not
- * classified as a known metric type.
+ * Flags row labels that look like a numeric range and were not classified as a
+ * known metric type.
  *
- * Note: numeric labels can be valid in NPS 1–10 scales, age groups (18–24),
- * or wave numbers. This check produces warnings, not errors.
+ * Ordered category blocks (e.g. "20-29" / "30-39" / "40-49") are suppressed:
+ * when at least one neighbor within ±2 rows also has a range-like label the
+ * row is treated as part of a category block and no warning is emitted.
+ *
+ * Note: isolated range labels can still be valid for NPS scale rows or wave
+ * labels — this check produces warnings, not errors.
  */
 function checkNumericLikeLabels(rowDiagnostics) {
   const issues = [];
 
-  for (const row of rowDiagnostics) {
+  for (let i = 0; i < rowDiagnostics.length; i++) {
+    const row = rowDiagnostics[i];
     if (!row.label) continue;
     if (row.rowType !== "unknownText" && row.rowType !== "empty") continue;
-    if (!looksNumericOrRange(row.label)) continue;
+    if (!looksLikeNumericRange(row.label)) continue;
+    if (isInNumericRangeCategoryBlock(rowDiagnostics, i)) continue;
 
     issues.push({
       code: "NUMERIC_LIKE_LABEL",
       severity: "warning",
-      message: `Row ${row.rowIndex + 1}: label "${row.label}" looks numeric but was not matched to a known metric type. May be valid for NPS scales, age groups, or wave numbers.`,
+      message: `Row ${row.rowIndex + 1}: label "${row.label}" looks like a numeric range but was not matched to a known metric type. May be valid for NPS scales, age groups, or wave numbers.`,
       rowIndex: row.rowIndex,
       columnIndex: null,
       relatedRowIndexes: [],
@@ -330,12 +398,337 @@ function checkNumericLikeLabels(rowDiagnostics) {
   return issues;
 }
 
-/** Returns true for purely numeric labels and simple numeric ranges (e.g. "1", "18–24"). */
-function looksNumericOrRange(label) {
+/**
+ * Flags row labels that look like a single numeric value (integer or decimal)
+ * on rows that are not recognized service/metric types.
+ *
+ * Examples: "42", "3.5", "61,00" — may be uncoded values or export artifacts.
+ * Fires for any non-service row type including "proportion", because the metric
+ * detector may classify unknown rows as proportion rows by default.
+ *
+ * Does not fire when the row sits within a numeric category block — i.e. when
+ * nearby rows also carry numeric range or single-numeric category labels
+ * (NPS/rating scales such as 1 / 2 / 3 / 4 are suppressed this way).
+ */
+function checkSuspiciousNumericLabels(rowDiagnostics) {
+  const issues = [];
+
+  for (let i = 0; i < rowDiagnostics.length; i++) {
+    const row = rowDiagnostics[i];
+    if (!row.label) continue;
+    if (row.rowType === "empty") continue;
+    if (METRIC_SERVICE_ROW_TYPES.has(row.rowType)) continue;
+    if (!looksLikeSingleNumericValue(row.label)) continue;
+    if (isInNumericRangeCategoryBlock(rowDiagnostics, i)) continue;
+
+    issues.push({
+      code: "SUSPICIOUS_NUMERIC_LABEL",
+      severity: "warning",
+      message: `Row ${row.rowIndex + 1}: label "${row.label}" looks like a numeric value and may be an uncoded value or export/labeling issue.`,
+      rowIndex: row.rowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: { label: row.label, rowType: row.rowType },
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Flags rows where all or most non-empty numeric cells are 100% or equivalent,
+ * unless the row is a recognized metric/service row type.
+ *
+ * Uses cellLooksLike100Percent() so that percent-string cells ("100%", "1%")
+ * are evaluated in their display scale, not converted to a bare number first.
+ *
+ * Such rows may be service rows, test rows, or uncoded rows that should not
+ * appear in client-facing tables.
+ */
+function checkSuspiciousAll100Rows(values, rowDiagnostics) {
+  const issues = [];
+
+  for (const row of rowDiagnostics) {
+    if (row.rowType === "empty") continue;
+    if (METRIC_SERVICE_ROW_TYPES.has(row.rowType)) continue;
+
+    const rawRow = values && values[row.rowIndex];
+    if (!rawRow) continue;
+
+    let nonEmptyCount = 0;
+    let all100Count = 0;
+
+    for (const v of rawRow) {
+      if (v === null || v === undefined || v === "") continue;
+      const s = String(v).trim();
+      const numStr = s.endsWith("%") ? s.slice(0, -1).trim().replace(",", ".") : s.replace(",", ".");
+      if (Number.isNaN(Number(numStr))) continue;
+      nonEmptyCount++;
+      if (cellLooksLike100Percent(v)) all100Count++;
+    }
+
+    if (nonEmptyCount < ALL_100_MIN_COLUMNS) continue;
+    if (all100Count / nonEmptyCount < ALL_100_MIN_FRACTION) continue;
+
+    issues.push({
+      code: "SUSPICIOUS_ALL_100_ROW",
+      severity: "warning",
+      message:
+        `Row ${row.rowIndex + 1}: label "${row.label || "(no label)"}" contains 100% or equivalent ` +
+        `across ${all100Count} of ${nonEmptyCount} column(s). ` +
+        `May be a service, test, or uncoded row that should be checked before client delivery.`,
+      rowIndex: row.rowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: {
+        label: row.label,
+        all100Count,
+        totalNonEmpty: nonEmptyCount,
+        rowType: row.rowType,
+      },
+    });
+  }
+
+  return issues;
+}
+
+/** Returns true for labels that look like a numeric range: "20-29", "18–24", "25—34". */
+function looksLikeNumericRange(label) {
+  const s = String(label).trim();
+  return /^\d+[\-–—]\d+$/.test(s);
+}
+
+/** Returns true for labels that look like a single numeric value: "42", "3.5", "61,00". */
+function looksLikeSingleNumericValue(label) {
   const s = String(label).trim();
   if (/^\d+$/.test(s)) return true;
-  if (/^\d+[.,]\d+$/.test(s)) return true;
-  if (/^\d+[\-–—]\d+$/.test(s)) return true;
+  if (/^\d+\.\d+$/.test(s)) return true;
+  if (/^\d+,\d+$/.test(s)) return true;
+  return false;
+}
+
+/**
+ * Returns true if rawValue looks like 100%, respecting the storage scale.
+ *
+ * Percent-string cells (e.g. "100%", "100,0%"):
+ *   Strip "%" and check the display number is approximately 100 (99.5–100.5).
+ *   "1%" → display value 1 → false.  "100%" → display value 100 → true.
+ *
+ * Numeric values (plain numbers or numeric strings without "%"):
+ *   Check percent scale (≈100) OR share scale (≈1.0).
+ *   1 → true (Excel stores 100% as 1.0 in share/decimal scale).
+ *   100 → true.  0.5 → false.  1 from "1%" is never reached here.
+ */
+function cellLooksLike100Percent(rawValue) {
+  if (rawValue === null || rawValue === undefined || rawValue === "") return false;
+  const s = String(rawValue).trim();
+  if (s.endsWith("%")) {
+    const n = Number(s.slice(0, -1).trim().replace(",", "."));
+    return !Number.isNaN(n) && n >= 99.5 && n <= 100.5;
+  }
+  const n = Number(s.replace(",", "."));
+  if (Number.isNaN(n)) return false;
+  return (n >= 99.5 && n <= 100.5) || (n >= 0.995 && n <= 1.005);
+}
+
+/**
+ * Returns true if the row at arrayIndex sits within a numeric category block.
+ *
+ * A category block is detected when at least one neighbor within ±2 positions
+ * has a label that looks like either:
+ * - a numeric range ("20-29", "30-39") — age/category ranges, or
+ * - a single numeric value ("1", "2", "3.5") — NPS/rating scale rows.
+ *
+ * Used to suppress NUMERIC_LIKE_LABEL and SUSPICIOUS_NUMERIC_LABEL for labels
+ * that are part of an ordered scale or category group.
+ */
+function isInNumericRangeCategoryBlock(rowDiagnostics, arrayIndex) {
+  for (let delta = -2; delta <= 2; delta++) {
+    if (delta === 0) continue;
+    const ni = arrayIndex + delta;
+    if (ni < 0 || ni >= rowDiagnostics.length) continue;
+    const neighbor = rowDiagnostics[ni];
+    if (!neighbor || !neighbor.label) continue;
+    if (looksLikeNumericRange(neighbor.label)) return true;
+    if (looksLikeSingleNumericValue(neighbor.label)) return true;
+  }
+  return false;
+}
+
+/**
+ * Flags rows that contain at least 2 non-empty numeric cells but have no meaningful
+ * row label — i.e. the label is empty, whitespace-only, or composed entirely of
+ * symbol-only placeholder characters such as "-", "—", ".", "*".
+ *
+ * Skips recognized metric/service rows to avoid noise on intentionally label-free
+ * support rows.
+ */
+function checkMissingRowLabelWithData(values, rowDiagnostics) {
+  const issues = [];
+
+  for (const row of rowDiagnostics) {
+    if (METRIC_SERVICE_ROW_TYPES.has(row.rowType)) continue;
+    if (!isEmptyOrSymbolOnlyLabel(row.primaryLabel)) continue;
+
+    const rowNumbers = extractRowNumbers(values, row.rowIndex);
+    if (rowNumbers.filter((v) => v !== null).length < 2) continue;
+
+    const displayLabel = row.primaryLabel || row.label || "(empty)";
+    issues.push({
+      code: "MISSING_ROW_LABEL_WITH_DATA",
+      severity: "warning",
+      message: `Row ${row.rowIndex + 1}: row has data values but no meaningful label (label: "${displayLabel}"). Check that this row is not missing a category label.`,
+      rowIndex: row.rowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: { primaryLabel: row.primaryLabel, label: row.label, rowType: row.rowType },
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Flags rows whose label contains obvious spreadsheet formula errors (#N/A, #VALUE!,
+ * etc.) or programming error strings (null, NaN, undefined, [object Object]).
+ *
+ * Applies to all non-empty rows regardless of rowType — an error artifact as a
+ * label is always suspicious.
+ */
+function checkSuspiciousErrorLabels(rowDiagnostics) {
+  const issues = [];
+
+  for (const row of rowDiagnostics) {
+    if (row.rowType === "empty") continue;
+    if (!row.label) continue;
+
+    const s = String(row.label).trim();
+    if (!ERROR_LABEL_PATTERNS.some((p) => p.test(s))) continue;
+
+    issues.push({
+      code: "SUSPICIOUS_ERROR_LABEL",
+      severity: "warning",
+      message: `Row ${row.rowIndex + 1}: label "${row.label}" looks like a spreadsheet or programming error value and is almost certainly not a client-facing category.`,
+      rowIndex: row.rowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: { label: row.label, rowType: row.rowType },
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Flags rows whose label matches a known placeholder or test-row keyword in
+ * English or Russian.
+ *
+ * Uses word-boundary matching to avoid catching the keyword as part of a longer
+ * legitimate label (e.g. "placeholder" fires, "placeholder value" also fires,
+ * but "temperature" does not fire on "temp").
+ *
+ * Skips recognized metric/service rows.
+ */
+function checkSuspiciousPlaceholderLabels(rowDiagnostics) {
+  const issues = [];
+
+  for (const row of rowDiagnostics) {
+    if (row.rowType === "empty") continue;
+    if (!row.label) continue;
+    if (METRIC_SERVICE_ROW_TYPES.has(row.rowType)) continue;
+
+    const s = String(row.label).trim();
+    if (!PLACEHOLDER_LABEL_PATTERNS.some((p) => p.test(s))) continue;
+
+    issues.push({
+      code: "SUSPICIOUS_PLACEHOLDER_LABEL",
+      severity: "warning",
+      message: `Row ${row.rowIndex + 1}: label "${row.label}" looks like a test or placeholder row. Check that this row has not been accidentally left in the client table.`,
+      rowIndex: row.rowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: { label: row.label, rowType: row.rowType },
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Flags rows whose label looks like a raw variable or code name rather than a
+ * human-readable category label.
+ *
+ * Heuristic:
+ * - label contains an underscore (strong code-naming signal), OR
+ * - label starts with 1–4 letters followed by 2+ digits (e.g. q12, var005), OR
+ * - label follows an alternating letter-digit-letter-digit pattern (e.g. d1r3).
+ * - label must have no spaces (code names do not have spaces).
+ *
+ * Skips recognized metric/service rows (their labels are already validated by
+ * the detector) and rows with empty labels.
+ */
+function checkSuspiciousCodeLikeLabels(rowDiagnostics) {
+  const issues = [];
+
+  for (const row of rowDiagnostics) {
+    if (row.rowType === "empty") continue;
+    if (METRIC_SERVICE_ROW_TYPES.has(row.rowType)) continue;
+    if (!row.label) continue;
+    if (!looksLikeCodeLabel(row.label)) continue;
+
+    issues.push({
+      code: "SUSPICIOUS_CODE_LIKE_LABEL",
+      severity: "warning",
+      message: `Row ${row.rowIndex + 1}: label "${row.label}" looks like a variable or code name rather than a client-facing category. Check that this row label has not been left uncoded.`,
+      rowIndex: row.rowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: { label: row.label, rowType: row.rowType },
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Returns true when the label has no meaningful alphanumeric content.
+ * Catches empty strings, whitespace-only strings, and symbol-only placeholders
+ * such as "-", "—", ".", "*", "---", "?".
+ */
+function isEmptyOrSymbolOnlyLabel(label) {
+  if (!label || !String(label).trim()) return true;
+  return !/[a-zA-Zа-яА-ЯёЁ0-9]/.test(String(label).trim());
+}
+
+/**
+ * Returns true when the label looks like a variable or code name.
+ * No spaces are allowed (code names don't have spaces).
+ *
+ * Triggers on:
+ * - underscore AND a code-like digit pattern:
+ *     ends with _digits  → q1_1, Q12_3, var_005, brand_99
+ *     starts with ≤3 letters + digits + underscore  → q1_, Q12_
+ *   Underscore alone is NOT enough — labels like Top_2_Box, No_answer, Brand_A
+ *   do not end with digits or start with a short letter+digit prefix.
+ * - 1–4 letters + 2+ digits (no underscore): q12, var005, brand99
+ * - alternating letter-digit-letter-digit: d1r3, b2c4
+ */
+function looksLikeCodeLabel(label) {
+  const s = String(label).trim();
+  if (/\s/.test(s)) return false;
+  if (s.length < 2) return false;
+  if (/_/.test(s)) {
+    // Require a code-like digit pattern alongside the underscore.
+    return /_\d+$/.test(s) || /^[a-zA-Z]{1,3}\d+_/.test(s);
+  }
+  if (/^[a-zA-Z]{1,4}\d{2,}/.test(s)) return true;
+  if (/^[a-zA-Z]\d[a-zA-Z]\d/.test(s)) return true;
   return false;
 }
 
