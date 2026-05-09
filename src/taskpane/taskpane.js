@@ -30,6 +30,8 @@ import {
 
 import { writeCellResultsToSelectedRange, resolveNumericOutput } from "../core/excel-writer";
 
+import { buildTablePreviewModel } from "../core/table-preview-model";
+
 import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core/banner-detector";
 
 const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
@@ -305,6 +307,7 @@ Office.onReady((info) => {
   const calculateButton = document.getElementById("calculate-significance"); // Unified auto-detection button.
   const clearButton = document.getElementById("clear-significance"); // Button for removing markers.
   const detectMetricTypeButton = document.getElementById("detect-metric-type"); // Diagnostic detector button.
+  const checkTableButton = document.getElementById("check-table"); // Read-only table check button.
 
   initializeSettingsPanel();
   loadSavedSettingsIntoPanel();
@@ -321,6 +324,10 @@ Office.onReady((info) => {
 
   if (detectMetricTypeButton) {
     detectMetricTypeButton.addEventListener("click", runMetricDetectionDiagnostics);
+  }
+
+  if (checkTableButton) {
+    checkTableButton.addEventListener("click", runCheckTable);
   }
 });
 
@@ -930,6 +937,72 @@ async function runMetricDetectionDiagnostics() {
 
     setStatusMessage(formatMetricDetectionDiagnostics(detectionResult));
   });
+}
+
+/**
+ * Reads selected range and calls buildTablePreviewModel to display a short summary.
+ *
+ * Read-only: does not write to Excel, does not calculate significance.
+ */
+async function runCheckTable() {
+  await Excel.run(async (context) => {
+    const calculationSettings = readCalculationSettingsFromPanel();
+    const selectedRange = context.workbook.getSelectedRange();
+
+    selectedRange.load(["values", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+
+    await context.sync();
+
+    const selectedValues = selectedRange.values;
+
+    if (!selectedValues || selectedValues.length < 1 || !selectedValues[0] || selectedValues[0].length < 1) {
+      setCheckMessage("Нет данных в выделенном диапазоне.");
+      return;
+    }
+
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
+
+    const leftLabelValues = await loadLabelValuesForSelectedRange(
+      context,
+      selectedRange,
+      calculationSettings
+    );
+
+    const model = buildTablePreviewModel({ values: cleanedValues, leftLabelValues });
+    const { summary, qualitySummary, warnings } = model;
+
+    if (summary.rowCount === 0) {
+      setCheckMessage("Выделенный диапазон пуст.");
+      return;
+    }
+
+    const lines = [
+      `Проверка завершена. Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}. Предупреждений: ${qualitySummary.warningCount}. Критических: ${qualitySummary.criticalCount}.`,
+    ];
+
+    if (warnings && warnings.length > 0) {
+      lines.push("");
+      lines.push("Предупреждения:");
+      for (const warning of warnings) {
+        lines.push(`- [${warning.severity}] ${warning.text}`);
+      }
+    }
+
+    setCheckMessage(lines.join("\n"));
+  });
+}
+
+function setCheckMessage(message) {
+  const checkPanel = document.getElementById("check-panel");
+  const checkResult = document.getElementById("check-result");
+
+  if (checkPanel) {
+    checkPanel.style.display = "block";
+  }
+
+  if (checkResult) {
+    checkResult.textContent = message || "";
+  }
 }
 
 /**
