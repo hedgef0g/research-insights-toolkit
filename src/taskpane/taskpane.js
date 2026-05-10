@@ -35,6 +35,8 @@ import { scanWorksheetForTables } from "../core/table-inventory-scanner";
 
 import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core/banner-detector";
 
+import { normalizeSelectedRange } from "../core/range-normalizer";
+
 const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
   "GLOBAL_TOTAL_USED",
   "BANNER_AUTO_PREVIOUS_COLUMN_APPLIED",
@@ -951,17 +953,23 @@ async function runMetricDetectionDiagnostics() {
  * Reads selected range and calls buildTablePreviewModel to display a short summary.
  *
  * Read-only: does not write to Excel, does not calculate significance.
+ *
+ * Three normalizer states:
+ *   1. pass-through  — selection is numeric-only; existing flow runs unchanged.
+ *   2. normalized    — broad/full-table selection decomposed; normalized values used.
+ *   3. blocked       — broad selection but decomposition failed; early return with message.
  */
 async function runCheckTable() {
   await Excel.run(async (context) => {
     const calculationSettings = readCalculationSettingsFromPanel();
     const selectedRange = context.workbook.getSelectedRange();
 
-    selectedRange.load(["values", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    selectedRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
     await context.sync();
 
     const selectedValues = selectedRange.values;
+    const selectedText = selectedRange.text;
 
     if (!selectedValues || selectedValues.length < 1 || !selectedValues[0] || selectedValues[0].length < 1) {
       setCheckMessage("Нет данных в выделенном диапазоне.");
@@ -970,13 +978,48 @@ async function runCheckTable() {
 
     const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
 
-    const leftLabelValues = await loadLabelValuesForSelectedRange(
-      context,
-      selectedRange,
-      calculationSettings
-    );
+    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
 
-    const model = buildTablePreviewModel({ values: cleanedValues, leftLabelValues });
+    // State 3: normalization needed but blocked — stop and show reason.
+    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+      const codes = normalized.blockingReasons.length > 0
+        ? ` [${normalized.blockingReasons.join(", ")}]`
+        : "";
+      setCheckMessage(`${normalized.blockingMessage}${codes}`);
+      return;
+    }
+
+    let modelInput;
+    const normalizationLines = [];
+
+    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
+      // State 2: broad selection successfully decomposed — use normalized partitions.
+      modelInput = {
+        values: normalized.valuesForCalculation,
+        leftLabelValues: normalized.leftLabelValues,
+        bannerContext: normalized.bannerContext,
+        settings: calculationSettings,
+      };
+
+      normalizationLines.push("Диапазон нормализован: заголовки/лейблы/баннер отделены от данных.");
+
+      const parts = [];
+      if (normalized.titleRows.length > 0) parts.push(`заголовков: ${normalized.titleRows.length}`);
+      if (normalized.subtitleRows.length > 0) parts.push(`подзаголовков: ${normalized.subtitleRows.length}`);
+      if (normalized.bannerRows.length > 0) parts.push(`строк баннера: ${normalized.bannerRows.length}`);
+      if (normalized.labelColumns.length > 0) parts.push(`колонок меток: ${normalized.labelColumns.length}`);
+      if (parts.length > 0) normalizationLines.push(`Отделено: ${parts.join(", ")}.`);
+    } else {
+      // State 1: numeric-only selection — existing flow unchanged.
+      const leftLabelValues = await loadLabelValuesForSelectedRange(
+        context,
+        selectedRange,
+        calculationSettings
+      );
+      modelInput = { values: cleanedValues, leftLabelValues };
+    }
+
+    const model = buildTablePreviewModel(modelInput);
     const { summary, qualitySummary, warnings } = model;
 
     if (summary.rowCount === 0) {
@@ -987,6 +1030,11 @@ async function runCheckTable() {
     const lines = [
       `Проверка завершена. Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}. Предупреждений: ${qualitySummary.warningCount}. Критических: ${qualitySummary.criticalCount}.`,
     ];
+
+    if (normalizationLines.length > 0) {
+      lines.push("");
+      lines.push(...normalizationLines);
+    }
 
     if (warnings && warnings.length > 0) {
       lines.push("");
