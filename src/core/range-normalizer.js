@@ -44,17 +44,30 @@ const GATE_MIN_COLS = 3;
 // Pass-through gate: left-column pattern.
 // First column is text-heavy AND the remaining columns are numeric-heavy.
 const GATE_LEFT_COL_TEXT_FRACTION    = 0.7;
-const GATE_REST_COLS_NUMERIC_FRACTION = 0.7;
+// Lowered from 0.7: banner rows that contain "2025Q4"-style text labels dilute
+// the numeric fraction of the rest of the grid even when the data body is purely
+// numeric.  0.35 allows detection when ~4 banner rows precede ~3 data rows.
+const GATE_REST_COLS_NUMERIC_FRACTION = 0.35;
 
 // Pass-through gate: top-row pattern.
 // First row is text-heavy AND the lower rows are numeric-heavy.
 const GATE_TOP_ROW_TEXT_FRACTION      = 0.6;
-const GATE_LOWER_ROWS_NUMERIC_FRACTION = 0.7;
+// Lowered from 0.7 for the same banner-dilution reason as above.
+const GATE_LOWER_ROWS_NUMERIC_FRACTION = 0.3;
 
 // Pass-through gate: overall text-heavy fallback.
 const GATE_OVERALL_TEXT_FRACTION    = 0.25;
-const GATE_OVERALL_NUMERIC_FRACTION = 0.5;
+// Lowered from 0.5: when both label columns and banner rows are present, the
+// overall numeric fraction of the whole grid can fall below 0.5 even for a
+// structurally valid research table.
+const GATE_OVERALL_NUMERIC_FRACTION = 0.3;
 const GATE_OVERALL_MIN_CELLS        = 12;
+
+// Banner row count safety cap.  More than this many rows classified as banner
+// before the first body row almost certainly means the selection spans multiple
+// tables (or includes unrelated content), not a single wide banner header.
+// Real survey tables have at most 4–5 banner rows; the threshold is set to 6.
+const MAX_BANNER_ROW_COUNT = 6;
 
 // Title row: sparse, no numeric cells, at least one text cell.
 const MAX_TITLE_ROW_NON_EMPTY_CELLS = 3;
@@ -81,17 +94,27 @@ function isCellEmpty(cell) {
   return cell === "" || cell === null || cell === undefined;
 }
 
+// Strict numeric pattern: the entire cell value (after trimming) must consist of
+// an optional sign, digits with an optional decimal separator (dot or comma), and
+// an optional trailing percent.  Mixed strings like "2025Q4", "(a)", or
+// "Волна (квартал)" do NOT match — parseFloat() would accept them because it
+// stops at the first non-numeric character, but these are header labels, not data.
+const STRICT_NUMERIC_RE = /^[+-]?(\d+([.,]\d*)?|\d*[.,]\d+)%?$/;
+
 function isNumericCell(cell) {
   if (typeof cell === "number") return !isNaN(cell);
   if (typeof cell !== "string") return false;
   const trimmed = cell.trim();
   if (!trimmed) return false;
-  return !isNaN(parseFloat(trimmed.replace(/,/g, ".")));
+  return STRICT_NUMERIC_RE.test(trimmed);
 }
 
 function isTextOnlyCell(cell) {
   if (typeof cell !== "string" || !cell.trim()) return false;
-  return isNaN(parseFloat(cell.trim().replace(/,/g, ".")));
+  // A non-empty string is "text-only" when it is NOT a strict numeric value.
+  // Using isNumericCell here keeps both functions consistent: anything that
+  // isNumericCell rejects (e.g. "2025Q4", "(a)") is correctly treated as text.
+  return !isNumericCell(cell);
 }
 
 // ─── Grid analysis helpers ────────────────────────────────────────────────────
@@ -228,7 +251,15 @@ function isTitleLikeRow(values, rowIndex, colCount) {
     if (isTextOnlyCell(cell)) hasText = true;
   }
 
-  return hasText && nonEmptyCount > 0 && nonEmptyCount <= MAX_TITLE_ROW_NON_EMPTY_CELLS;
+  if (!hasText || nonEmptyCount === 0 || nonEmptyCount > MAX_TITLE_ROW_NON_EMPTY_CELLS) {
+    return false;
+  }
+
+  // Title and subtitle rows originate from col[0] — the leftmost cell must be
+  // non-empty. A sparse row whose content is entirely in col[1]+ (common for
+  // Excel merged banner headers, where the merge value appears only in the
+  // top-left data cell) is a banner row, not a title or subtitle row.
+  return !isCellEmpty(row[0]);
 }
 
 /**
@@ -283,6 +314,61 @@ function detectBannerRows(values, startRow, rowCount, colCount) {
   }
 
   return bannerRows;
+}
+
+// ─── Body-start detection ─────────────────────────────────────────────────────
+
+/**
+ * Finds the first row that looks like a real data body row, scanning forward
+ * from startRow.
+ *
+ * A row qualifies when:
+ *   - col[0] is non-empty, AND
+ *   - at least one cell in cols[1..N-1] is numeric.
+ *
+ * This handles merged-like / sparse banner rows that detectBannerRows misses:
+ * Excel merged areas store text only in the top-left cell of the merge, so a
+ * banner row spanning many columns often looks like ["", "Всего", ""] with an
+ * empty col[0]. The first real data row, by contrast, always has a label in
+ * col[0] alongside numeric values to its right.
+ *
+ * Returns startRow as a safe fallback when no qualifying row is found before
+ * endRow (validation will then produce an appropriate blocking reason).
+ */
+function findFirstDataBodyRow(values, startRow, rowCount, colCount) {
+  if (colCount < 2) return startRow;
+  for (let r = startRow; r < rowCount; r++) {
+    const row = values[r] || [];
+    if (isCellEmpty(row[0])) continue;
+    for (let c = 1; c < colCount; c++) {
+      if (isNumericCell(row[c])) return r;
+    }
+  }
+  return startRow;
+}
+
+// ─── Body-end detection ───────────────────────────────────────────────────────
+
+/**
+ * Finds the last row at or before endRow that contains at least one numeric cell
+ * in the data columns [dataColStart, dataColEnd].
+ *
+ * Trailing rows that have only label content (col[0] text, empty data columns)
+ * are treated as footer rows and excluded from the validated body range.  This
+ * prevents a single-table selection with a trailing summary row (e.g. "Все
+ * респонденты" with empty data columns) from falsely triggering the
+ * BODY_APPEARS_MULTI_TABLE empty-gap check.
+ *
+ * Returns startRow as a safe fallback when no numeric row is found.
+ */
+function findLastDataBodyRow(values, startRow, endRow, dataColStart, dataColEnd) {
+  for (let r = endRow; r >= startRow; r--) {
+    const row = values[r] || [];
+    for (let c = dataColStart; c <= dataColEnd; c++) {
+      if (isNumericCell(row[c])) return r;
+    }
+  }
+  return startRow;
 }
 
 // ─── Label column detection ───────────────────────────────────────────────────
@@ -532,8 +618,12 @@ function buildNormalizedModel(
     ? sliceGrid(text, bodyStartRow, bodyEndRow, dataColStart, dataColEnd)
     : [];
 
+  // Significance marker removal (applied to values before normalization) can erase
+  // pure-letter label cells like "mean" or "BASE". Use text (Office.js selectedRange.text,
+  // never marker-stripped) when it covers the body rows.
+  const leftLabelSource = text.length > bodyEndRow ? text : values;
   const leftLabelValues = labelColCount > 0
-    ? sliceGrid(values, bodyStartRow, bodyEndRow, 0, labelColCount - 1)
+    ? sliceGrid(leftLabelSource, bodyStartRow, bodyEndRow, 0, labelColCount - 1)
     : [];
 
   // Banner scan rows are sliced to data columns only so they align with
@@ -610,9 +700,47 @@ export function normalizeSelectedRange(rawValues, rawText, options = {}) {
   // ── Step 2: Banner rows ────────────────────────────────────────────────────
   // Banner detection starts immediately after title/subtitle rows.
   const firstBodyCandidate = titleRows.length + subtitleRows.length;
-  const bannerRows = detectBannerRows(values, firstBodyCandidate, rowCount, colCount);
 
-  const bodyStartRow = firstBodyCandidate + bannerRows.length;
+  // Approach A: consecutive wide text-heavy rows (existing logic).
+  const wideBannerRowCount = detectBannerRows(values, firstBodyCandidate, rowCount, colCount).length;
+
+  // Approach B: scan for the first row where col[0] is non-empty AND at least
+  // one cell to its right is numeric. All rows before that point are treated as
+  // banner/header rows. This covers merged-like sparse header rows (Excel stores
+  // merged text only in the top-left cell, leaving col[0] empty in continuation
+  // rows) that approach A misses because their fill fraction is too low.
+  const firstDataBodyRow = findFirstDataBodyRow(values, firstBodyCandidate, rowCount, colCount);
+
+  // Use whichever approach identifies a later body start (more header rows).
+  const bodyStartRow = Math.max(firstBodyCandidate + wideBannerRowCount, firstDataBodyRow);
+  const bannerRows   = bodyStartRow > firstBodyCandidate
+    ? buildIndexRange(firstBodyCandidate, bodyStartRow - 1)
+    : [];
+
+  // Safety check: a legitimate single-table banner rarely exceeds MAX_BANNER_ROW_COUNT
+  // rows.  If more rows were classified as banner it almost certainly means the
+  // selection spans multiple tables (the first table's data rows were consumed into
+  // the header area because they looked text-heavy / non-numeric).
+  if (bannerRows.length > MAX_BANNER_ROW_COUNT) {
+    return buildBlockedModel(
+      rowCount,
+      colCount,
+      titleRows,
+      subtitleRows,
+      bannerRows,
+      0,
+      "medium",
+      [
+        {
+          code: "HEADER_AREA_TOO_LARGE",
+          message:
+            "Область заголовков слишком велика — возможно, выделено несколько таблиц. " +
+            "Выделите одну таблицу.",
+        },
+      ]
+    );
+  }
+
   const bodyEndRow   = rowCount - 1;
 
   // ── Step 3: Label columns ──────────────────────────────────────────────────
@@ -627,8 +755,13 @@ export function normalizeSelectedRange(rawValues, rawText, options = {}) {
   const dataColStart = labelColCount;
   const dataColEnd   = colCount - 1;
 
+  // ── Step 3b: Trim trailing footer rows ────────────────────────────────────
+  // Rows after the last numeric data row (e.g. a summary label with empty data
+  // columns) must not participate in the empty-gap check or in slicing outputs.
+  const bodyDataEndRow = findLastDataBodyRow(values, bodyStartRow, bodyEndRow, dataColStart, dataColEnd);
+
   // ── Step 4: Body validation ────────────────────────────────────────────────
-  const blockingReasons = validateBody(values, bodyStartRow, bodyEndRow, dataColStart, dataColEnd);
+  const blockingReasons = validateBody(values, bodyStartRow, bodyDataEndRow, dataColStart, dataColEnd);
 
   // Label split safety: uncertain split + body still text-heavy → unsafe to proceed.
   if (
@@ -638,7 +771,7 @@ export function normalizeSelectedRange(rawValues, rawText, options = {}) {
     const bodyTextFrac = computeTextFraction(
       values,
       bodyStartRow,
-      bodyEndRow,
+      bodyDataEndRow,
       dataColStart,
       dataColEnd
     );
@@ -660,7 +793,7 @@ export function normalizeSelectedRange(rawValues, rawText, options = {}) {
     const bodyNumericFrac = computeNumericFraction(
       values,
       bodyStartRow,
-      bodyEndRow,
+      bodyDataEndRow,
       dataColStart,
       dataColEnd
     );
@@ -725,7 +858,7 @@ export function normalizeSelectedRange(rawValues, rawText, options = {}) {
     dataColStart,
     dataColEnd,
     bodyStartRow,
-    bodyEndRow,
+    bodyDataEndRow,
     confidence,
     warnings
   );
