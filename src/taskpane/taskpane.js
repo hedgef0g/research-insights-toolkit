@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) Microsoft Corporation. All rights reserved. Licensed under the MIT license.
  * See LICENSE in the project root for license information.
  */
@@ -31,6 +31,7 @@ import {
 import { writeCellResultsToSelectedRange, resolveNumericOutput } from "../core/excel-writer";
 
 import { buildTablePreviewModel } from "../core/table-preview-model";
+import { scanWorksheetForTables } from "../core/table-inventory-scanner";
 
 import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core/banner-detector";
 
@@ -46,6 +47,8 @@ const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
 
 const SELECTED_RANGE_GUARDRAIL_WARNING_TEXT =
   "Похоже, вы выделили лейблы строк или шапку вместе с данными. Сейчас RIT ожидает выделение только числовой части таблицы.";
+
+const SCAN_CELL_LIMIT = 250000;
 
 function formatBannerUserMessages(bannerStructure) {
   if (!bannerStructure || !bannerStructure.messages) {
@@ -308,6 +311,7 @@ Office.onReady((info) => {
   const clearButton = document.getElementById("clear-significance"); // Button for removing markers.
   const detectMetricTypeButton = document.getElementById("detect-metric-type"); // Diagnostic detector button.
   const checkTableButton = document.getElementById("check-table"); // Read-only table check button.
+  const findTablesButton = document.getElementById("find-tables"); // Table inventory button.
 
   initializeSettingsPanel();
   loadSavedSettingsIntoPanel();
@@ -328,6 +332,10 @@ Office.onReady((info) => {
 
   if (checkTableButton) {
     checkTableButton.addEventListener("click", runCheckTable);
+  }
+
+  if (findTablesButton) {
+    findTablesButton.addEventListener("click", runTableInventory);
   }
 });
 
@@ -1003,6 +1011,88 @@ function setCheckMessage(message) {
   if (checkResult) {
     checkResult.textContent = message || "";
   }
+}
+
+async function runTableInventory() {
+  await Excel.run(async (context) => {
+    const worksheet = context.workbook.worksheets.getActiveWorksheet();
+    worksheet.load("name");
+
+    const usedRange = worksheet.getUsedRangeOrNullObject();
+    usedRange.load(["isNullObject", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+
+    await context.sync();
+
+    if (usedRange.isNullObject) {
+      setInventoryMessage("Лист пуст. Таблицы не найдены.");
+      return;
+    }
+
+    const cellCount = usedRange.rowCount * usedRange.columnCount;
+    if (cellCount > SCAN_CELL_LIMIT) {
+      setInventoryMessage(
+        `Лист слишком большой для сканирования (${usedRange.rowCount} стр. × ${usedRange.columnCount} кол. = ${cellCount} ячеек, лимит: ${SCAN_CELL_LIMIT}).\nИспользуйте «Проверить таблицу» с выделенным диапазоном.`
+      );
+      return;
+    }
+
+    usedRange.load("values");
+    await context.sync();
+
+    const items = scanWorksheetForTables({
+      values: usedRange.values,
+      usedRangeRowOffset: usedRange.rowIndex,
+      usedRangeColOffset: usedRange.columnIndex,
+      sheetName: worksheet.name,
+    });
+
+    if (items.length === 0) {
+      setInventoryMessage("Таблицы не найдены. RIT не обнаружил блоков с данными на этом листе.");
+      return;
+    }
+
+    const lines = [`Найдено таблиц: ${items.length}.`, ""];
+
+    items.forEach((item, idx) => {
+      const header = item.title
+        ? `${idx + 1}. ${item.title} — ${item.rangeAddress}`
+        : `${idx + 1}. ${item.rangeAddress}`;
+      lines.push(header);
+      lines.push(`   ${item.rowCount} строк, ${item.columnCount} колонок.`);
+
+      if (item.previewSummary) {
+        lines.push(`   ${item.previewSummary}.`);
+      }
+
+      const warnParts = [];
+      if (item.criticalCount > 0) warnParts.push(`Критических: ${item.criticalCount}`);
+      if (item.warningsCount > 0) warnParts.push(`Предупреждений: ${item.warningsCount}`);
+      if (warnParts.length > 0) lines.push(`   ${warnParts.join(". ")}.`);
+
+      if (!item.isLikelyTable) {
+        lines.push("   Не опознана как таблица RIT.");
+      }
+
+      lines.push(
+        `   Проверка: ${item.canRunCheckTable ? "да" : "нет"}. Значимость: ${item.canRunSignificance ? "да" : "нет"}.`
+      );
+
+      if (item.reasonsIfNotRunnable.length > 0) {
+        lines.push(`   [${item.reasonsIfNotRunnable.join("; ")}]`);
+      }
+
+      lines.push("");
+    });
+
+    setInventoryMessage(lines.join("\n").trimEnd());
+  });
+}
+
+function setInventoryMessage(message) {
+  const panel = document.getElementById("inventory-panel");
+  const result = document.getElementById("inventory-result");
+  if (panel) panel.style.display = "block";
+  if (result) result.textContent = message || "";
 }
 
 /**
@@ -2426,3 +2516,5 @@ function removeTrailingBannerMarker(rawText) {
     .replace(/\s*\([^)]+\)\s*$/, "")
     .trim();
 }
+
+
