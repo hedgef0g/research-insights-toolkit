@@ -1,0 +1,444 @@
+/**
+ * Table Inventory Scanner for Research Insights Toolkit.
+ *
+ * Scans a pre-loaded worksheet used range and returns TableInventoryItem[]
+ * representing candidate table regions detected on the sheet.
+ *
+ * Office.js-free: input is a plain 2D values array with sheet offset metadata.
+ * Calls buildTablePreviewModel as the interpretation engine for each candidate.
+ *
+ * DOES NOT:
+ * - Call Office.js or depend on Excel context
+ * - Write to Excel
+ * - Run significance calculation
+ * - Implement workbook-scope scanning
+ * - Detect side-by-side tables within the same row band
+ */
+
+import { buildTablePreviewModel } from "./table-preview-model";
+
+const LABEL_SCAN_COLUMNS_LEFT = 2;
+const MIN_BAND_ROWS = 2;
+const LABEL_TEXT_FRACTION_THRESHOLD = 0.6;
+// A first-band row is title-like only when it has at most this many non-empty cells.
+// This keeps wide banner rows (Total / Male / Female / …) from being mistaken for headings.
+const MAX_TITLE_ROW_NON_EMPTY_CELLS = 3;
+
+// ─── A1 address helpers ───────────────────────────────────────────────────────
+
+function columnIndexToLetter(index) {
+  let dividend = index + 1;
+  let name = "";
+  while (dividend > 0) {
+    const mod = (dividend - 1) % 26;
+    name = String.fromCharCode(65 + mod) + name;
+    dividend = Math.floor((dividend - mod) / 26);
+  }
+  return name;
+}
+
+function toA1Address(absRowStart, absRowEnd, absColStart, absColEnd) {
+  return (
+    columnIndexToLetter(absColStart) +
+    (absRowStart + 1) +
+    ":" +
+    columnIndexToLetter(absColEnd) +
+    (absRowEnd + 1)
+  );
+}
+
+// ─── Cell / row utilities ─────────────────────────────────────────────────────
+
+function isCellEmpty(cell) {
+  return cell === "" || cell === null || cell === undefined;
+}
+
+function isRowEmpty(row) {
+  return !row || row.every(isCellEmpty);
+}
+
+function isNumericCell(cell) {
+  if (typeof cell === "number") return !isNaN(cell);
+  if (typeof cell !== "string") return false;
+  const trimmed = cell.trim();
+  if (!trimmed) return false;
+  return !isNaN(parseFloat(trimmed.replace(/,/g, ".")));
+}
+
+function isTextOnlyCell(cell) {
+  if (typeof cell !== "string" || !cell.trim()) return false;
+  return isNaN(parseFloat(cell.trim().replace(/,/g, ".")));
+}
+
+function firstNonEmptyNonNumericText(row) {
+  for (const cell of row) {
+    if (isCellEmpty(cell)) continue;
+    if (typeof cell === "number") continue;
+    if (typeof cell === "string") {
+      const trimmed = cell.trim();
+      if (!trimmed) continue;
+      if (isNaN(parseFloat(trimmed.replace(/,/g, ".")))) return trimmed;
+    }
+  }
+  return null;
+}
+
+// ─── Band detection ───────────────────────────────────────────────────────────
+
+function detectRowBands(values) {
+  const bands = [];
+  let inBand = false;
+  let bandStart = 0;
+
+  for (let i = 0; i < values.length; i++) {
+    const empty = isRowEmpty(values[i]);
+    if (!empty && !inBand) {
+      bandStart = i;
+      inBand = true;
+    } else if (empty && inBand) {
+      bands.push({ localStartRow: bandStart, localEndRow: i - 1 });
+      inBand = false;
+    }
+  }
+
+  if (inBand) {
+    bands.push({ localStartRow: bandStart, localEndRow: values.length - 1 });
+  }
+
+  return bands;
+}
+
+// ─── Column trimming ──────────────────────────────────────────────────────────
+
+function trimBandColumns(values, band) {
+  const { localStartRow, localEndRow } = band;
+  const colCount = values[0] ? values[0].length : 0;
+  if (colCount === 0) return null;
+
+  let firstCol = -1;
+  let lastCol = -1;
+
+  for (let col = 0; col < colCount; col++) {
+    let hasContent = false;
+    for (let row = localStartRow; row <= localEndRow; row++) {
+      if (!isCellEmpty(values[row][col])) {
+        hasContent = true;
+        break;
+      }
+    }
+    if (hasContent) {
+      if (firstCol === -1) firstCol = col;
+      lastCol = col;
+    }
+  }
+
+  if (firstCol === -1) return null;
+  return { ...band, localTrimmedFirstCol: firstCol, localTrimmedLastCol: lastCol };
+}
+
+// ─── Pre-filter ───────────────────────────────────────────────────────────────
+
+function hasNumericCell(values, band) {
+  const { localStartRow, localEndRow, localTrimmedFirstCol, localTrimmedLastCol } = band;
+  for (let row = localStartRow; row <= localEndRow; row++) {
+    for (let col = localTrimmedFirstCol; col <= localTrimmedLastCol; col++) {
+      if (isNumericCell(values[row][col])) return true;
+    }
+  }
+  return false;
+}
+
+// ─── Label / data split ───────────────────────────────────────────────────────
+
+function computeTextFraction(values, startCol, endCol, startRow, endRow) {
+  let textCount = 0;
+  let totalNonEmpty = 0;
+  for (let row = startRow; row <= endRow; row++) {
+    const rowArr = values[row];
+    if (!rowArr) continue;
+    for (let col = startCol; col <= endCol; col++) {
+      const cell = rowArr[col];
+      if (isCellEmpty(cell)) continue;
+      totalNonEmpty++;
+      if (isTextOnlyCell(cell)) textCount++;
+    }
+  }
+  if (totalNonEmpty === 0) return 0;
+  return textCount / totalNonEmpty;
+}
+
+function splitLabelData(values, band) {
+  const { localStartRow, localEndRow, localTrimmedFirstCol, localTrimmedLastCol } = band;
+  const trimmedWidth = localTrimmedLastCol - localTrimmedFirstCol + 1;
+
+  // Determine label column count by inspecting the character of the leftmost columns.
+  // Rules:
+  //   col0 text + col1 text  → 2 label columns, confident
+  //   col0 text + col1 numeric → 1 label column, confident (never consume a numeric column as label)
+  //   col0 not clearly text  → 1 label column, uncertain
+  //   trimmedWidth < 2       → 0 label columns, uncertain
+  let labelColCount;
+  let labelSplitConfidence;
+
+  if (trimmedWidth < 2) {
+    labelColCount = 0;
+    labelSplitConfidence = "uncertain";
+  } else {
+    const col0Fraction = computeTextFraction(
+      values,
+      localTrimmedFirstCol,
+      localTrimmedFirstCol,
+      localStartRow,
+      localEndRow
+    );
+    const col0IsText = col0Fraction >= LABEL_TEXT_FRACTION_THRESHOLD;
+
+    if (!col0IsText) {
+      // First column looks numeric — split is ambiguous.
+      labelColCount = 1;
+      labelSplitConfidence = "uncertain";
+    } else if (trimmedWidth < 3) {
+      // Only 2 columns and col0 is text — use 1 label column.
+      labelColCount = 1;
+      labelSplitConfidence = "confident";
+    } else {
+      // 3+ columns: inspect col1 to decide between 1 and 2 label columns.
+      const col1Fraction = computeTextFraction(
+        values,
+        localTrimmedFirstCol + 1,
+        localTrimmedFirstCol + 1,
+        localStartRow,
+        localEndRow
+      );
+      const col1IsText = col1Fraction >= LABEL_TEXT_FRACTION_THRESHOLD;
+
+      if (col1IsText) {
+        // Both col0 and col1 are text — use 2 label columns.
+        labelColCount = 2;
+        labelSplitConfidence = "confident";
+      } else {
+        // col0 text, col1 numeric — 1 label column only.
+        labelColCount = 1;
+        labelSplitConfidence = "confident";
+      }
+    }
+  }
+
+  const labelCols = [];
+  const dataCols = [];
+
+  for (let row = localStartRow; row <= localEndRow; row++) {
+    const rowArr = values[row] || [];
+
+    const labelRow = [];
+    for (let c = 0; c < labelColCount; c++) {
+      labelRow.push(rowArr[localTrimmedFirstCol + c] ?? "");
+    }
+    labelCols.push(labelRow);
+
+    const dataRow = [];
+    for (let c = labelColCount; c < trimmedWidth; c++) {
+      dataRow.push(rowArr[localTrimmedFirstCol + c] ?? "");
+    }
+    dataCols.push(dataRow);
+  }
+
+  return { labelCols, dataCols, labelSplitConfidence };
+}
+
+// ─── Title inference ──────────────────────────────────────────────────────────
+
+/**
+ * Checks whether the first row of a trimmed band is a standalone heading row.
+ *
+ * A row is title-like when:
+ *   - it contains no numeric cells (pure text / empty)
+ *   - it contains at least one non-empty non-numeric text cell
+ *   - it is sparse (at most MAX_TITLE_ROW_NON_EMPTY_CELLS non-empty cells),
+ *     consistent with a merged-like heading that spans the full width
+ *
+ * Returns { title, titleConfidence, titleSource } or null.
+ */
+function detectFirstRowTitle(values, band) {
+  const { localStartRow, localTrimmedFirstCol, localTrimmedLastCol } = band;
+  const firstRow = values[localStartRow];
+  if (!firstRow) return null;
+
+  let nonEmptyCount = 0;
+  let hasText = false;
+
+  for (let col = localTrimmedFirstCol; col <= localTrimmedLastCol; col++) {
+    const cell = firstRow[col];
+    if (isCellEmpty(cell)) continue;
+    nonEmptyCount++;
+    if (isNumericCell(cell)) return null; // any numeric cell disqualifies the row
+    if (isTextOnlyCell(cell)) hasText = true;
+  }
+
+  if (!hasText || nonEmptyCount === 0 || nonEmptyCount > MAX_TITLE_ROW_NON_EMPTY_CELLS) {
+    return null;
+  }
+
+  const title = firstNonEmptyNonNumericText(firstRow);
+  if (!title) return null;
+
+  return { title, titleConfidence: "high", titleSource: "firstRowOfBand" };
+}
+
+function inferTitle(values, band) {
+  const { localStartRow } = band;
+
+  if (localStartRow === 0) {
+    return { title: "", titleConfidence: "none", titleSource: "sheetFallback" };
+  }
+
+  const rowAbove = values[localStartRow - 1];
+
+  if (isRowEmpty(rowAbove)) {
+    // Separator row above — look two rows up for a title
+    if (localStartRow >= 2) {
+      const text = firstNonEmptyNonNumericText(values[localStartRow - 2]);
+      if (text) {
+        return { title: text, titleConfidence: "high", titleSource: "twoRowsAbove" };
+      }
+    }
+  } else {
+    // Row immediately above is non-empty — may be a title (medium confidence)
+    const text = firstNonEmptyNonNumericText(rowAbove);
+    if (text) {
+      return { title: text, titleConfidence: "medium", titleSource: "rowAbove" };
+    }
+  }
+
+  return { title: "", titleConfidence: "none", titleSource: "sheetFallback" };
+}
+
+// ─── Item builder ─────────────────────────────────────────────────────────────
+
+function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetName, labelSplitConfidence }) {
+  const { summary, qualitySummary, calculationBlocks } = model;
+  const tableId = sheetName + "!" + rangeAddress;
+
+  const isLikelyTable = summary.detectedMetricRows > 0;
+  const canRunCheckTable = isLikelyTable;
+
+  const reasonsIfNotRunnable = [];
+  if (!isLikelyTable) {
+    reasonsIfNotRunnable.push("Нет опознанных строк метрик");
+  } else if (calculationBlocks.length === 0) {
+    reasonsIfNotRunnable.push("Нет блоков расчёта");
+  }
+  if (isLikelyTable && qualitySummary.hasBlockingIssues) {
+    reasonsIfNotRunnable.push("Критические проблемы качества");
+  }
+  if (labelSplitConfidence === "uncertain") {
+    reasonsIfNotRunnable.push("Разделение лейблов и данных не определено (uncertain)");
+  }
+
+  const canRunSignificance =
+    canRunCheckTable &&
+    calculationBlocks.length > 0 &&
+    !qualitySummary.hasBlockingIssues &&
+    labelSplitConfidence === "confident";
+
+  let previewSummary = "";
+  if (isLikelyTable) {
+    const parts = [];
+    if (summary.detectedBlocks > 0) parts.push("Блоков: " + summary.detectedBlocks);
+    if (summary.baseRows > 0) parts.push("Баз: " + summary.baseRows);
+    if (summary.hasNps) parts.push("NPS");
+    if (summary.hasMeans) parts.push("Средние");
+    previewSummary = parts.join(". ");
+  }
+
+  const columnCount = band.localTrimmedLastCol - band.localTrimmedFirstCol + 1;
+
+  return {
+    tableId,
+    sheetName,
+    rangeAddress,
+    title: titleInfo.title,
+    titleConfidence: titleInfo.titleConfidence,
+    titleSource: titleInfo.titleSource,
+    rowCount: summary.rowCount,
+    columnCount,
+    previewSummary,
+    isLikelyTable,
+    canRunCheckTable,
+    canRunSignificance,
+    reasonsIfNotRunnable,
+    labelSplitConfidence,
+    warningsCount: isLikelyTable ? qualitySummary.warningCount : 0,
+    criticalCount: isLikelyTable ? qualitySummary.criticalCount : 0,
+  };
+}
+
+// ─── Main export ──────────────────────────────────────────────────────────────
+
+/**
+ * Scans a pre-loaded worksheet used range for candidate research table regions.
+ *
+ * @param {object} input
+ * @param {Array}  input.values             - 2D array from usedRange.values
+ * @param {number} input.usedRangeRowOffset - usedRange.rowIndex (zero-based sheet row)
+ * @param {number} input.usedRangeColOffset - usedRange.columnIndex (zero-based sheet col)
+ * @param {string} input.sheetName          - worksheet name
+ * @returns {Array} TableInventoryItem[]
+ */
+export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeColOffset, sheetName }) {
+  if (!Array.isArray(values) || values.length === 0 || !values[0]) {
+    return [];
+  }
+
+  const rawBands = detectRowBands(values);
+  const items = [];
+
+  for (const rawBand of rawBands) {
+    if (rawBand.localEndRow - rawBand.localStartRow < MIN_BAND_ROWS - 1) continue;
+
+    const band = trimBandColumns(values, rawBand);
+    if (!band) continue;
+
+    // Detect a merged-like title in the first row of the band.
+    const firstRowTitleInfo = detectFirstRowTitle(values, band);
+
+    // bodyBand is what gets passed to the model: strip the title row if one was found.
+    const bodyBand = firstRowTitleInfo
+      ? { ...band, localStartRow: band.localStartRow + 1 }
+      : band;
+
+    // If stripping the title row left nothing to interpret, skip.
+    if (bodyBand.localEndRow < bodyBand.localStartRow) continue;
+
+    // Pre-filter and label/data split operate on the body only.
+    if (!hasNumericCell(values, bodyBand)) continue;
+
+    const { labelCols, dataCols, labelSplitConfidence } = splitLabelData(values, bodyBand);
+
+    if (!dataCols.length || !dataCols[0] || dataCols[0].length < 1) continue;
+
+    const model = buildTablePreviewModel({ values: dataCols, leftLabelValues: labelCols });
+
+    // Range address always covers the full original band (title row included).
+    const absRowStart = band.localStartRow + usedRangeRowOffset;
+    const absRowEnd = band.localEndRow + usedRangeRowOffset;
+    const absColStart = band.localTrimmedFirstCol + usedRangeColOffset;
+    const absColEnd = band.localTrimmedLastCol + usedRangeColOffset;
+    const rangeAddress = toA1Address(absRowStart, absRowEnd, absColStart, absColEnd);
+
+    // Title: first-row detection takes priority; fall back to above-band lookback.
+    const titleInfo = firstRowTitleInfo || inferTitle(values, band);
+
+    const item = buildTableInventoryItem({
+      band,
+      model,
+      titleInfo,
+      rangeAddress,
+      sheetName,
+      labelSplitConfidence,
+    });
+    items.push(item);
+  }
+
+  return items;
+}
