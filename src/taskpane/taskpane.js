@@ -591,16 +591,9 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    selectedRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    selectedRange.load(["address", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
     await context.sync();
-
-    if (calculationSettings.writeBannerLetters && selectedRange.rowIndex === 0) {
-      outputElement.textContent =
-        "Данные расположены в первой строке. Добавьте строку над выделенным массивом и запустите расчёт повторно.";
-
-      return;
-    }
 
     if (
       calculationSettings.compareWithPreviousColumn &&
@@ -612,10 +605,14 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    selectedRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
-
-    selectedRange.format.horizontalAlignment = "Center";
-    selectedRange.format.verticalAlignment = "Center";
+    selectedRange.load([
+      "values",
+      "text",
+      "rowIndex",
+      "columnIndex",
+      "rowCount",
+      "columnCount",
+    ]);
 
     await context.sync();
 
@@ -628,24 +625,103 @@ async function runSignificanceFromSelection() {
     }
 
     const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
-    const selectedRangeGuardrailWarnings = detectSelectedRangeGuardrails(selectedText, cleanedValues);
+    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
 
-    selectedRange.values = cleanedValues;
+    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+      const codes =
+        normalized.blockingReasons && normalized.blockingReasons.length > 0
+          ? ` [${normalized.blockingReasons.join(", ")}]`
+          : "";
 
-    selectedRange.format.font.bold = false;
-    selectedRange.format.fill.clear();
-    selectedRange.format.horizontalAlignment = "Center";
-    selectedRange.format.verticalAlignment = "Center";
+      setStatusMessage(`${normalized.blockingMessage}${codes}`);
+      return;
+    }
+
+    const rawSelectedRangeGuardrailWarnings = detectSelectedRangeGuardrails(
+      selectedText,
+      cleanedValues
+    );
+
+    const runModel = {
+      values: cleanedValues,
+      text: selectedText,
+      leftLabelValues: null,
+      bannerContext: null,
+      writeTargetRange: selectedRange,
+      targetStartRowIndex: selectedRange.rowIndex,
+      normalizationApplied: false,
+      normalizationStatusLines: [],
+      selectedRangeGuardrailWarnings: rawSelectedRangeGuardrailWarnings,
+    };
+
+    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
+      if (
+        !normalized.valuesForCalculation ||
+        normalized.valuesForCalculation.length < 2 ||
+        !normalized.valuesForCalculation[0] ||
+        normalized.valuesForCalculation[0].length < 2
+      ) {
+        setStatusMessage("Please select at least 2 columns and 2 rows.");
+        return;
+      }
+
+      runModel.values = normalized.valuesForCalculation;
+      runModel.text = normalized.textForCalculation;
+      runModel.leftLabelValues = normalized.leftLabelValues;
+      runModel.bannerContext = normalized.bannerContext;
+      runModel.writeTargetRange = selectedRange
+        .getCell(normalized.dataRowOffset, normalized.dataColOffset)
+        .getResizedRange(
+          normalized.valuesForCalculation.length - 1,
+          normalized.valuesForCalculation[0].length - 1
+        );
+      runModel.targetStartRowIndex = selectedRange.rowIndex + normalized.dataRowOffset;
+      runModel.normalizationApplied = true;
+      runModel.normalizationStatusLines.push(
+        "Диапазон нормализован: расчёт выполнен только по области данных."
+      );
+      runModel.selectedRangeGuardrailWarnings = [];
+    } else {
+      runModel.leftLabelValues = await loadLabelValuesForSelectedRange(
+        context,
+        selectedRange,
+        calculationSettings
+      ); // Labels located 1-2 columns to the left of the selected data.
+    }
+
+    if (!runModel.values || runModel.values.length < 2 || runModel.values[0].length < 2) {
+      setStatusMessage("Please select at least 2 columns and 2 rows.");
+      return;
+    }
+
+    runModel.writeTargetRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
     await context.sync();
 
-    const leftLabelValues = await loadLabelValuesForSelectedRange(
-      context,
-      selectedRange,
-      calculationSettings
-    ); // Labels located 1-2 columns to the left of the selected data.
+    runModel.targetStartRowIndex = runModel.writeTargetRange.rowIndex;
 
-    const detectionResult = detectMetricRowsFromLeftLabels(cleanedValues, leftLabelValues); // Row type diagnostics based on left-side labels.
+    if (calculationSettings.writeBannerLetters && runModel.targetStartRowIndex === 0) {
+      outputElement.textContent =
+        "Данные расположены в первой строке. Добавьте строку над выделенным массивом и запустите расчёт повторно.";
+
+      return;
+    }
+
+    runModel.writeTargetRange.values = runModel.values;
+
+    runModel.writeTargetRange.format.font.bold = false;
+    runModel.writeTargetRange.format.fill.clear();
+    runModel.writeTargetRange.format.horizontalAlignment = "Center";
+    runModel.writeTargetRange.format.verticalAlignment = "Center";
+
+    await context.sync();
+
+    const selectedRangeGuardrailWarnings = runModel.selectedRangeGuardrailWarnings;
+
+    const detectionResult = detectMetricRowsFromLeftLabels(
+      runModel.values,
+      runModel.leftLabelValues
+    ); // Row type diagnostics based on left-side labels.
 
     const calculationBlocks = buildCalculationBlocks(detectionResult); // List of metric blocks to calculate.
 
@@ -662,11 +738,13 @@ async function runSignificanceFromSelection() {
     let bannerStructure = null;
 
     if (calculationSettings.respectBannerStructure) {
-      const bannerContext = await loadBannerContextForSelectedRange(
-        context,
-        selectedRange,
-        calculationSettings
-      );
+      const bannerContext =
+        buildRunBannerContext(runModel.bannerContext) ||
+        (await loadBannerContextForSelectedRange(
+          context,
+          runModel.writeTargetRange,
+          calculationSettings
+        ));
 
       bannerStructure = detectBannerStructure(bannerContext, calculationSettings);
 
@@ -683,13 +761,13 @@ async function runSignificanceFromSelection() {
     }
 
     const fullCellResultMatrix = createEmptyCellResultMatrix(
-      cleanedValues.length,
-      cleanedValues[0].length
-    ); // Full-size marker storage matching the selected range.
+      runModel.values.length,
+      runModel.values[0].length
+    ); // Full-size marker storage matching the data body being calculated.
 
     for (const calculationBlock of calculationBlocks) {
       const smallBaseResult = applySmallBaseRulesForCalculationBlock(
-        cleanedValues,
+        runModel.values,
         calculationBlock,
         fullCellResultMatrix,
         calculationSettings
@@ -712,7 +790,7 @@ async function runSignificanceFromSelection() {
       };
 
       const blockResults = calculateBlockResults(
-        cleanedValues,
+        runModel.values,
         calculationBlock,
         blockCalculationSettings
       );
@@ -732,9 +810,10 @@ async function runSignificanceFromSelection() {
         }
 
         setStatusMessage(
-          appendSelectedRangeGuardrailMessages(statusMessages, selectedRangeGuardrailWarnings).join(
-            "\n"
-          )
+          appendSelectedRangeGuardrailMessages(
+            statusMessages,
+            selectedRangeGuardrailWarnings
+          ).join("\n")
         );
         return;
       }
@@ -755,8 +834,8 @@ async function runSignificanceFromSelection() {
     keepMarkersOnlyInAllowedRows(fullCellResultMatrix, allowedMarkerRows);
 
     writeCellResultsToSelectedRange(
-      selectedRange,
-      selectedText,
+      runModel.writeTargetRange,
+      runModel.text,
       fullCellResultMatrix,
       detectionResult,
       calculationSettings
@@ -766,18 +845,27 @@ async function runSignificanceFromSelection() {
       if (calculationSettings.respectBannerStructure && bannerStructure) {
         await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
           context,
-          selectedRange,
+          runModel.writeTargetRange,
           bannerStructure,
           calculationSettings
         );
       } else {
-        await writeBannerMarkersAboveSelectedRange(context, selectedRange, calculationSettings);
+        await writeBannerMarkersAboveSelectedRange(
+          context,
+          runModel.writeTargetRange,
+          calculationSettings
+        );
       }
     }
 
     await context.sync();
 
     const statusMessages = [`Расчёт выполнен. Обработано блоков: ${calculationBlocks.length}.`];
+
+    if (runModel.normalizationStatusLines.length > 0) {
+      statusMessages.push("");
+      statusMessages.push(...runModel.normalizationStatusLines);
+    }
 
     const bannerUserMessages = formatBannerUserMessages(bannerStructure);
 
@@ -790,6 +878,33 @@ async function runSignificanceFromSelection() {
       appendSelectedRangeGuardrailMessages(statusMessages, selectedRangeGuardrailWarnings).join("\n")
     );
   });
+}
+
+/**
+ * Converts normalized banner context into the shape used by Run banner detection.
+ */
+function buildRunBannerContext(bannerContext) {
+  if (!bannerContext) {
+    return null;
+  }
+
+  if (bannerContext.selectedColumnCount !== undefined) {
+    return bannerContext;
+  }
+
+  const scanRows = Array.isArray(bannerContext.scanRows) ? bannerContext.scanRows : [];
+  const selectedColumnCount = bannerContext.columnCount || 0;
+
+  if (!selectedColumnCount || scanRows.length === 0) {
+    return null;
+  }
+
+  return {
+    selectedColumnCount,
+    lowerBannerRow: scanRows[scanRows.length - 1],
+    upperScanRows: scanRows.slice(0, -1).reverse(),
+    messages: bannerContext.messages || [],
+  };
 }
 
 /**
