@@ -2,6 +2,12 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { normalizeSelectedRange } from "../../src/core/range-normalizer.js";
 
+function makeRunCleanedValues(rawText, bodyRowIndexes) {
+  return rawText.map((row, rowIndex) =>
+    bodyRowIndexes.includes(rowIndex) ? ["", ...row.slice(1)] : [...row]
+  );
+}
+
 describe("normalizeSelectedRange", () => {
   it("numeric-only selection passes through unchanged", () => {
     const values = [
@@ -122,6 +128,92 @@ describe("normalizeSelectedRange", () => {
       "first data row is Мужской with percent strings"
     );
     assert.deepStrictEqual(result.blockingReasons, []);
+  });
+
+  it("real sparse 4-row banner + proportion body normalizes from Run cleaned values", () => {
+    const rawText = [
+      ["Ваш пол:", "", "", "", "", "", "", "", "", "", "", "", ""],
+      ["", "", "", "Пользование кат", "", "", "", "", "", "", "", "", ""],
+      ["", "Волна (квартал)", "", "Всё покупаю сам(а)", "", "Большую часть", "", "", "", "", "", "", ""],
+      ["", "2025Q4", "2026Q1", "Волна (квартал)", "", "Волна (квартал)", "", "", "", "", "", "", ""],
+      ["", "", "", "2025Q4", "2026Q1", "2025Q4", "2026Q1", "2025Q4", "2026Q1", "2025Q4", "2026Q1", "2025Q4", "2026Q1"],
+      ["Мужской", "0.5", "0.4136", "0.39", "0.41", "0.44", "0.42", "0.48", "0.43", "0.51", "0.49", "0.46", "0.45"],
+      ["Женский", "0.5", "0.5863", "0.61", "0.59", "0.56", "0.58", "0.52", "0.57", "0.49", "0.51", "0.54", "0.55"],
+      ["BASE", "5605", "1320", "3083", "1045", "2200", "900", "1800", "760", "1500", "700", "1300", "620"],
+    ];
+    const cleanedValues = makeRunCleanedValues(rawText, [5, 6, 7]);
+
+    const result = normalizeSelectedRange(cleanedValues, rawText);
+
+    assert.strictEqual(result.normalizationNeeded, true);
+    assert.strictEqual(result.normalizationApplied, true);
+    assert.deepStrictEqual(result.titleRows, [0]);
+    assert.deepStrictEqual(result.bannerRows, [1, 2, 3, 4]);
+    assert.deepStrictEqual(result.labelColumns, [0]);
+    assert.strictEqual(result.dataRowOffset, 5);
+    assert.strictEqual(result.dataColOffset, 1);
+    assert.strictEqual(result.valuesForCalculation.length, 3);
+    assert.strictEqual(result.valuesForCalculation[0].length, 12);
+    assert.deepStrictEqual(result.valuesForCalculation[0].slice(0, 3), ["0.5", "0.4136", "0.39"]);
+    assert.deepStrictEqual(result.leftLabelValues, [["Мужской"], ["Женский"], ["BASE"]]);
+    assert.strictEqual(result.bannerContext.scanRows.length, 4);
+    assert.strictEqual(result.bannerContext.columnCount, 12);
+    assert.deepStrictEqual(result.bannerContext.scanRows[0].slice(0, 4), ["", "", "Пользование кат", ""]);
+  });
+
+  it("real sparse 4-row banner + means body preserves service labels from Run text", () => {
+    const rawText = [
+      ["Ваш возраст", "", "", "", "", "", "", "", "", "", "", "", ""],
+      ["", "", "", "Пользование кат", "", "", "", "", "", "", "", "", ""],
+      ["", "Волна (квартал)", "", "Всё покупаю сам(а)", "", "Большую часть", "", "", "", "", "", "", ""],
+      ["", "2025Q4", "2026Q1", "Волна (квартал)", "", "Волна (квартал)", "", "", "", "", "", "", ""],
+      ["", "", "", "2025Q4", "2026Q1", "2025Q4", "2026Q1", "2025Q4", "2026Q1", "2025Q4", "2026Q1", "2025Q4", "2026Q1"],
+      ["Среднее", "29.4", "31.5", "30.1", "32.2", "28.9", "30.7", "33.0", "34.1", "27.5", "28.0", "35.2", "36.4"],
+      ["variance", "103.6", "132.6", "120.1", "140.4", "99.2", "118.8", "150.0", "160.1", "90.5", "95.2", "170.4", "180.3"],
+      ["BASE", "5605", "1320", "3083", "1045", "2200", "900", "1800", "760", "1500", "700", "1300", "620"],
+    ];
+    const cleanedValues = makeRunCleanedValues(rawText, [5, 6, 7]);
+
+    const result = normalizeSelectedRange(cleanedValues, rawText);
+
+    assert.strictEqual(result.normalizationNeeded, true);
+    assert.strictEqual(result.normalizationApplied, true);
+    assert.deepStrictEqual(result.titleRows, [0]);
+    assert.deepStrictEqual(result.bannerRows, [1, 2, 3, 4]);
+    assert.deepStrictEqual(result.labelColumns, [0]);
+    assert.strictEqual(result.dataRowOffset, 5);
+    assert.strictEqual(result.dataColOffset, 1);
+    assert.strictEqual(result.valuesForCalculation.length, 3);
+    assert.deepStrictEqual(result.leftLabelValues, [["Среднее"], ["variance"], ["BASE"]]);
+    assert.strictEqual(result.bannerContext.scanRows.length, 4);
+  });
+
+  it("real-like multi-table broad selection with Run text still blocks", () => {
+    const rawText = [
+      ["Таблица 1", "", "", ""],
+      ["", "Всего", "Кат A", ""],
+      ["", "2025Q4", "2025Q4", ""],
+      ["Вариант A", "0.4", "0.3", ""],
+      ["Вариант B", "0.6", "0.7", ""],
+      ["BASE", "1000", "500", ""],
+      ["Таблица 2", "", "", ""],
+      ["", "Всего", "Кат B", ""],
+      ["", "2026Q1", "2026Q1", ""],
+      ["Вариант X", "0.5", "0.4", ""],
+      ["Вариант Y", "0.5", "0.6", ""],
+      ["BASE", "800", "400", ""],
+    ];
+    const cleanedValues = makeRunCleanedValues(rawText, [3, 4, 5, 9, 10, 11]);
+
+    const result = normalizeSelectedRange(cleanedValues, rawText);
+
+    assert.strictEqual(result.normalizationNeeded, true);
+    assert.strictEqual(result.normalizationApplied, false);
+    assert.ok(
+      result.blockingReasons.includes("BODY_APPEARS_MULTI_TABLE") ||
+      result.blockingReasons.includes("HEADER_AREA_TOO_LARGE"),
+      `expected multi-table blocking reason, got: ${JSON.stringify(result.blockingReasons)}`
+    );
   });
 
   it("two-table broad selection blocks with BODY_APPEARS_MULTI_TABLE", () => {

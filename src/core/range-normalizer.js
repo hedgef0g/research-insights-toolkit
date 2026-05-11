@@ -518,6 +518,16 @@ function buildIndexRange(start, end) {
   return arr;
 }
 
+function hasUsableTextGrid(text, rowCount, colCount) {
+  return (
+    Array.isArray(text) &&
+    text.length >= rowCount &&
+    rowCount > 0 &&
+    Array.isArray(text[0]) &&
+    text[0].length >= colCount
+  );
+}
+
 // ─── Model builders ───────────────────────────────────────────────────────────
 
 function buildPassThroughModel(rowCount, colCount) {
@@ -629,8 +639,10 @@ function buildNormalizedModel(
   // Banner scan rows are sliced to data columns only so they align with
   // valuesForCalculation. detectBannerStructure expects column indices to
   // match the data grid, not the full raw selection width.
+  const lastBannerRow = bannerRows.length > 0 ? bannerRows[bannerRows.length - 1] : -1;
+  const bannerSource = text.length > lastBannerRow ? text : values;
   const bannerScanRows = bannerRows.length > 0
-    ? sliceGrid(values, bannerRows[0], bannerRows[bannerRows.length - 1], dataColStart, dataColEnd)
+    ? sliceGrid(bannerSource, bannerRows[0], bannerRows[bannerRows.length - 1], dataColStart, dataColEnd)
     : [];
 
   const bannerContext = {
@@ -684,32 +696,47 @@ export function normalizeSelectedRange(rawValues, rawText, options = {}) {
   const text     = Array.isArray(rawText)   ? rawText   : [];
   const rowCount = values.length;
   const colCount = rowCount > 0 && Array.isArray(values[0]) ? values[0].length : 0;
+  const structureValues = hasUsableTextGrid(text, rowCount, colCount) ? text : values;
 
   // ── Step 0: Pass-through gate ──────────────────────────────────────────────
   // If the selection looks like numeric-only data, return immediately.
   // The existing strict workflow must run unchanged for this state.
-  if (!isNormalizationNeeded(values, rowCount, colCount)) {
+  if (!isNormalizationNeeded(structureValues, rowCount, colCount)) {
     return buildPassThroughModel(rowCount, colCount);
   }
 
   // Normalization is needed. Attempt structural decomposition.
 
   // ── Step 1: Title / subtitle rows ─────────────────────────────────────────
-  const { titleRows, subtitleRows } = detectTitleSubtitleRows(values, rowCount, colCount);
+  const { titleRows, subtitleRows } = detectTitleSubtitleRows(
+    structureValues,
+    rowCount,
+    colCount
+  );
 
   // ── Step 2: Banner rows ────────────────────────────────────────────────────
   // Banner detection starts immediately after title/subtitle rows.
   const firstBodyCandidate = titleRows.length + subtitleRows.length;
 
   // Approach A: consecutive wide text-heavy rows (existing logic).
-  const wideBannerRowCount = detectBannerRows(values, firstBodyCandidate, rowCount, colCount).length;
+  const wideBannerRowCount = detectBannerRows(
+    structureValues,
+    firstBodyCandidate,
+    rowCount,
+    colCount
+  ).length;
 
   // Approach B: scan for the first row where col[0] is non-empty AND at least
   // one cell to its right is numeric. All rows before that point are treated as
   // banner/header rows. This covers merged-like sparse header rows (Excel stores
   // merged text only in the top-left cell, leaving col[0] empty in continuation
   // rows) that approach A misses because their fill fraction is too low.
-  const firstDataBodyRow = findFirstDataBodyRow(values, firstBodyCandidate, rowCount, colCount);
+  const firstDataBodyRow = findFirstDataBodyRow(
+    structureValues,
+    firstBodyCandidate,
+    rowCount,
+    colCount
+  );
 
   // Use whichever approach identifies a later body start (more header rows).
   const bodyStartRow = Math.max(firstBodyCandidate + wideBannerRowCount, firstDataBodyRow);
@@ -746,7 +773,7 @@ export function normalizeSelectedRange(rawValues, rawText, options = {}) {
   // ── Step 3: Label columns ──────────────────────────────────────────────────
   // Applied over body rows only (title/subtitle/banner already excluded).
   const { labelColCount, labelSplitConfidence } = detectLabelColumns(
-    values,
+    structureValues,
     bodyStartRow,
     bodyEndRow,
     colCount
