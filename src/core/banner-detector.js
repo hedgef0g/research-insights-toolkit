@@ -24,6 +24,15 @@ import { normalizeLookupText, normalizeDisplayText } from "./string-utils";
 
 const TOTAL_LABEL_KEYWORDS = BANNER_DICTIONARY.totalLabels;
 const WAVE_GROUP_LABEL_KEYWORDS = BANNER_DICTIONARY.waveGroupLabels;
+const TECHNICAL_WAVE_DESCRIPTOR_KEYWORDS = [
+  ...WAVE_GROUP_LABEL_KEYWORDS,
+  "quarter",
+  "quarters",
+  "квартал",
+  "кварталы",
+];
+
+const TECHNICAL_WAVE_LABEL_DOMINANCE_THRESHOLD = 0.7;
 
 const DEFAULT_GROUP_KEY = "group:default";
 const DEFAULT_GROUP_LABEL = "Default";
@@ -357,6 +366,8 @@ function detectMeaningfulGroupLevel(upperScanRows, lowerBannerRow, selectedColum
     };
   }
 
+  const candidates = [];
+
   for (let rowIndex = 0; rowIndex < upperScanRows.length; rowIndex++) {
     const row = normalizeBannerRowLength(upperScanRows[rowIndex], selectedColumnCount);
 
@@ -368,7 +379,8 @@ function detectMeaningfulGroupLevel(upperScanRows, lowerBannerRow, selectedColum
     );
 
     if (reconstructedSpanResult.groupLevel) {
-      return reconstructedSpanResult;
+      candidates.push(reconstructedSpanResult);
+      continue;
     }
 
     const repeatedLabelResult = detectRepeatedLabelGroupLevelInRow(
@@ -378,8 +390,12 @@ function detectMeaningfulGroupLevel(upperScanRows, lowerBannerRow, selectedColum
     );
 
     if (repeatedLabelResult.groupLevel) {
-      return repeatedLabelResult;
+      candidates.push(repeatedLabelResult);
     }
+  }
+
+  if (candidates.length > 0) {
+    return selectBestGroupLevelCandidate(candidates);
   }
 
   return {
@@ -389,6 +405,130 @@ function detectMeaningfulGroupLevel(upperScanRows, lowerBannerRow, selectedColum
       "BANNER_ONE_LEVEL_FALLBACK",
       "Баннер: верхний уровень групп не найден. Используется один уровень баннера."
     ),
+  };
+}
+
+/**
+ * Picks the best upper banner level.
+ *
+ * Rows like "Wave" / "Wave (quarter)" are technical descriptors for the
+ * lower banner values. If a higher semantic group row exists, use that higher
+ * row as the comparison-group level instead of fragmenting every wave pair
+ * into its own group.
+ */
+function selectBestGroupLevelCandidate(candidates) {
+  const firstCandidate = candidates[0];
+
+  if (!isTechnicalWaveDescriptorGroupLevel(firstCandidate.groupLevel)) {
+    return firstCandidate;
+  }
+
+  const semanticCandidate = candidates.find(
+    (candidate) => !isTechnicalWaveDescriptorGroupLevel(candidate.groupLevel)
+  );
+
+  return semanticCandidate || firstCandidate;
+}
+
+/**
+ * Temporary diagnostic helper for Excel smoke debugging.
+ *
+ * Mirrors detectMeaningfulGroupLevel candidate discovery and explains which
+ * upper rows were candidate group levels before the final detector result is
+ * consumed by taskpane banner-letter writing.
+ */
+export function buildBannerDetectionDebugSummary(bannerContext) {
+  const selectedColumnCount = bannerContext ? bannerContext.selectedColumnCount || 0 : 0;
+  const lowerBannerRow = normalizeBannerRowLength(
+    getLowerBannerRow(bannerContext),
+    selectedColumnCount
+  );
+  const upperScanRows = bannerContext && bannerContext.upperScanRows ? bannerContext.upperScanRows : [];
+
+  const rows = [];
+  const candidates = [];
+
+  for (let rowIndex = 0; rowIndex < upperScanRows.length; rowIndex++) {
+    const row = normalizeBannerRowLength(upperScanRows[rowIndex], selectedColumnCount);
+    const reconstructedSpanResult = detectReconstructedSpanGroupLevel(
+      row,
+      lowerBannerRow,
+      selectedColumnCount,
+      rowIndex
+    );
+
+    let candidateResult = null;
+
+    if (reconstructedSpanResult.groupLevel) {
+      candidateResult = reconstructedSpanResult;
+    } else {
+      const repeatedLabelResult = detectRepeatedLabelGroupLevelInRow(
+        row,
+        selectedColumnCount,
+        rowIndex
+      );
+
+      if (repeatedLabelResult.groupLevel) {
+        candidateResult = repeatedLabelResult;
+      }
+    }
+
+    if (candidateResult) {
+      candidates.push(candidateResult);
+    }
+
+    const groupLevel = candidateResult ? candidateResult.groupLevel : null;
+    const spans = groupLevel && groupLevel.spans ? groupLevel.spans : [];
+    const labeledSpans = spans.filter((span) => span.label);
+    const isTechnicalWaveDescriptor = isTechnicalWaveDescriptorGroupLevel(groupLevel);
+
+    rows.push({
+      rowIndex,
+      bottomUpLevel: rowIndex + 2,
+      row,
+      isCandidate: Boolean(candidateResult),
+      detectionMethod: groupLevel ? groupLevel.detectionMethod : null,
+      isTechnicalWaveDescriptor,
+      spanCount: spans.length,
+      groupCount: labeledSpans.length,
+      score: groupLevel ? (isTechnicalWaveDescriptor ? 0 : 1) : null,
+      sampleSpans: labeledSpans.slice(0, 20).map((span) => ({
+        label: span.label,
+        startColumnIndex: span.startColumnIndex,
+        endColumnIndex: span.endColumnIndex,
+        columnIndexes: span.columnIndexes,
+      })),
+      messageCode: candidateResult && candidateResult.message ? candidateResult.message.code : null,
+    });
+  }
+
+  const selectedCandidate = candidates.length > 0 ? selectBestGroupLevelCandidate(candidates) : null;
+  const selectedGroupLevel = selectedCandidate ? selectedCandidate.groupLevel : null;
+
+  return {
+    selectedColumnCount,
+    lowerBannerRow,
+    upperScanRows,
+    upperScanRowsByBottomUpLevel: upperScanRows.map((row, index) => ({
+      level: index + 2,
+      row,
+    })),
+    candidateRows: rows,
+    selectedCandidate: selectedGroupLevel
+      ? {
+          bottomUpLevel: Math.abs(selectedGroupLevel.rowOffset) + 1,
+          rowOffset: selectedGroupLevel.rowOffset,
+          detectionMethod: selectedGroupLevel.detectionMethod,
+          isTechnicalWaveDescriptor: isTechnicalWaveDescriptorGroupLevel(selectedGroupLevel),
+          spanCount: selectedGroupLevel.spans ? selectedGroupLevel.spans.length : 0,
+          sampleSpans: (selectedGroupLevel.spans || []).slice(0, 20).map((span) => ({
+            label: span.label,
+            startColumnIndex: span.startColumnIndex,
+            endColumnIndex: span.endColumnIndex,
+            columnIndexes: span.columnIndexes,
+          })),
+        }
+      : null,
   };
 }
 
@@ -423,7 +563,8 @@ function detectReconstructedSpanGroupLevel(
   const hasMergedDownSingleColumnSpan = spans.some(
     (span) =>
       span.columnIndexes.length === 1 &&
-      !normalizeRawBannerCellValue(lowerBannerRow[span.startColumnIndex])
+      !normalizeRawBannerCellValue(lowerBannerRow[span.startColumnIndex]) &&
+      !isTechnicalWaveOrValueLabel(span.label)
   );
 
   if (hasMergedDownSingleColumnSpan) {
@@ -877,5 +1018,81 @@ function isWaveGroupLabel(rawLabel) {
 
   return WAVE_GROUP_LABEL_KEYWORDS.some(
     (keyword) => normalizedLabel === keyword || tokens.includes(keyword)
+  );
+}
+
+/**
+ * Returns true when a detected group level is dominated by technical wave /
+ * period labels, not the semantic grouping row users expect comparisons to
+ * follow.
+ */
+function isTechnicalWaveDescriptorGroupLevel(groupLevel) {
+  if (!groupLevel || !groupLevel.spans || groupLevel.spans.length === 0) {
+    return false;
+  }
+
+  const labeledSpans = groupLevel.spans.filter((span) => span.label);
+
+  if (labeledSpans.length === 0) {
+    return false;
+  }
+
+  const technicalWaveSpanCount = labeledSpans.filter((span) =>
+    isTechnicalWaveOrValueLabel(span.label)
+  ).length;
+
+  return technicalWaveSpanCount / labeledSpans.length >= TECHNICAL_WAVE_LABEL_DOMINANCE_THRESHOLD;
+}
+
+/**
+ * Returns true if a label is either a generic wave descriptor or a concrete
+ * wave / quarter value.
+ */
+function isTechnicalWaveOrValueLabel(rawLabel) {
+  return isTechnicalWaveDescriptorLabel(rawLabel) || isTechnicalWaveValueLabel(rawLabel);
+}
+
+/**
+ * Returns true if a label is a generic wave/period/quarter descriptor.
+ */
+function isTechnicalWaveDescriptorLabel(rawLabel) {
+  const normalizedLabel = normalizeBannerLabel(rawLabel);
+
+  if (!normalizedLabel) {
+    return false;
+  }
+
+  const tokens = normalizedLabel.split(" ").filter(Boolean);
+
+  return TECHNICAL_WAVE_DESCRIPTOR_KEYWORDS.some((keyword) => {
+    const normalizedKeyword = normalizeBannerLabel(keyword);
+
+    return (
+      normalizedLabel === normalizedKeyword ||
+      tokens.includes(normalizedKeyword) ||
+      normalizedLabel.includes(normalizedKeyword)
+    );
+  });
+}
+
+/**
+ * Returns true if a label looks like a concrete wave / quarter value.
+ */
+function isTechnicalWaveValueLabel(rawLabel) {
+  const normalizedLabel = normalizeBannerLabel(rawLabel);
+
+  if (!normalizedLabel) {
+    return false;
+  }
+
+  const compactLabel = normalizedLabel.replace(/\s+/g, "");
+
+  return (
+    /^\d{4}q[1-4]$/.test(compactLabel) ||
+    /^q[1-4]\d{4}$/.test(compactLabel) ||
+    /^\d{4}кв[1-4]$/.test(compactLabel) ||
+    /^кв[1-4]\d{4}$/.test(compactLabel) ||
+    /^\d{4}квартал[1-4]$/.test(compactLabel) ||
+    /^квартал[1-4]\d{4}$/.test(compactLabel)
   );
 }
