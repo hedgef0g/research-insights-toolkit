@@ -451,7 +451,8 @@ function getSelectedRangeCells(selectedText, values, startRow, startColumn, rowC
 
       cells.push({
         value: values && values[rowIndex] ? values[rowIndex][columnIndex] : undefined,
-        text: selectedText && selectedText[rowIndex] ? selectedText[rowIndex][columnIndex] : undefined,
+        text:
+          selectedText && selectedText[rowIndex] ? selectedText[rowIndex][columnIndex] : undefined,
       });
     }
   }
@@ -605,14 +606,7 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    selectedRange.load([
-      "values",
-      "text",
-      "rowIndex",
-      "columnIndex",
-      "rowCount",
-      "columnCount",
-    ]);
+    selectedRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
     await context.sync();
 
@@ -810,10 +804,9 @@ async function runSignificanceFromSelection() {
         }
 
         setStatusMessage(
-          appendSelectedRangeGuardrailMessages(
-            statusMessages,
-            selectedRangeGuardrailWarnings
-          ).join("\n")
+          appendSelectedRangeGuardrailMessages(statusMessages, selectedRangeGuardrailWarnings).join(
+            "\n"
+          )
         );
         return;
       }
@@ -875,7 +868,9 @@ async function runSignificanceFromSelection() {
     }
 
     setStatusMessage(
-      appendSelectedRangeGuardrailMessages(statusMessages, selectedRangeGuardrailWarnings).join("\n")
+      appendSelectedRangeGuardrailMessages(statusMessages, selectedRangeGuardrailWarnings).join(
+        "\n"
+      )
     );
   });
 }
@@ -1231,7 +1226,12 @@ async function runCheckTable() {
     const selectedValues = selectedRange.values;
     const selectedText = selectedRange.text;
 
-    if (!selectedValues || selectedValues.length < 1 || !selectedValues[0] || selectedValues[0].length < 1) {
+    if (
+      !selectedValues ||
+      selectedValues.length < 1 ||
+      !selectedValues[0] ||
+      selectedValues[0].length < 1
+    ) {
       setCheckMessage("Нет данных в выделенном диапазоне.");
       return;
     }
@@ -1242,9 +1242,8 @@ async function runCheckTable() {
 
     // State 3: normalization needed but blocked — stop and show reason.
     if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
-      const codes = normalized.blockingReasons.length > 0
-        ? ` [${normalized.blockingReasons.join(", ")}]`
-        : "";
+      const codes =
+        normalized.blockingReasons.length > 0 ? ` [${normalized.blockingReasons.join(", ")}]` : "";
       setCheckMessage(`${normalized.blockingMessage}${codes}`);
       return;
     }
@@ -1254,10 +1253,12 @@ async function runCheckTable() {
 
     if (normalized.normalizationNeeded && normalized.normalizationApplied) {
       // State 2: broad selection successfully decomposed — use normalized partitions.
+      // Adapt normalized banner context through the same helper Run uses, so banner
+      // detection consumes the shape detectBannerStructure expects.
       modelInput = {
         values: normalized.valuesForCalculation,
         leftLabelValues: normalized.leftLabelValues,
-        bannerContext: normalized.bannerContext,
+        bannerContext: buildRunBannerContext(normalized.bannerContext),
         settings: calculationSettings,
       };
 
@@ -1265,9 +1266,12 @@ async function runCheckTable() {
 
       const parts = [];
       if (normalized.titleRows.length > 0) parts.push(`заголовков: ${normalized.titleRows.length}`);
-      if (normalized.subtitleRows.length > 0) parts.push(`подзаголовков: ${normalized.subtitleRows.length}`);
-      if (normalized.bannerRows.length > 0) parts.push(`строк баннера: ${normalized.bannerRows.length}`);
-      if (normalized.labelColumns.length > 0) parts.push(`колонок меток: ${normalized.labelColumns.length}`);
+      if (normalized.subtitleRows.length > 0)
+        parts.push(`подзаголовков: ${normalized.subtitleRows.length}`);
+      if (normalized.bannerRows.length > 0)
+        parts.push(`строк баннера: ${normalized.bannerRows.length}`);
+      if (normalized.labelColumns.length > 0)
+        parts.push(`колонок меток: ${normalized.labelColumns.length}`);
       if (parts.length > 0) normalizationLines.push(`Отделено: ${parts.join(", ")}.`);
     } else {
       // State 1: numeric-only selection — existing flow unchanged.
@@ -1276,11 +1280,28 @@ async function runCheckTable() {
         selectedRange,
         calculationSettings
       );
-      modelInput = { values: cleanedValues, leftLabelValues };
+
+      // When banner-aware settings are on, mirror Run by loading banner context
+      // from the rows above the selected range. Read-only: no Excel mutation.
+      let bannerContext = null;
+      if (calculationSettings && calculationSettings.respectBannerStructure) {
+        bannerContext = await loadBannerContextForSelectedRange(
+          context,
+          selectedRange,
+          calculationSettings
+        );
+      }
+
+      modelInput = {
+        values: cleanedValues,
+        leftLabelValues,
+        bannerContext,
+        settings: calculationSettings,
+      };
     }
 
     const model = buildTablePreviewModel(modelInput);
-    const { summary, qualitySummary, warnings } = model;
+    const { summary, qualitySummary, warnings, bannerStructure } = model;
 
     if (summary.rowCount === 0) {
       setCheckMessage("Выделенный диапазон пуст.");
@@ -1296,6 +1317,12 @@ async function runCheckTable() {
       lines.push(...normalizationLines);
     }
 
+    const bannerLines = formatCheckBannerSummary(bannerStructure);
+    if (bannerLines.length > 0) {
+      lines.push("");
+      lines.push(...bannerLines);
+    }
+
     if (warnings && warnings.length > 0) {
       lines.push("");
       lines.push("Предупреждения:");
@@ -1306,6 +1333,60 @@ async function runCheckTable() {
 
     setCheckMessage(lines.join("\n"));
   });
+}
+
+/**
+ * Builds a compact banner summary for the Check table text output.
+ *
+ * Surfaces enough of bannerStructure for manual validation that Check
+ * consumes the same banner-aware interpretation inputs as Run.
+ * Returns an array of text lines (empty if banner-aware was disabled).
+ */
+function formatCheckBannerSummary(bannerStructure) {
+  if (!bannerStructure || bannerStructure.isEnabled !== true) {
+    return ["Баннер: не проверялся (учёт структуры выключен)."];
+  }
+
+  if (!bannerStructure.isDetected) {
+    return ["Баннер: не обнаружен."];
+  }
+
+  const groups = Array.isArray(bannerStructure.groups) ? bannerStructure.groups : [];
+  const waveGroupCount = groups.filter((group) => group && group.semanticType === "wave").length;
+  const localTotalGroupCount = groups.filter((group) => group && group.hasLocalTotal).length;
+  const hasGlobalTotal =
+    bannerStructure.globalTotalColumnIndex !== null &&
+    bannerStructure.globalTotalColumnIndex !== undefined;
+
+  const headerParts = [`Баннер: обнаружен. Групп: ${groups.length}.`];
+  headerParts.push(`Wave-групп: ${waveGroupCount}.`);
+  headerParts.push(`Local Total: ${localTotalGroupCount > 0 ? "да" : "нет"}.`);
+  headerParts.push(
+    hasGlobalTotal
+      ? `Global Total: колонка данных ${bannerStructure.globalTotalColumnIndex + 1}.`
+      : "Global Total: нет."
+  );
+  if (bannerStructure.recommendedComparisonMode) {
+    headerParts.push(`Режим сравнения: ${bannerStructure.recommendedComparisonMode}.`);
+  }
+
+  const lines = [headerParts.join(" ")];
+
+  if (groups.length > 0) {
+    lines.push("Группы:");
+    for (const group of groups) {
+      const label = group && group.label ? group.label : "(без названия)";
+      const columnIndexes = Array.isArray(group && group.columnIndexes) ? group.columnIndexes : [];
+      const cols = columnIndexes.length;
+      const semantic = group && group.semanticType ? group.semanticType : "default";
+      const mode =
+        group && group.recommendedComparisonMode ? group.recommendedComparisonMode : "default";
+      const totalNote = group && group.hasLocalTotal ? ", local Total" : "";
+      lines.push(`- ${label} — колонок ${cols} / ${mode} / ${semantic}${totalNote}`);
+    }
+  }
+
+  return lines;
 }
 
 function setCheckMessage(message) {
@@ -2907,5 +2988,3 @@ function getTrailingBannerMarker(rawText) {
     start: markerMatch.index,
   };
 }
-
-
