@@ -1301,7 +1301,7 @@ async function runCheckTable() {
     }
 
     const model = buildTablePreviewModel(modelInput);
-    const { summary, qualitySummary, warnings, bannerStructure } = model;
+    const { summary, qualitySummary, warnings, bannerStructure, calculationBlocks, rowDiagnostics } = model;
 
     if (summary.rowCount === 0) {
       setCheckMessage("Выделенный диапазон пуст.");
@@ -1323,6 +1323,12 @@ async function runCheckTable() {
       lines.push(...bannerLines);
     }
 
+    const blockLines = formatCheckCalculationBlocks(calculationBlocks, rowDiagnostics);
+    if (blockLines.length > 0) {
+      lines.push("");
+      lines.push(...blockLines);
+    }
+
     if (warnings && warnings.length > 0) {
       lines.push("");
       lines.push("Предупреждения:");
@@ -1333,6 +1339,81 @@ async function runCheckTable() {
 
     setCheckMessage(lines.join("\n"));
   });
+}
+
+/**
+ * Builds a compact calculation-block summary for the Check table text output.
+ *
+ * Returns an array of text lines. One header line ("Блоки расчёта: N.") is
+ * followed by one bullet per block. If no blocks are detected, returns a
+ * single "Блоки расчёта: не обнаружены." line.
+ */
+function formatCheckCalculationBlocks(calculationBlocks, rowDiagnostics) {
+  if (!Array.isArray(calculationBlocks) || calculationBlocks.length === 0) {
+    return ["Блоки расчёта: не обнаружены."];
+  }
+
+  const labelMap = new Map();
+  if (Array.isArray(rowDiagnostics)) {
+    for (const diag of rowDiagnostics) {
+      if (diag && diag.rowIndex != null) {
+        labelMap.set(diag.rowIndex, diag.primaryLabel || "");
+      }
+    }
+  }
+
+  const rowRef = (rowIndex) => {
+    if (rowIndex == null) return null;
+    const label = labelMap.get(rowIndex);
+    return label ? `стр. ${rowIndex + 1} «${label}»` : `стр. ${rowIndex + 1}`;
+  };
+
+  const lines = [`Блоки расчёта: ${calculationBlocks.length}.`];
+
+  for (const block of calculationBlocks) {
+    switch (block.metricType) {
+      case "proportion": {
+        const count = Array.isArray(block.valueRowIndexes) ? block.valueRowIndexes.length : 0;
+        const base = block.baseRowIndex != null ? ` База: ${rowRef(block.baseRowIndex)}.` : "";
+        lines.push(`- Пропорции: строк со значениями: ${count}.${base}`);
+        break;
+      }
+      case "mean": {
+        const meanRef = block.valueRowIndex != null ? rowRef(block.valueRowIndex) : "нет";
+        const sdPart = block.sdRowIndex != null ? ` СО: ${rowRef(block.sdRowIndex)}.` : "";
+        const varPart =
+          block.varianceRowIndex != null ? ` Дисперсия: ${rowRef(block.varianceRowIndex)}.` : "";
+        const base = block.baseRowIndex != null ? ` База: ${rowRef(block.baseRowIndex)}.` : "";
+        lines.push(`- Среднее: ${meanRef}.${sdPart}${varPart}${base}`);
+        break;
+      }
+      case "npsStructure": {
+        const npsRef = block.valueRowIndex != null ? rowRef(block.valueRowIndex) : "нет";
+        const promPart =
+          block.promotersRowIndex != null ? ` Промоутеры: ${rowRef(block.promotersRowIndex)}.` : "";
+        const neutPart =
+          block.neutralRowIndex != null ? ` Нейтральные: ${rowRef(block.neutralRowIndex)}.` : "";
+        const detPart =
+          block.detractorsRowIndex != null ? ` Критики: ${rowRef(block.detractorsRowIndex)}.` : "";
+        const base = block.baseRowIndex != null ? ` База: ${rowRef(block.baseRowIndex)}.` : "";
+        lines.push(`- NPS: ${npsRef}.${promPart}${neutPart}${detPart}${base}`);
+        break;
+      }
+      case "npsSpread": {
+        const npsRef = block.valueRowIndex != null ? rowRef(block.valueRowIndex) : "нет";
+        const sdPart = block.sdRowIndex != null ? ` СО: ${rowRef(block.sdRowIndex)}.` : "";
+        const varPart =
+          block.varianceRowIndex != null ? ` Дисперсия: ${rowRef(block.varianceRowIndex)}.` : "";
+        const base = block.baseRowIndex != null ? ` База: ${rowRef(block.baseRowIndex)}.` : "";
+        lines.push(`- NPS (разброс): ${npsRef}.${sdPart}${varPart}${base}`);
+        break;
+      }
+      default:
+        lines.push(`- Блок «${block.metricType || "unknown"}»`);
+    }
+  }
+
+  return lines;
 }
 
 /**
