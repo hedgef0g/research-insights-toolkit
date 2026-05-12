@@ -13,6 +13,11 @@ function makeSimplePreviewModel(labels, options = {}) {
   return buildTablePreviewModel({ values, leftLabelValues, ...options });
 }
 
+function makeCustomPreviewModel(values, labels, options = {}) {
+  const leftLabelValues = labels.map((label) => [label]);
+  return buildTablePreviewModel({ values, leftLabelValues, ...options });
+}
+
 function buildNormalizedPreviewModel(rawText, cleanedValues = rawText, settings = {}) {
   const normalized = normalizeSelectedRange(cleanedValues, rawText);
   assert.strictEqual(normalized.normalizationApplied, true, "normalization must succeed first");
@@ -336,6 +341,55 @@ describe("buildTablePreviewModel - normalized full-table regression coverage", (
       !warningCodes(model).includes("MISSING_ROW_LABEL_WITH_DATA"),
       `unexpected warning set: ${JSON.stringify(model.warnings)}`
     );
+  });
+});
+
+describe("buildTablePreviewModel - header-only block suppression", () => {
+  it("does not report blocks for banner-only descriptor selections", () => {
+    const model = makeCustomPreviewModel(
+      [
+        ["Wave (quarter)", "Wave (quarter)"],
+        ["2025Q4", "2026Q1"],
+      ],
+      ["Wave (quarter)", "2025Q4"]
+    );
+
+    assert.deepStrictEqual(model.calculationBlocks, []);
+    assert.strictEqual(model.summary.detectedBlocks, 0);
+  });
+
+  it("does not report blocks for quarter-label-only selections with year-quarter values", () => {
+    const model = makeCustomPreviewModel(
+      [
+        ["2025Q4", "2026Q1"],
+        ["2026Q2", "2026Q3"],
+      ],
+      ["2025Q4", "2026Q2"]
+    );
+
+    assert.deepStrictEqual(model.calculationBlocks, []);
+    assert.strictEqual(model.summary.detectedBlocks, 0);
+  });
+
+  it("still reports blocks for real banner-heavy tables with numeric body rows", () => {
+    const rawText = [
+      ["Usage table", "", "", ""],
+      ["", "Wave (quarter)", "Wave (quarter)", "Wave (quarter)"],
+      ["", "2025Q4", "2026Q1", "2026Q2"],
+      ["Agree", "44%", "41%", "39%"],
+      ["Disagree", "56%", "59%", "61%"],
+      ["BASE", "5605", "1320", "3083"],
+    ];
+    const cleanedValues = rawText.map((row, rowIndex) =>
+      rowIndex >= 3 ? ["", ...row.slice(1)] : [...row]
+    );
+
+    const { model } = buildNormalizedPreviewModel(rawText, cleanedValues);
+    const proportionBlock = findBlock(model, "proportion");
+
+    assert.ok(proportionBlock, "expected a proportion block for numeric body rows");
+    assert.deepStrictEqual(proportionBlock.valueRowIndexes, [0, 1]);
+    assert.strictEqual(proportionBlock.baseRowIndex, 2);
   });
 });
 
