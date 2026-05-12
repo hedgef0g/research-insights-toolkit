@@ -114,6 +114,8 @@ export function detectBannerStructure(bannerContext, settings = {}) {
     groupLevel: groupLevelResult.groupLevel,
   });
 
+  markUpperLevelTotalsForSparseLowerLabels(columnDescriptors, upperScanRows);
+
   const globalTotalColumnIndex = detectGlobalTotalColumnIndex(columnDescriptors);
 
   markGlobalTotalColumn(columnDescriptors, globalTotalColumnIndex);
@@ -951,25 +953,136 @@ function detectGlobalTotalColumnIndex(columnDescriptors) {
 
   const lowerLabelIsTotal = isTotalBannerLabel(firstDescriptor.normalizedLowerLabel);
 
-  const groupLabelIsTotal = isTotalBannerLabel(
-    normalizeBannerLabel(firstDescriptor.comparisonGroupLabel)
-  );
+  const normalizedGroupLabel = normalizeBannerLabel(firstDescriptor.comparisonGroupLabel);
+  const groupLabelIsTotal = isTotalBannerLabel(normalizedGroupLabel);
 
   if (groupLabelIsTotal) {
-    const firstGroupKey = firstDescriptor.comparisonGroupKey;
-    const firstGroupSize = columnDescriptors.filter(
-      (descriptor) => descriptor.comparisonGroupKey === firstGroupKey
-    ).length;
-
-    if (firstGroupSize > 1) {
+    if (countDescriptorsInSameGroup(columnDescriptors, firstDescriptor) > 1) {
       return null;
     }
 
     return firstDescriptor.columnIndex;
   }
 
+  // First column is a stand-alone Total/Всего with no parent group span
+  // covering it at the picked banner level. Treat it as global so non-total
+  // sibling groups can be compared against it.
+  if (
+    lowerLabelIsTotal &&
+    !normalizedGroupLabel &&
+    countDescriptorsInSameGroup(columnDescriptors, firstDescriptor) === 1
+  ) {
+    return firstDescriptor.columnIndex;
+  }
+
   if (lowerLabelIsTotal && groupLabelIsTotal) {
     return firstDescriptor.columnIndex;
+  }
+
+  return null;
+}
+
+function countDescriptorsInSameGroup(columnDescriptors, descriptor) {
+  return columnDescriptors.filter(
+    (candidate) => candidate.comparisonGroupKey === descriptor.comparisonGroupKey
+  ).length;
+}
+
+/**
+ * Promotes columns with empty lower banner labels to local Total when the
+ * nearest visible upper banner cell in that column is total-like.
+ *
+ * Mirrors the writer's "nearest non-empty cell above" rule so that a Total
+ * label living in a sparse/merged upper banner row is not silently treated
+ * as a normal comparable column.
+ */
+function markUpperLevelTotalsForSparseLowerLabels(columnDescriptors, upperScanRows) {
+  if (!columnDescriptors || columnDescriptors.length === 0) {
+    return;
+  }
+
+  if (!Array.isArray(upperScanRows) || upperScanRows.length === 0) {
+    return;
+  }
+
+  for (const descriptor of columnDescriptors) {
+    if (descriptor.isTotal) {
+      continue;
+    }
+
+    if (descriptor.normalizedLowerLabel) {
+      continue;
+    }
+
+    for (let rowOffset = 0; rowOffset < upperScanRows.length; rowOffset++) {
+      const upperRow = upperScanRows[rowOffset] || [];
+      const upperText = normalizeRawBannerCellValue(upperRow[descriptor.columnIndex]);
+
+      if (!upperText) {
+        continue;
+      }
+
+      if (isTotalBannerLabel(normalizeBannerLabel(upperText))) {
+        descriptor.isTotal = true;
+        descriptor.isLocalTotal = true;
+        descriptor.totalType = TOTAL_TYPE.LOCAL;
+
+        attachSparseTotalToAdjacentGroup(descriptor, columnDescriptors);
+      }
+
+      break;
+    }
+  }
+}
+
+/**
+ * Attaches a sparse upper-level local Total descriptor to the adjacent
+ * named group so that comparison-pair builders treat it as that group's
+ * local Total reference.
+ *
+ * Only descriptors whose own group identity is empty (no upper-level group
+ * span at the picked group level) are reattached. The nearest non-Total
+ * descriptor with a non-empty group label is preferred to the right; the
+ * left side is used as a fallback for trailing sparse Totals.
+ */
+function attachSparseTotalToAdjacentGroup(totalDescriptor, columnDescriptors) {
+  if (totalDescriptor.comparisonGroupLabel) {
+    return;
+  }
+
+  const adjacent =
+    findAdjacentNamedGroupDescriptor(totalDescriptor, columnDescriptors, 1) ||
+    findAdjacentNamedGroupDescriptor(totalDescriptor, columnDescriptors, -1);
+
+  if (!adjacent) {
+    return;
+  }
+
+  totalDescriptor.comparisonGroupKey = adjacent.comparisonGroupKey;
+  totalDescriptor.comparisonGroupLabel = adjacent.comparisonGroupLabel;
+}
+
+function findAdjacentNamedGroupDescriptor(totalDescriptor, columnDescriptors, step) {
+  for (
+    let index = totalDescriptor.columnIndex + step;
+    index >= 0 && index < columnDescriptors.length;
+    index += step
+  ) {
+    const candidate = columnDescriptors[index];
+
+    if (!candidate) {
+      continue;
+    }
+
+    if (candidate.isTotal) {
+      continue;
+    }
+
+    if (!candidate.comparisonGroupLabel) {
+      continue;
+    }
+
+    return candidate;
   }
 
   return null;
