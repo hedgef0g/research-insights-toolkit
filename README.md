@@ -195,6 +195,14 @@ Technical banner diagnostics are hidden from normal output. The status panel sho
 - multiple local Totals in one group;
 - missing banner rows above selection.
 
+## Documentation
+
+- [docs/TABLE_STRUCTURE_MATRIX.md](docs/TABLE_STRUCTURE_MATRIX.md) — structural support coverage (supported / partial / unsupported / future).
+- [docs/TEST_CASES.md](docs/TEST_CASES.md) — manual smoke validation checklist.
+- [docs/STATUS.md](docs/STATUS.md) — technical health and current focus.
+- [docs/ROADMAP.md](docs/ROADMAP.md) — phase plan and direction.
+- [docs/SELECTED_RANGE_NORMALIZATION.md](docs/SELECTED_RANGE_NORMALIZATION.md) — selected-range normalization model.
+
 ## Development notes
 
 Primary architecture:

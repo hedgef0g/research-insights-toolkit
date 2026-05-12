@@ -85,6 +85,27 @@ Only modify high-risk files when the task or issue explicitly allows it.
 - Clear significance should restore numeric-looking cleaned values where possible.
 - Do not change `src/core/excel-writer.js` without an explicit writer/output issue.
 
+## Selected-range normalization guardrail
+
+Run and Clear share a selected-range normalization step. Every selection
+must resolve into exactly one of three states before any Excel mutation:
+
+- **Pass-through** — the selection is already a clean numeric data area and
+  is used as-is.
+- **Normalized** — the selection includes safe-to-trim context (e.g. a
+  banner row, a label column, a full-table shape) and is reduced to a clean
+  numeric data area following the rules in
+  `docs/SELECTED_RANGE_NORMALIZATION.md`.
+- **Blocked** — the selection is unsafe (ambiguous boundaries, broad
+  sheet-wide or worksheet-wide selections, or otherwise outside the
+  supported shapes) and must stop before any Excel mutation, with a clear
+  user-facing message.
+
+Unsafe broad selections must not silently fall through to Run/Clear: they
+must be blocked at the normalization layer. Do not bypass this guardrail
+to "just make it work" — extend the normalization spec instead. See
+`docs/SELECTED_RANGE_NORMALIZATION.md` for the authoritative rules.
+
 ## Banner rules
 
 - Banner-aware comparisons must preserve the manual selected-range model.
