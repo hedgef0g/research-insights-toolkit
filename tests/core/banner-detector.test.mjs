@@ -84,13 +84,34 @@ describe("detectBannerStructure - group level selection", () => {
       result.groups.map((group) => ({
         label: group.label,
         columnIndexes: group.columnIndexes,
+        recommendedComparisonMode: group.recommendedComparisonMode,
       })),
       [
-        { label: "Total", columnIndexes: [0, 1, 2, 3] },
-        { label: "Category usage", columnIndexes: [4, 5, 6, 7] },
-        { label: "Gender", columnIndexes: [8, 9] },
-        { label: "Age", columnIndexes: [10, 11] },
-        { label: "Geo", columnIndexes: [12, 13] },
+        {
+          label: "Total",
+          columnIndexes: [0, 1, 2, 3],
+          recommendedComparisonMode: "previousColumn",
+        },
+        {
+          label: "Category usage",
+          columnIndexes: [4, 5, 6, 7],
+          recommendedComparisonMode: "previousColumn",
+        },
+        {
+          label: "Gender",
+          columnIndexes: [8, 9],
+          recommendedComparisonMode: "previousColumn",
+        },
+        {
+          label: "Age",
+          columnIndexes: [10, 11],
+          recommendedComparisonMode: "previousColumn",
+        },
+        {
+          label: "Geo",
+          columnIndexes: [12, 13],
+          recommendedComparisonMode: "previousColumn",
+        },
       ]
     );
 
@@ -99,8 +120,8 @@ describe("detectBannerStructure - group level selection", () => {
     });
 
     assert.deepStrictEqual(
-      Array.from({ length: 6 }, (_, columnIndex) => labelMap.get(columnIndex) || ""),
-      ["a", "b", "c", "d", "a", "b"]
+      Array.from({ length: 14 }, (_, columnIndex) => labelMap.get(columnIndex) || ""),
+      ["", "", "", "", "", "", "", "", "", "", "", "", "", ""]
     );
   });
 
@@ -125,10 +146,19 @@ describe("detectBannerStructure - group level selection", () => {
       result.groups.map((group) => ({
         label: group.label,
         columnIndexes: group.columnIndexes,
+        recommendedComparisonMode: group.recommendedComparisonMode,
       })),
       [
-        { label: "Всего", columnIndexes: [0, 1] },
-        { label: "Пользование категорией", columnIndexes: [2, 3, 4, 5] },
+        {
+          label: "Всего",
+          columnIndexes: [0, 1],
+          recommendedComparisonMode: "previousColumn",
+        },
+        {
+          label: "Пользование категорией",
+          columnIndexes: [2, 3, 4, 5],
+          recommendedComparisonMode: "previousColumn",
+        },
       ]
     );
 
@@ -138,7 +168,7 @@ describe("detectBannerStructure - group level selection", () => {
 
     assert.deepStrictEqual(
       Array.from({ length: 6 }, (_, columnIndex) => labelMap.get(columnIndex) || ""),
-      ["a", "b", "a", "b", "c", "d"]
+      ["", "", "", "", "", ""]
     );
   });
 
@@ -157,6 +187,163 @@ describe("detectBannerStructure - group level selection", () => {
       })),
       [{ label: "Gender", columnIndexes: [0, 1] }]
     );
+  });
+
+  it("promotes every category group with a nested Волна (квартал) dimension to wave-aware", () => {
+    const bannerContext = {
+      selectedColumnCount: 12,
+      lowerBannerRow: [
+        "2025Q4",
+        "2026Q1",
+        "2025Q4",
+        "2026Q1",
+        "2025Q4",
+        "2026Q1",
+        "2025Q4",
+        "2026Q1",
+        "2025Q4",
+        "2026Q1",
+        "2025Q4",
+        "2026Q1",
+      ],
+      upperScanRows: [
+        [
+          "Волна (квартал)",
+          "Волна (квартал)",
+          "Волна (квартал)",
+          "Волна (квартал)",
+          "Волна (квартал)",
+          "Волна (квартал)",
+          "Волна (квартал)",
+          "Волна (квартал)",
+          "Волна (квартал)",
+          "Волна (квартал)",
+          "Волна (квартал)",
+          "Волна (квартал)",
+        ],
+        [
+          "Всего",
+          "",
+          "Всё покупаю сам",
+          "",
+          "Большую часть",
+          "",
+          "Половину",
+          "",
+          "Меньшую часть",
+          "",
+          "Почти не участвую",
+          "",
+        ],
+      ],
+    };
+
+    const result = detectBannerStructure(bannerContext, { autoDetectWaveBanners: true });
+
+    assert.strictEqual(result.globalTotalColumnIndex, null);
+    assert.deepStrictEqual(result.totalColumnIndexes, []);
+
+    assert.deepStrictEqual(
+      result.groups.map((group) => ({
+        label: group.label,
+        columnIndexes: group.columnIndexes,
+        recommendedComparisonMode: group.recommendedComparisonMode,
+        semanticType: group.semanticType,
+      })),
+      [
+        {
+          label: "Всего",
+          columnIndexes: [0, 1],
+          recommendedComparisonMode: "previousColumn",
+          semanticType: "wave",
+        },
+        {
+          label: "Всё покупаю сам",
+          columnIndexes: [2, 3],
+          recommendedComparisonMode: "previousColumn",
+          semanticType: "wave",
+        },
+        {
+          label: "Большую часть",
+          columnIndexes: [4, 5],
+          recommendedComparisonMode: "previousColumn",
+          semanticType: "wave",
+        },
+        {
+          label: "Половину",
+          columnIndexes: [6, 7],
+          recommendedComparisonMode: "previousColumn",
+          semanticType: "wave",
+        },
+        {
+          label: "Меньшую часть",
+          columnIndexes: [8, 9],
+          recommendedComparisonMode: "previousColumn",
+          semanticType: "wave",
+        },
+        {
+          label: "Почти не участвую",
+          columnIndexes: [10, 11],
+          recommendedComparisonMode: "previousColumn",
+          semanticType: "wave",
+        },
+      ]
+    );
+
+    const labelMap = buildBannerLocalSignificanceLabelMap(result, {
+      autoDetectWaveBanners: true,
+    });
+
+    assert.deepStrictEqual(
+      Array.from({ length: 12 }, (_, columnIndex) => labelMap.get(columnIndex) || ""),
+      ["", "", "", "", "", "", "", "", "", "", "", ""]
+    );
+
+    const pairs = buildColumnComparisonPairs(
+      12,
+      { respectBannerStructure: true, autoDetectWaveBanners: true },
+      new Set(),
+      result
+    );
+
+    const previousColumnPairs = pairs
+      .filter((pair) => pair.comparisonType === "previousColumn")
+      .map((pair) => [pair.firstColumnIndex, pair.secondColumnIndex]);
+
+    assert.deepStrictEqual(previousColumnPairs, [
+      [0, 1],
+      [2, 3],
+      [4, 5],
+      [6, 7],
+      [8, 9],
+      [10, 11],
+    ]);
+
+    const crossGroupPairs = pairs.filter(
+      (pair) =>
+        pair.comparisonType !== "previousColumn" &&
+        pair.comparisonType !== "bannerTotal"
+    );
+
+    assert.deepStrictEqual(crossGroupPairs, []);
+  });
+
+  it("keeps nested-wave behavior off when autoDetectWaveBanners is disabled", () => {
+    const bannerContext = {
+      selectedColumnCount: 4,
+      lowerBannerRow: ["2025Q4", "2026Q1", "2025Q4", "2026Q1"],
+      upperScanRows: [
+        ["Волна (квартал)", "Волна (квартал)", "Волна (квартал)", "Волна (квартал)"],
+        ["Всего", "", "Всё покупаю сам", ""],
+      ],
+    };
+
+    const result = detectBannerStructure(bannerContext, { autoDetectWaveBanners: false });
+
+    for (const group of result.groups) {
+      assert.notStrictEqual(group.recommendedComparisonMode, "previousColumn");
+      assert.notStrictEqual(group.semanticType, "wave");
+    }
   });
 
   it("keeps a pure wave-only banner as the group level when no semantic row exists", () => {
