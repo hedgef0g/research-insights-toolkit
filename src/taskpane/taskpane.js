@@ -1072,8 +1072,98 @@ async function clearSignificanceFromSelection() {
 
     await context.sync();
 
+    await clearBannerMarkersAboveRange(context, clearTargetRange);
+
     setStatusMessage("Significance markers removed.");
   });
+}
+
+/**
+ * Removes RIT-generated trailing banner significance markers from the visible
+ * banner/header cells above the data body that was just cleared.
+ *
+ * PURPOSE:
+ * Mirrors the Run "mark letters in banner" placement so Clear undoes the same
+ * cells Run wrote into, including sparse / vertically merged banner layouts
+ * where the nearest non-empty cell above receives the marker.
+ *
+ * RULES:
+ * - Scans the row immediately above the data body plus up to
+ *   BANNER_UPPER_SCAN_LIMIT additional rows above, matching Run.
+ * - Removes only trailing markers recognized by getTrailingBannerMarker,
+ *   which restricts matches to single-character significance labels.
+ *   Ordinary parenthesized header text such as "Wave (quarter)",
+ *   "Brand (new)", or "Волна (квартал)" is preserved.
+ * - Never writes to the data body or to the label column.
+ */
+async function clearBannerMarkersAboveRange(context, targetRange) {
+  const BANNER_UPPER_SCAN_LIMIT = 5;
+
+  targetRange.load(["rowIndex", "columnIndex", "columnCount"]);
+
+  await context.sync();
+
+  const targetStartRowIndex = targetRange.rowIndex;
+  const targetStartColumnIndex = targetRange.columnIndex;
+  const targetColumnCount = targetRange.columnCount;
+
+  if (targetStartRowIndex === 0 || targetColumnCount < 1) {
+    return;
+  }
+
+  const totalScanRowCount = Math.min(BANNER_UPPER_SCAN_LIMIT + 1, targetStartRowIndex);
+
+  if (totalScanRowCount < 1) {
+    return;
+  }
+
+  const bannerScanRange = targetRange.worksheet.getRangeByIndexes(
+    targetStartRowIndex - totalScanRowCount,
+    targetStartColumnIndex,
+    totalScanRowCount,
+    targetColumnCount
+  );
+
+  bannerScanRange.load("text");
+
+  await context.sync();
+
+  const bannerTexts = bannerScanRange.text;
+  const cellWriteQueue = [];
+
+  for (let rowOffset = 0; rowOffset < totalScanRowCount; rowOffset++) {
+    const rowTexts = bannerTexts[rowOffset] || [];
+
+    for (let columnIndex = 0; columnIndex < targetColumnCount; columnIndex++) {
+      const currentText = rowTexts[columnIndex];
+
+      if (currentText === null || currentText === undefined || currentText === "") {
+        continue;
+      }
+
+      if (!getTrailingBannerMarker(currentText)) {
+        continue;
+      }
+
+      cellWriteQueue.push({
+        rowIndex: targetStartRowIndex - totalScanRowCount + rowOffset,
+        colIndex: targetStartColumnIndex + columnIndex,
+        text: removeTrailingBannerMarker(currentText),
+      });
+    }
+  }
+
+  if (cellWriteQueue.length === 0) {
+    return;
+  }
+
+  for (const { rowIndex, colIndex, text } of cellWriteQueue) {
+    const cell = targetRange.worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1);
+
+    cell.values = [[text]];
+  }
+
+  await context.sync();
 }
 
 /**
