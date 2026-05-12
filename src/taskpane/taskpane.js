@@ -2014,6 +2014,12 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
     return;
   }
 
+  const BANNER_UPPER_SCAN_LIMIT = 5;
+
+  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
+
+  await context.sync();
+
   const selectedStartRowIndex = selectedRange.rowIndex;
   const selectedStartColumnIndex = selectedRange.columnIndex;
   const selectedColumnCount = selectedRange.columnCount;
@@ -2031,15 +2037,18 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
     selectedColumnCount
   );
 
-  bannerRange.load("values");
+  bannerRange.load("text");
 
   await context.sync();
 
-  const bannerValues = bannerRange.values[0];
+  const bannerTexts = bannerRange.text[0] || [];
+  const markerByColumnIndex = new Map();
+  const clearMarkerColumnIndexes = new Set();
 
-  const updatedBannerValues = bannerValues.map((currentValue, columnIndex) => {
+  const updatedBannerTexts = bannerTexts.map((currentText, columnIndex) => {
     if (calculationSettings.firstColumnIsTotal && columnIndex === 0) {
-      return removeBannerCellMarker(currentValue);
+      clearMarkerColumnIndexes.add(columnIndex);
+      return removeTrailingBannerMarker(currentText);
     }
 
     const markerIndex = calculationSettings.firstColumnIsTotal ? columnIndex - 1 : columnIndex;
@@ -2047,28 +2056,104 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
     const marker = significanceLabels[markerIndex];
 
     if (!marker) {
-      return currentValue;
+      return currentText;
     }
 
-    return updateBannerCellMarker(currentValue, marker);
+    markerByColumnIndex.set(columnIndex, marker);
+
+    return appendOrReplaceTrailingBannerMarker(currentText, marker);
   });
 
-  /**
-   * Removes significance marker from the end of a banner cell.
-   *
-   * PURPOSE:
-   * In firstColumnIsTotal mode, the Total banner cell must not have
-   * a significance marker.
-   */
-  function removeBannerCellMarker(rawValue) {
-    const textValue = rawValue === null || rawValue === undefined ? "" : String(rawValue);
+  const upperScanRowCount = Math.min(BANNER_UPPER_SCAN_LIMIT, selectedStartRowIndex - 1);
+  const needsUpperScan =
+    upperScanRowCount > 0 &&
+    bannerTexts.some(
+      (text, columnIndex) =>
+        (text || "") === "" &&
+        (markerByColumnIndex.has(columnIndex) || clearMarkerColumnIndexes.has(columnIndex))
+    );
 
-    const markerSuffixPattern = /\s*\([^()]+\)$/;
+  let upperScanTexts = [];
 
-    return textValue.replace(markerSuffixPattern, "").trim();
+  if (needsUpperScan) {
+    const upperScanRange = selectedRange.worksheet.getRangeByIndexes(
+      selectedStartRowIndex - 1 - upperScanRowCount,
+      selectedStartColumnIndex,
+      upperScanRowCount,
+      selectedColumnCount
+    );
+
+    upperScanRange.load("text");
+
+    await context.sync();
+
+    upperScanTexts = upperScanRange.text.slice().reverse();
   }
 
-  bannerRange.values = [updatedBannerValues];
+  const cellWriteQueue = [];
+
+  for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
+    const currentText = bannerTexts[columnIndex] || "";
+    const nextText = updatedBannerTexts[columnIndex] || "";
+    const marker = markerByColumnIndex.get(columnIndex);
+    const shouldClearMarker = clearMarkerColumnIndexes.has(columnIndex);
+
+    if (currentText === "" && (marker || shouldClearMarker)) {
+      let queued = false;
+
+      for (let rowOffset = 0; rowOffset < upperScanTexts.length; rowOffset++) {
+        const upperCellText =
+          (upperScanTexts[rowOffset] && upperScanTexts[rowOffset][columnIndex]) || "";
+
+        if (upperCellText !== "") {
+          const updatedUpperCellText = marker
+            ? appendOrReplaceTrailingBannerMarker(upperCellText, marker)
+            : getTrailingBannerMarker(upperCellText)
+              ? removeTrailingBannerMarker(upperCellText)
+              : upperCellText;
+
+          if (updatedUpperCellText === upperCellText) {
+            queued = true;
+            break;
+          }
+
+          cellWriteQueue.push({
+            rowIndex: selectedStartRowIndex - 2 - rowOffset,
+            colIndex: selectedStartColumnIndex + columnIndex,
+            text: updatedUpperCellText,
+          });
+          queued = true;
+          break;
+        }
+      }
+
+      if (queued) {
+        continue;
+      }
+    }
+
+    if (nextText === "" && currentText === "") {
+      continue;
+    }
+
+    if (nextText === currentText) {
+      continue;
+    }
+
+    cellWriteQueue.push({
+      rowIndex: selectedStartRowIndex - 1,
+      colIndex: selectedStartColumnIndex + columnIndex,
+      text: nextText,
+    });
+  }
+
+  for (const { rowIndex, colIndex, text } of cellWriteQueue) {
+    const cell = selectedRange.worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1);
+
+    cell.values = [[text]];
+  }
+
+  await context.sync();
 }
 
 /**
@@ -2221,33 +2306,6 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
   }
 
   await context.sync();
-}
-
-/**
- * Adds or replaces significance marker at the end of a banner cell.
- *
- * PURPOSE:
- * Banner cells may already contain an old marker like "Segment A (/b/)".
- * We replace old marker with the current marker for this column.
- */
-function updateBannerCellMarker(rawValue, marker) {
-  const textValue = rawValue === null || rawValue === undefined ? "" : String(rawValue);
-
-  const expectedMarkerSuffix = `(${marker})`;
-
-  if (textValue.trim().endsWith(expectedMarkerSuffix)) {
-    return textValue;
-  }
-
-  const markerSuffixPattern = /\s*\([^()]+\)$/;
-
-  const textWithoutOldMarker = textValue.replace(markerSuffixPattern, "").trim();
-
-  if (!textWithoutOldMarker) {
-    return expectedMarkerSuffix;
-  }
-
-  return `${textWithoutOldMarker} ${expectedMarkerSuffix}`;
 }
 
 /**
@@ -2655,10 +2713,10 @@ function appendOrReplaceTrailingBannerMarker(rawText, label) {
   const text = rawText === null || rawText === undefined ? "" : String(rawText).trim();
 
   const marker = `(${label})`;
-  const markerPattern = /\s*\([^)]+\)\s*$/;
+  const currentMarker = getTrailingBannerMarker(text);
 
-  if (markerPattern.test(text)) {
-    return text.replace(markerPattern, ` ${marker}`);
+  if (currentMarker) {
+    return `${text.slice(0, currentMarker.start).trim()} ${marker}`.trim();
   }
 
   return `${text} ${marker}`.trim();
@@ -2675,9 +2733,34 @@ function removeTrailingBannerMarker(rawText) {
     return "";
   }
 
-  return String(rawText)
-    .replace(/\s*\([^)]+\)\s*$/, "")
-    .trim();
+  const text = String(rawText);
+  const currentMarker = getTrailingBannerMarker(text);
+
+  if (!currentMarker) {
+    return text.trim();
+  }
+
+  return text.slice(0, currentMarker.start).trim();
+}
+
+function getTrailingBannerMarker(rawText) {
+  const text = rawText === null || rawText === undefined ? "" : String(rawText);
+  const markerMatch = text.match(/\s*\(([^()]*)\)\s*$/);
+
+  if (!markerMatch) {
+    return null;
+  }
+
+  const markerLabel = markerMatch[1];
+
+  if (!generateSignificanceLabels().includes(markerLabel)) {
+    return null;
+  }
+
+  return {
+    label: markerLabel,
+    start: markerMatch.index,
+  };
 }
 
 
