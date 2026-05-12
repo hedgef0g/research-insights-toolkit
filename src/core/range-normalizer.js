@@ -84,6 +84,12 @@ const LABEL_NUMERIC_THRESHOLD       = 0.5;
 // Blocking: label split is uncertain AND body is still text-heavy → unsafe.
 const LABEL_BLOCKING_BODY_TEXT_FRACTION = 0.4;
 
+// Extended NPS tables often use numeric-looking scale labels in the first
+// column ("1".."10"). Keep this high enough that ordinary numeric columns do
+// not become labels unless the NPS support rows are also present.
+const NPS_SCALE_LABEL_MIN_COUNT = 5;
+const NPS_SCALE_RIGHT_NUMERIC_FRACTION = 0.6;
+
 // Confidence thresholds on body numeric fraction.
 const CONFIDENCE_HIGH_NUMERIC   = 0.7;
 const CONFIDENCE_MEDIUM_NUMERIC = 0.5;
@@ -100,6 +106,8 @@ function isCellEmpty(cell) {
 // "Волна (квартал)" do NOT match — parseFloat() would accept them because it
 // stops at the first non-numeric character, but these are header labels, not data.
 const STRICT_NUMERIC_RE = /^[+-]?(\d+([.,]\d*)?|\d*[.,]\d+)%?$/;
+const NUMERIC_WITH_MARKER_SUFFIX_RE =
+  /^([+-]?(\d+([.,]\d*)?|\d*[.,]\d+)%?)(\s+[\p{L}↑↓]+)+$/u;
 
 function isNumericCell(cell) {
   if (typeof cell === "number") return !isNaN(cell);
@@ -115,6 +123,23 @@ function isTextOnlyCell(cell) {
   // Using isNumericCell here keeps both functions consistent: anything that
   // isNumericCell rejects (e.g. "2025Q4", "(a)") is correctly treated as text.
   return !isNumericCell(cell);
+}
+
+function cleanStructuralTextCell(cell) {
+  if (typeof cell !== "string") {
+    return cell;
+  }
+
+  const trimmed = cell.trim();
+  const match = trimmed.match(NUMERIC_WITH_MARKER_SUFFIX_RE);
+
+  return match ? match[1] : cell;
+}
+
+function cleanStructuralTextGrid(text) {
+  return text.map((row) =>
+    Array.isArray(row) ? row.map((cell) => cleanStructuralTextCell(cell)) : row
+  );
 }
 
 // ─── Grid analysis helpers ────────────────────────────────────────────────────
@@ -393,10 +418,16 @@ function detectLabelColumns(values, bodyStartRow, bodyEndRow, colCount) {
   const col0Frac = computeTextFraction(values, bodyStartRow, bodyEndRow, 0, 0);
 
   if (col0Frac < LABEL_NUMERIC_THRESHOLD) {
+    if (isExtendedNpsScaleLabelColumn(values, bodyStartRow, bodyEndRow, colCount)) {
+      return { labelColCount: 1, labelSplitConfidence: "confident" };
+    }
     return { labelColCount: 0, labelSplitConfidence: "confident" };
   }
 
   if (col0Frac < LABEL_TEXT_FRACTION_THRESHOLD) {
+    if (isExtendedNpsScaleLabelColumn(values, bodyStartRow, bodyEndRow, colCount)) {
+      return { labelColCount: 1, labelSplitConfidence: "confident" };
+    }
     // Ambiguous: col[0] is neither clearly text nor clearly numeric.
     return { labelColCount: 0, labelSplitConfidence: "uncertain" };
   }
@@ -412,6 +443,104 @@ function detectLabelColumns(values, bodyStartRow, bodyEndRow, colCount) {
   }
 
   return { labelColCount: 1, labelSplitConfidence: "confident" };
+}
+
+function normalizeLabelCandidate(rawValue) {
+  if (rawValue === null || rawValue === undefined) {
+    return "";
+  }
+
+  return String(rawValue)
+    .toLowerCase()
+    .replace(/[.,:;()_-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isNpsScaleLabel(rawValue) {
+  const label = normalizeLabelCandidate(rawValue);
+  if (!label || !/^\d+$/.test(label)) {
+    return false;
+  }
+
+  const value = Number(label);
+  return value >= 0 && value <= 10;
+}
+
+function isExtendedNpsScaleLabelColumn(values, bodyStartRow, bodyEndRow, colCount) {
+  if (colCount < 3 || bodyEndRow < bodyStartRow) {
+    return false;
+  }
+
+  const rightNumericFrac = computeNumericFraction(
+    values,
+    bodyStartRow,
+    bodyEndRow,
+    1,
+    colCount - 1
+  );
+
+  if (rightNumericFrac < NPS_SCALE_RIGHT_NUMERIC_FRACTION) {
+    return false;
+  }
+
+  let scaleLabelCount = 0;
+  let bucketOrNeutralCount = 0;
+  let hasDetractors = false;
+  let hasPromoters = false;
+  let hasNps = false;
+  let hasBase = false;
+
+  for (let rowIndex = bodyStartRow; rowIndex <= bodyEndRow; rowIndex++) {
+    const row = values[rowIndex] || [];
+    const rawLabel = row[0];
+    const label = normalizeLabelCandidate(rawLabel);
+
+    if (isNpsScaleLabel(rawLabel)) {
+      scaleLabelCount++;
+      continue;
+    }
+
+    if (label === "detractors" || label === "detractor") {
+      hasDetractors = true;
+      continue;
+    }
+
+    if (label === "promoters" || label === "promoter") {
+      hasPromoters = true;
+      continue;
+    }
+
+    if (label === "nps" || label === "net promoter score") {
+      hasNps = true;
+      continue;
+    }
+
+    if (label === "base") {
+      hasBase = true;
+      continue;
+    }
+
+    if (
+      label === "neutral" ||
+      label === "neutrals" ||
+      label.startsWith("bottom ") ||
+      label.startsWith("mid ") ||
+      label.startsWith("middle ") ||
+      label.startsWith("top ")
+    ) {
+      bucketOrNeutralCount++;
+    }
+  }
+
+  return (
+    scaleLabelCount >= NPS_SCALE_LABEL_MIN_COUNT &&
+    bucketOrNeutralCount > 0 &&
+    hasDetractors &&
+    hasPromoters &&
+    hasNps &&
+    hasBase
+  );
 }
 
 // ─── Body validation ──────────────────────────────────────────────────────────
@@ -696,7 +825,9 @@ export function normalizeSelectedRange(rawValues, rawText, options = {}) {
   const text     = Array.isArray(rawText)   ? rawText   : [];
   const rowCount = values.length;
   const colCount = rowCount > 0 && Array.isArray(values[0]) ? values[0].length : 0;
-  const structureValues = hasUsableTextGrid(text, rowCount, colCount) ? text : values;
+  const structureValues = hasUsableTextGrid(text, rowCount, colCount)
+    ? cleanStructuralTextGrid(text)
+    : values;
 
   // ── Step 0: Pass-through gate ──────────────────────────────────────────────
   // If the selection looks like numeric-only data, return immediately.
