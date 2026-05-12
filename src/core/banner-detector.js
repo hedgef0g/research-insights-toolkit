@@ -120,7 +120,23 @@ export function detectBannerStructure(bannerContext, settings = {}) {
 
   markGlobalTotalColumn(columnDescriptors, globalTotalColumnIndex);
 
-  const groups = buildGroupsFromColumnDescriptors(columnDescriptors, settings);
+  const nestedWaveGroupKeys =
+    settings && settings.autoDetectWaveBanners
+      ? detectGroupKeysWithNestedWaveDimension({
+          columnDescriptors,
+          lowerBannerRow: normalizedLowerBannerRow,
+          upperScanRows,
+          groupLevelRowOffset: groupLevelResult.groupLevel
+            ? groupLevelResult.groupLevel.rowOffset
+            : null,
+        })
+      : new Set();
+
+  const groups = buildGroupsFromColumnDescriptors(
+    columnDescriptors,
+    settings,
+    nestedWaveGroupKeys
+  );
 
   const waveGroups = groups.filter(
     (group) => group.recommendedComparisonMode === RECOMMENDED_COMPARISON_MODE.PREVIOUS_COLUMN
@@ -303,7 +319,11 @@ function buildColumnDescriptors({ selectedColumnCount, lowerBannerRow, groupLeve
 /**
  * Builds group objects from descriptors.
  */
-function buildGroupsFromColumnDescriptors(columnDescriptors, calculationSettings = {}) {
+function buildGroupsFromColumnDescriptors(
+  columnDescriptors,
+  calculationSettings = {},
+  nestedWaveGroupKeys = new Set()
+) {
   const groupsByKey = new Map();
 
   for (const descriptor of columnDescriptors) {
@@ -312,7 +332,9 @@ function buildGroupsFromColumnDescriptors(columnDescriptors, calculationSettings
         calculationSettings && calculationSettings.autoDetectWaveBanners;
 
       const isWaveGroup =
-        shouldAutoDetectWaveBanners && isWaveGroupLabel(descriptor.comparisonGroupLabel);
+        shouldAutoDetectWaveBanners &&
+        (isWaveGroupLabel(descriptor.comparisonGroupLabel) ||
+          nestedWaveGroupKeys.has(descriptor.comparisonGroupKey));
 
       groupsByKey.set(descriptor.comparisonGroupKey, {
         groupKey: descriptor.comparisonGroupKey,
@@ -1109,6 +1131,117 @@ function markGlobalTotalColumn(columnDescriptors, globalTotalColumnIndex) {
 
   descriptor.isGlobalTotal = true;
   descriptor.isLocalTotal = false;
+}
+
+/**
+ * Detects which comparison-group keys host a nested/repeated wave dimension
+ * inside the group rather than at the parent group label.
+ *
+ * Two signals promote a group to wave-aware:
+ * - lower banner labels in the group's columns look like concrete wave values
+ *   (e.g. 2025Q4, 2026Q1) for at least two columns;
+ * - any upper banner row other than the chosen group level row contains a
+ *   wave / period / quarter descriptor label (e.g. "Волна (квартал)") for at
+ *   least two of the group's columns.
+ *
+ * Single-column groups are never promoted because previous-column wave
+ * comparison only makes sense across two or more adjacent wave columns.
+ */
+function detectGroupKeysWithNestedWaveDimension({
+  columnDescriptors,
+  lowerBannerRow,
+  upperScanRows,
+  groupLevelRowOffset,
+}) {
+  const groupColumnsByKey = new Map();
+
+  for (const descriptor of columnDescriptors) {
+    if (!groupColumnsByKey.has(descriptor.comparisonGroupKey)) {
+      groupColumnsByKey.set(descriptor.comparisonGroupKey, []);
+    }
+
+    groupColumnsByKey.get(descriptor.comparisonGroupKey).push(descriptor.columnIndex);
+  }
+
+  const groupLevelRowIndex =
+    typeof groupLevelRowOffset === "number" ? -groupLevelRowOffset - 1 : null;
+
+  const waveGroupKeys = new Set();
+
+  for (const [groupKey, columnIndexes] of groupColumnsByKey) {
+    if (columnIndexes.length < 2) {
+      continue;
+    }
+
+    if (countWaveValueLabelsInColumns(columnIndexes, lowerBannerRow) >= 2) {
+      waveGroupKeys.add(groupKey);
+      continue;
+    }
+
+    if (
+      hasWaveDescriptorInIntermediateUpperRow(columnIndexes, upperScanRows, groupLevelRowIndex)
+    ) {
+      waveGroupKeys.add(groupKey);
+    }
+  }
+
+  return waveGroupKeys;
+}
+
+function countWaveValueLabelsInColumns(columnIndexes, row) {
+  if (!row) {
+    return 0;
+  }
+
+  let count = 0;
+
+  for (const columnIndex of columnIndexes) {
+    const cellText = normalizeRawBannerCellValue(row[columnIndex]);
+
+    if (cellText && isTechnicalWaveValueLabel(cellText)) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
+function hasWaveDescriptorInIntermediateUpperRow(
+  columnIndexes,
+  upperScanRows,
+  groupLevelRowIndex
+) {
+  if (!Array.isArray(upperScanRows) || upperScanRows.length === 0) {
+    return false;
+  }
+
+  for (let rowIndex = 0; rowIndex < upperScanRows.length; rowIndex++) {
+    if (rowIndex === groupLevelRowIndex) {
+      continue;
+    }
+
+    const row = upperScanRows[rowIndex];
+
+    if (!row) {
+      continue;
+    }
+
+    let descriptorCount = 0;
+
+    for (const columnIndex of columnIndexes) {
+      const cellText = normalizeRawBannerCellValue(row[columnIndex]);
+
+      if (cellText && isTechnicalWaveDescriptorLabel(cellText)) {
+        descriptorCount++;
+      }
+    }
+
+    if (descriptorCount >= 2) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /**
