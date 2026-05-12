@@ -23,6 +23,9 @@ const LABEL_TEXT_FRACTION_THRESHOLD = 0.6;
 // A first-band row is title-like only when it has at most this many non-empty cells.
 // This keeps wide banner rows (Total / Male / Female / …) from being mistaken for headings.
 const MAX_TITLE_ROW_NON_EMPTY_CELLS = 3;
+// Keep scanner-side numeric evidence aligned with the selected-range normalizer:
+// mixed strings like "2025Q4" or "(a)" are header labels, not numeric cells.
+const STRICT_NUMERIC_RE = /^[+-]?(\d+([.,]\d*)?|\d*[.,]\d+)%?$/;
 
 // ─── A1 address helpers ───────────────────────────────────────────────────────
 
@@ -62,23 +65,20 @@ function isNumericCell(cell) {
   if (typeof cell !== "string") return false;
   const trimmed = cell.trim();
   if (!trimmed) return false;
-  return !isNaN(parseFloat(trimmed.replace(/,/g, ".")));
+  return STRICT_NUMERIC_RE.test(trimmed);
 }
 
 function isTextOnlyCell(cell) {
   if (typeof cell !== "string" || !cell.trim()) return false;
-  return isNaN(parseFloat(cell.trim().replace(/,/g, ".")));
+  return !isNumericCell(cell);
 }
 
 function firstNonEmptyNonNumericText(row) {
   for (const cell of row) {
     if (isCellEmpty(cell)) continue;
-    if (typeof cell === "number") continue;
-    if (typeof cell === "string") {
-      const trimmed = cell.trim();
-      if (!trimmed) continue;
-      if (isNaN(parseFloat(trimmed.replace(/,/g, ".")))) return trimmed;
-    }
+    if (isNumericCell(cell)) continue;
+    const trimmed = String(cell).trim();
+    if (trimmed) return trimmed;
   }
   return null;
 }

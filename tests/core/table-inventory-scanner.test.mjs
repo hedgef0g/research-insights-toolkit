@@ -60,4 +60,36 @@ describe("scanWorksheetForTables", () => {
     // Total band width is 4 columns (cols 0-3).
     assert.strictEqual(item.columnCount, 4);
   });
+
+  it("quarter-like labels alone are not treated as numeric evidence", () => {
+    const values = [
+      ["Wave", "2025Q4", "2026Q1"],
+      ["Segment", "2025Q4", "2026Q1"],
+      ["Note", "Q4 2025", "Q1 2026"],
+    ];
+
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 0, `expected 0 items, got ${items.length}`);
+  });
+
+  it("banner-heavy tables with quarter-like headers still produce one inventory item", () => {
+    const values = [
+      ["Usage table", null, null, null],
+      ["", "Total", "Male", "Female"],
+      ["", "2025Q4", "2025Q4", "2025Q4"],
+      ["Agree", "44%", "41%", "39%"],
+      ["Disagree", "56%", "59%", "61%"],
+      ["BASE", "5605", "1320", "3083"],
+    ];
+
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1, `expected 1 item, got ${items.length}`);
+
+    const item = items[0];
+    assert.strictEqual(item.title, "Usage table");
+    assert.strictEqual(item.titleSource, "firstRowOfBand");
+    assert.strictEqual(item.labelSplitConfidence, "confident");
+    assert.strictEqual(item.columnCount, 4);
+    assert.strictEqual(item.isLikelyTable, true);
+  });
 });
