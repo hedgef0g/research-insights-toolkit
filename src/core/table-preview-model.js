@@ -178,7 +178,7 @@ function buildBannerPreview(bannerContext, settings) {
     };
   }
 
-  const detected = detectBannerStructure(bannerContext, settings);
+  const detected = detectBannerStructure(adaptBannerContextForDetection(bannerContext), settings);
 
   return {
     isEnabled,
@@ -190,6 +190,37 @@ function buildBannerPreview(bannerContext, settings) {
     hasWaveGroups: detected.hasWaveGroups || false,
     recommendedComparisonMode: detected.recommendedComparisonMode || null,
     messages: detected.messages || [],
+  };
+}
+
+// Accept both normalizer-style banner context ({ scanRows, columnCount })
+// and detector-style banner context ({ selectedColumnCount, lowerBannerRow, upperScanRows }).
+function adaptBannerContextForDetection(bannerContext) {
+  if (!bannerContext) {
+    return null;
+  }
+
+  if (bannerContext.selectedColumnCount !== undefined) {
+    return bannerContext;
+  }
+
+  const scanRows = Array.isArray(bannerContext.scanRows) ? bannerContext.scanRows : [];
+  const selectedColumnCount = bannerContext.columnCount || 0;
+
+  if (!selectedColumnCount || scanRows.length === 0) {
+    return {
+      selectedColumnCount,
+      lowerBannerRow: [],
+      upperScanRows: [],
+      messages: bannerContext.messages || [],
+    };
+  }
+
+  return {
+    selectedColumnCount,
+    lowerBannerRow: scanRows[scanRows.length - 1],
+    upperScanRows: scanRows.slice(0, -1).reverse(),
+    messages: bannerContext.messages || [],
   };
 }
 
@@ -462,7 +493,9 @@ function checkSuspiciousAll100Rows(values, rowDiagnostics) {
     for (const v of rawRow) {
       if (v === null || v === undefined || v === "") continue;
       const s = String(v).trim();
-      const numStr = s.endsWith("%") ? s.slice(0, -1).trim().replace(",", ".") : s.replace(",", ".");
+      const numStr = s.endsWith("%")
+        ? s.slice(0, -1).trim().replace(",", ".")
+        : s.replace(",", ".");
       if (Number.isNaN(Number(numStr))) continue;
       nonEmptyCount++;
       if (cellLooksLike100Percent(v)) all100Count++;
