@@ -91,6 +91,10 @@ const PLACEHOLDER_LABEL_PATTERNS = [
   /^черновик(?:[\s\-_]|$)/i,
 ];
 
+const PREVIEW_NUMERIC_CELL_RE = /^[+-]?(\d+([.,]\d*)?|\d*[.,]\d+)%?$/;
+const PREVIEW_NUMERIC_WITH_MARKER_SUFFIX_RE =
+  /^([+-]?(\d+([.,]\d*)?|\d*[.,]\d+)%?)(\s+[\p{L}↑↓]+)+$/u;
+
 // ─── Main export ───────────────────────────────────────────────────────────
 
 /**
@@ -121,7 +125,7 @@ export function buildTablePreviewModel(input) {
   const rawRowDiagnostics = detectionResult?.rowDiagnostics || [];
   const rawBlocks = buildCalculationBlocks(detectionResult);
   const rowDiagnostics = buildPreviewRowDiagnostics(rawRowDiagnostics, safeLeft);
-  const calculationBlocks = buildPreviewBlocks(rawBlocks, rawRowDiagnostics);
+  const calculationBlocks = buildPreviewBlocks(rawBlocks, rawRowDiagnostics, safeValues);
 
   // Data quality analysis.
   const dataQualityIssues = [
@@ -284,10 +288,123 @@ function inferRowTypeConfidence(rowType) {
 
 // ─── Calculation blocks ────────────────────────────────────────────────────
 
-function buildPreviewBlocks(rawBlocks, rowDiagnostics) {
-  const blocks = (rawBlocks || []).map(normalizeBlockShape);
+function buildPreviewBlocks(rawBlocks, rowDiagnostics, values) {
+  const blocks = (rawBlocks || [])
+    .map(normalizeBlockShape)
+    .filter((block) => blockHasPreviewEvidence(block, rowDiagnostics, values));
   enrichNpsBlocksWithNeutralRow(blocks);
   return blocks;
+}
+
+function blockHasPreviewEvidence(block, rowDiagnostics, values) {
+  const valueRowIndexes = Array.isArray(block.valueRowIndexes) ? block.valueRowIndexes : [];
+
+  switch (block.metricType) {
+    case "proportion":
+      if (valueRowIndexes.length === 0) return false;
+      if (!valueRowIndexes.some((rowIndex) => rowHasNumericEvidence(values, rowIndex))) return false;
+      if (!rowHasNumericEvidence(values, block.baseRowIndex)) return false;
+      if (isFallbackOnlyUnknownBlock(block, rowDiagnostics) && !hasNonHeaderLikeValueLabel(block, rowDiagnostics)) {
+        return false;
+      }
+      return true;
+
+    case "mean":
+      return (
+        rowHasNumericEvidence(values, block.valueRowIndex) &&
+        rowHasNumericEvidence(values, block.baseRowIndex)
+      );
+
+    case "npsStructure":
+      return (
+        rowHasNumericEvidence(values, block.valueRowIndex) &&
+        rowHasNumericEvidence(values, block.promotersRowIndex) &&
+        rowHasNumericEvidence(values, block.detractorsRowIndex) &&
+        rowHasNumericEvidence(values, block.baseRowIndex)
+      );
+
+    case "npsSpread":
+      return (
+        rowHasNumericEvidence(values, block.valueRowIndex) &&
+        (rowHasNumericEvidence(values, block.sdRowIndex) ||
+          rowHasNumericEvidence(values, block.varianceRowIndex)) &&
+        rowHasNumericEvidence(values, block.baseRowIndex)
+      );
+
+    default:
+      return false;
+  }
+}
+
+function rowHasNumericEvidence(values, rowIndex) {
+  if (rowIndex === null || rowIndex === undefined) return false;
+  const row = Array.isArray(values) ? values[rowIndex] : null;
+  if (!Array.isArray(row)) return false;
+  return row.some((cell) => isPreviewNumericCellValue(cell));
+}
+
+function isFallbackOnlyUnknownBlock(block, rowDiagnostics) {
+  if (block.metricType !== "proportion") return false;
+
+  const rowIndexes = [...(block.valueRowIndexes || []), block.baseRowIndex].filter(
+    (rowIndex) => rowIndex !== null && rowIndex !== undefined
+  );
+
+  if (rowIndexes.length < 2) return false;
+
+  return rowIndexes.every((rowIndex) => {
+    const rowType = rowDiagnostics[rowIndex]?.rowType;
+    return rowType === "unknownText" || rowType === "empty";
+  });
+}
+
+function hasNonHeaderLikeValueLabel(block, rowDiagnostics) {
+  return (block.valueRowIndexes || []).some((rowIndex) => {
+    const row = rowDiagnostics[rowIndex];
+    const label = row?.primaryLabel || row?.label || "";
+    return !!label && !looksLikePreviewHeaderLabel(label);
+  });
+}
+
+function looksLikePreviewHeaderLabel(label) {
+  const text = String(label || "").trim();
+  if (!text) return true;
+
+  const normalized = normalizeLabelText(text);
+  if (!normalized) return true;
+
+  if (
+    normalized.includes("wave") ||
+    normalized.includes("quarter") ||
+    normalized.includes("period") ||
+    normalized.includes("volna") ||
+    normalized.includes("kvartal") ||
+    normalized.includes("period")
+  ) {
+    return true;
+  }
+
+  return /^(\d{4}q[1-4]|q[1-4]\d{4})$/i.test(normalized);
+}
+
+function isPreviewNumericCellValue(cell) {
+  if (typeof cell === "number") {
+    return !Number.isNaN(cell);
+  }
+
+  if (typeof cell !== "string") {
+    return false;
+  }
+
+  const trimmed = cell.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  return (
+    PREVIEW_NUMERIC_CELL_RE.test(trimmed) ||
+    PREVIEW_NUMERIC_WITH_MARKER_SUFFIX_RE.test(trimmed)
+  );
 }
 
 /**
