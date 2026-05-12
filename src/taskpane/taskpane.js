@@ -970,26 +970,81 @@ async function clearSignificanceFromSelection() {
   await Excel.run(async (context) => {
     const selectedRange = context.workbook.getSelectedRange();
 
-    selectedRange.load(["values", "numberFormat"]);
+    // Read-only load: needed to decide whether to operate on the whole
+    // selection (strict numeric case) or only on the detected data body
+    // (forgiving full-table case). No writes happen before the target is known.
+    selectedRange.load(["values", "text"]);
 
     await context.sync();
 
     const selectedValues = selectedRange.values;
-    const selectedNumberFormats = selectedRange.numberFormat;
+    const selectedText = selectedRange.text;
+
+    if (
+      !selectedValues ||
+      selectedValues.length < 1 ||
+      !selectedValues[0] ||
+      selectedValues[0].length < 1
+    ) {
+      setStatusMessage("Нет данных в выделенном диапазоне.");
+      return;
+    }
+
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
+    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
+
+    // State 3: broad/full-table-like selection but decomposition failed.
+    // Block and return without mutating anything.
+    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+      const codes =
+        normalized.blockingReasons && normalized.blockingReasons.length > 0
+          ? ` [${normalized.blockingReasons.join(", ")}]`
+          : "";
+      setStatusMessage(`${normalized.blockingMessage}${codes}`);
+      return;
+    }
+
+    // Resolve the clear target:
+    //   - State 1 (pass-through): the original selection is numeric-only.
+    //   - State 2 (normalized):   only the detected data body subrange.
+    let clearTargetRange;
+
+    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
+      const bodyRowCount = normalized.valuesForCalculation.length;
+      const bodyColCount = normalized.valuesForCalculation[0].length;
+
+      if (bodyRowCount < 1 || bodyColCount < 1) {
+        setStatusMessage("Нет данных в выделенном диапазоне.");
+        return;
+      }
+
+      clearTargetRange = selectedRange
+        .getCell(normalized.dataRowOffset, normalized.dataColOffset)
+        .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
+    } else {
+      clearTargetRange = selectedRange;
+    }
+
+    clearTargetRange.load(["values", "numberFormat"]);
+
+    await context.sync();
+
+    const targetValues = clearTargetRange.values;
+    const targetNumberFormats = clearTargetRange.numberFormat;
 
     const nextValues = [];
     const nextNumberFormats = [];
 
-    for (let rowIndex = 0; rowIndex < selectedValues.length; rowIndex++) {
+    for (let rowIndex = 0; rowIndex < targetValues.length; rowIndex++) {
       const valueRow = [];
       const formatRow = [];
 
-      for (let columnIndex = 0; columnIndex < selectedValues[rowIndex].length; columnIndex++) {
-        const rawValue = selectedValues[rowIndex][columnIndex];
+      for (let columnIndex = 0; columnIndex < targetValues[rowIndex].length; columnIndex++) {
+        const rawValue = targetValues[rowIndex][columnIndex];
 
         if (typeof rawValue === "number") {
           valueRow.push(rawValue);
-          formatRow.push(selectedNumberFormats[rowIndex][columnIndex]);
+          formatRow.push(targetNumberFormats[rowIndex][columnIndex]);
           continue;
         }
 
@@ -1009,11 +1064,11 @@ async function clearSignificanceFromSelection() {
       nextNumberFormats.push(formatRow);
     }
 
-    selectedRange.numberFormat = nextNumberFormats;
-    selectedRange.values = nextValues;
+    clearTargetRange.numberFormat = nextNumberFormats;
+    clearTargetRange.values = nextValues;
 
-    selectedRange.format.font.bold = false;
-    selectedRange.format.fill.clear();
+    clearTargetRange.format.font.bold = false;
+    clearTargetRange.format.fill.clear();
 
     await context.sync();
 
