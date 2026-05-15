@@ -344,6 +344,154 @@ describe("buildTablePreviewModel - normalized full-table regression coverage", (
   });
 });
 
+describe("buildTablePreviewModel - explicit base requirement", () => {
+  it("does not report a complete proportion block when base is missing", () => {
+    const model = makeCustomPreviewModel(
+      [
+        [0.21, 0.45, 0.33],
+        [0.15, 0.28, 0.57],
+      ],
+      ["Agree", "Disagree"]
+    );
+
+    assert.deepStrictEqual(model.calculationBlocks, []);
+    assert.strictEqual(model.summary.detectedBlocks, 0);
+  });
+
+  it("still reports a proportion block when an explicit base is present", () => {
+    const model = makeSimplePreviewModel(["Agree", "Disagree", "BASE"]);
+    const proportionBlock = findBlock(model, "proportion");
+
+    assert.ok(proportionBlock, "expected a proportion block");
+    assert.deepStrictEqual(proportionBlock.valueRowIndexes, [0, 1]);
+    assert.strictEqual(proportionBlock.baseRowIndex, 2);
+  });
+
+  it("does not report a mean block when variance is present but base is missing", () => {
+    const model = makeCustomPreviewModel(
+      [
+        [29.4, 31.5],
+        [103.6, 132.6],
+      ],
+      ["Mean", "Variance"]
+    );
+
+    assert.deepStrictEqual(model.calculationBlocks, []);
+    assert.strictEqual(model.summary.detectedBlocks, 0);
+  });
+
+  it("still reports a mean block when variance and explicit base are present", () => {
+    const model = makeCustomPreviewModel(
+      [
+        [29.4, 31.5],
+        [103.6, 132.6],
+        [5605, 1320],
+      ],
+      ["Mean", "Variance", "BASE"]
+    );
+    const meanBlock = findBlock(model, "mean");
+
+    assert.ok(meanBlock, "expected a mean block");
+    assert.strictEqual(meanBlock.baseRowIndex, 2);
+    assert.strictEqual(meanBlock.varianceRowIndex, 1);
+  });
+
+  it("does not report an extended NPS block when base is missing", () => {
+    const model = makeCustomPreviewModel(
+      [
+        [0.01, 0.02],
+        [0.02, 0.03],
+        [0.03, 0.04],
+        [0.04, 0.05],
+        [0.05, 0.06],
+        [0.06, 0.07],
+        [0.07, 0.08],
+        [0.08, 0.09],
+        [0.09, 0.1],
+        [0.1, 0.11],
+        [0.06, 0.09],
+        [0.22, 0.26],
+        [0.72, 0.65],
+        [0.06, 0.09],
+        [0.22, 0.26],
+        [0.72, 0.65],
+        [0.66, 0.56],
+      ],
+      [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "Bottom-3",
+        "Mid-4",
+        "Top-3",
+        "Detractors",
+        "Neutral",
+        "Promoters",
+        "NPS",
+      ]
+    );
+
+    assert.deepStrictEqual(model.calculationBlocks, []);
+    assert.strictEqual(model.summary.detectedBlocks, 0);
+  });
+
+  it("still reports an extended NPS block when an explicit base is present", () => {
+    const model = makeCustomPreviewModel(
+      [
+        [0.01, 0.02],
+        [0.02, 0.03],
+        [0.03, 0.04],
+        [0.04, 0.05],
+        [0.05, 0.06],
+        [0.06, 0.07],
+        [0.07, 0.08],
+        [0.08, 0.09],
+        [0.09, 0.1],
+        [0.1, 0.11],
+        [0.06, 0.09],
+        [0.22, 0.26],
+        [0.72, 0.65],
+        [0.06, 0.09],
+        [0.22, 0.26],
+        [0.72, 0.65],
+        [0.66, 0.56],
+        [1000, 800],
+      ],
+      [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "Bottom-3",
+        "Mid-4",
+        "Top-3",
+        "Detractors",
+        "Neutral",
+        "Promoters",
+        "NPS",
+        "BASE",
+      ]
+    );
+    const npsBlock = findBlock(model, "npsStructure");
+
+    assert.ok(npsBlock, "expected an NPS block");
+    assert.strictEqual(npsBlock.baseRowIndex, 17);
+  });
+});
+
 describe("buildTablePreviewModel - header-only block suppression", () => {
   it("does not report blocks for banner-only descriptor selections", () => {
     const model = makeCustomPreviewModel(

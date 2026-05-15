@@ -546,15 +546,6 @@ export function buildCalculationBlocks(detectionResult) {
     rowIndex++;
   }
 
-  // Fallback
-  if (calculationBlocks.length === 0 && rowDiagnostics.length >= 2) {
-    calculationBlocks.push({
-      metricType: "proportion",
-      valueRowIndexes: Array.from({ length: rowDiagnostics.length - 1 }, (_, index) => index),
-      baseRowIndex: rowDiagnostics.length - 1,
-    });
-  }
-
   return calculationBlocks;
 }
 
