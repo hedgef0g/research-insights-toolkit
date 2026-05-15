@@ -213,6 +213,16 @@ function isNormalizationNeeded(values, rowCount, colCount) {
     }
   }
 
+  // Extended NPS pattern: col[0] is a scale-label column (numeric values 0–10
+  // mixed with NPS support rows such as Detractors, Promoters, NPS, Base).
+  // Left-column text fraction falls below GATE_LEFT_COL_TEXT_FRACTION because
+  // the scale values "1"–"10" are numeric-looking, but the column still needs
+  // to be separated from the data. Checked over the full grid — banner rows in
+  // col[0] contain group names that match no NPS pattern and are silently skipped.
+  if (isExtendedNpsScaleLabelColumn(values, 0, rowCount - 1, colCount)) {
+    return true;
+  }
+
   // Top-row pattern: row[0] is text-heavy, rows[1..N] are numeric-heavy.
   // Requires row[0] to fill at least half the columns (wide banner/header row).
   const topRowNonEmpty = countNonEmpty(values, 0, 0, 0, colCount - 1);

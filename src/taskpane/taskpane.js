@@ -1255,10 +1255,53 @@ async function runCheckTable() {
       // State 2: broad selection successfully decomposed — use normalized partitions.
       // Adapt normalized banner context through the same helper Run uses, so banner
       // detection consumes the shape detectBannerStructure expects.
+
+      let leftLabelValues = normalized.leftLabelValues;
+
+      // Build a data body range once, offset to the normalizer-decomposed data
+      // area. Used by both label and banner fallbacks below.
+      const dataBodyRange = selectedRange
+        .getCell(normalized.dataRowOffset, normalized.dataColOffset)
+        .getResizedRange(
+          normalized.valuesForCalculation.length - 1,
+          normalized.valuesForCalculation[0].length - 1
+        );
+
+      // Fallback: normalization did not extract label columns (selection excluded
+      // the label column). Load labels from the worksheet using the same helper
+      // Run uses, applied to the data body range so row alignment matches the
+      // normalized values.
+      if (!Array.isArray(leftLabelValues) || leftLabelValues.length === 0) {
+        leftLabelValues = await loadLabelValuesForSelectedRange(
+          context,
+          dataBodyRange,
+          calculationSettings
+        );
+      }
+
+      // Banner context: prefer banner rows detected inside the selection (normalizer
+      // already slices them to data columns only). When none were found — the banner
+      // is above the selection in the sheet — fall back to loading from the
+      // worksheet using the data body range, the same path State 1 uses. The data
+      // body range excludes label columns via normalized.dataColOffset so
+      // selectedColumnCount is automatically aligned to valuesForCalculation.
+      let bannerContext = buildRunBannerContext(normalized.bannerContext);
+      if (
+        bannerContext === null &&
+        calculationSettings &&
+        calculationSettings.respectBannerStructure
+      ) {
+        bannerContext = await loadBannerContextForSelectedRange(
+          context,
+          dataBodyRange,
+          calculationSettings
+        );
+      }
+
       modelInput = {
         values: normalized.valuesForCalculation,
-        leftLabelValues: normalized.leftLabelValues,
-        bannerContext: buildRunBannerContext(normalized.bannerContext),
+        leftLabelValues,
+        bannerContext,
         settings: calculationSettings,
       };
 
@@ -1275,25 +1318,76 @@ async function runCheckTable() {
       if (parts.length > 0) normalizationLines.push(`Отделено: ${parts.join(", ")}.`);
     } else {
       // State 1: numeric-only selection — existing flow unchanged.
-      const leftLabelValues = await loadLabelValuesForSelectedRange(
+      let leftLabelValues = await loadLabelValuesForSelectedRange(
         context,
         selectedRange,
         calculationSettings
       );
 
+      let valuesForModel = cleanedValues;
+      let embeddedLabelCols = 0;
+
+      // Fallback: the selection itself contains the label column(s) (labels are
+      // inside, not outside). This happens when the user selects [label_cols | data]
+      // without banner rows and the normalizer treats it as pass-through — e.g. an
+      // extended NPS table whose scale labels are mostly numeric, or a two-label-
+      // column table with a unit/type helper column like "%".
+      // Scans up to LABEL_SCAN_COLUMNS_LEFT initial columns for genuine text (at
+      // least one non-numeric-looking, non-empty cell). Stops at the first column
+      // with no such content so a real data column is never included as labels.
+      if (
+        (!Array.isArray(leftLabelValues) || leftLabelValues.length === 0) &&
+        Array.isArray(cleanedValues[0]) &&
+        cleanedValues[0].length >= 2
+      ) {
+        const maxEmbeddedCols = Math.min(LABEL_SCAN_COLUMNS_LEFT, cleanedValues[0].length - 1);
+
+        for (let col = 0; col < maxEmbeddedCols; col++) {
+          const colHasGenuineText = cleanedValues.some((row) => {
+            const cell = row && row[col];
+            if (cell === "" || cell === null || cell === undefined) return false;
+            if (typeof cell === "number") return false;
+            const s = String(cell).trim().replace("%", "").replace(",", ".");
+            return s !== "" && Number.isNaN(Number(s));
+          });
+          if (colHasGenuineText) {
+            embeddedLabelCols++;
+          } else {
+            break;
+          }
+        }
+
+        if (embeddedLabelCols > 0) {
+          leftLabelValues = cleanedValues.map((row) => row.slice(0, embeddedLabelCols));
+          valuesForModel = cleanedValues.map((row) => row.slice(embeddedLabelCols));
+        }
+      }
+
       // When banner-aware settings are on, mirror Run by loading banner context
       // from the rows above the selected range. Read-only: no Excel mutation.
+      // When embedded label columns were extracted from the selection, align the
+      // banner range to the data columns only — otherwise selectedColumnCount
+      // includes the label column(s) and detectBannerStructure misaligns groups.
       let bannerContext = null;
       if (calculationSettings && calculationSettings.respectBannerStructure) {
+        const bannerRangeForContext =
+          embeddedLabelCols > 0
+            ? selectedRange
+                .getCell(0, embeddedLabelCols)
+                .getResizedRange(
+                  selectedRange.rowCount - 1,
+                  selectedRange.columnCount - embeddedLabelCols - 1
+                )
+            : selectedRange;
         bannerContext = await loadBannerContextForSelectedRange(
           context,
-          selectedRange,
+          bannerRangeForContext,
           calculationSettings
         );
       }
 
       modelInput = {
-        values: cleanedValues,
+        values: valuesForModel,
         leftLabelValues,
         bannerContext,
         settings: calculationSettings,
@@ -2100,18 +2194,27 @@ async function loadLabelsImmediatelyLeftOfSelection(context, selectedRange) {
  * while the user selects data columns far to the right.
  */
 async function loadLabelsFromLeftSideOfSheet(context, selectedRange) {
-  selectedRange.load(["rowIndex", "rowCount"]);
+  selectedRange.load(["rowIndex", "rowCount", "columnIndex"]);
 
   await context.sync();
 
   const selectedStartRowIndex = selectedRange.rowIndex;
   const selectedRowCount = selectedRange.rowCount;
+  const selectedStartColumnIndex = selectedRange.columnIndex;
+
+  // Cannot read labels to the left when range starts at column 0.
+  if (selectedStartColumnIndex === 0) {
+    return [];
+  }
+
+  // Cap at the range's column position so we never read into the data columns.
+  const labelColumnCount = Math.min(LABEL_SCAN_COLUMNS_LEFT, selectedStartColumnIndex);
 
   const leftLabelRange = selectedRange.worksheet.getRangeByIndexes(
     selectedStartRowIndex,
     0,
     selectedRowCount,
-    LABEL_SCAN_COLUMNS_LEFT
+    labelColumnCount
   );
 
   leftLabelRange.load("values");
