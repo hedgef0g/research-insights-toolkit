@@ -235,8 +235,15 @@ function buildPreviewRowDiagnostics(rawDiagnostics, leftLabelValues) {
     const leftRow = leftLabelValues[diag.rowIndex] || [];
     const labelParts = extractLabelPartsFromRow(leftRow);
 
-    // Rightmost part is closest to the data column and treated as the primary label.
-    const primaryLabel = labelParts.length > 0 ? labelParts[labelParts.length - 1] : "";
+    // Rightmost meaningful part (non-symbol-only) is closest to the data column
+    // and treated as the primary label. Symbol-only trailing parts like "%" are
+    // skipped so a unit column never shadows the real descriptive label.
+    // Falls back to the actual rightmost part when all parts are symbol-only.
+    const primaryLabel =
+      labelParts.length > 0
+        ? ([...labelParts].reverse().find((p) => !isEmptyOrSymbolOnlyLabel(p)) ||
+            labelParts[labelParts.length - 1])
+        : "";
     const secondaryLabel = labelParts.length > 1 ? labelParts[labelParts.length - 2] : null;
     // Future: combinedLabel may join hierarchical parts (e.g. "Gender / Male").
     const combinedLabel = labelParts.length > 1 ? labelParts.join(" / ") : primaryLabel;
