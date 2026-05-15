@@ -542,6 +542,79 @@ function roundGuardrailRatio(value) {
 }
 
 /**
+ * Returns true when every non-empty cell in `col` of `cleanedValues` is a
+ * unit/indicator value.  Accepted forms:
+ *   - numeric 0            (Excel .values for a 0%-formatted cell)
+ *   - string "0" / "0.0"  (removeSignificanceMarkersFromText converts numbers
+ *                           to strings via String(), so numeric 0 arrives as "0")
+ *   - string "%"           (literal percent indicator text)
+ *   - string "0%" / "0.0%" (explicit zero-percent string)
+ * Any other value returns false so real data columns are not misclassified.
+ */
+function isEmbeddedUnitColumn(cleanedValues, col, rowCount) {
+  let hasContent = false;
+  for (let r = 0; r < rowCount; r++) {
+    const row = cleanedValues[r] || [];
+    const cell = row[col];
+    if (cell === "" || cell === null || cell === undefined) continue;
+    hasContent = true;
+    if (typeof cell === "number" && cell === 0) continue;
+    if (typeof cell === "string") {
+      const t = cell.trim();
+      if (t === "%" || /^0(\.0+)?%$/.test(t) || /^0(\.0+)?$/.test(t)) continue;
+    }
+    return false;
+  }
+  return hasContent;
+}
+
+/**
+ * Scans the leftmost columns of cleanedValues for embedded label/unit columns.
+ *
+ * Col 0 must have at least one genuine-text cell (non-numeric, non-empty after
+ * stripping %).  Each subsequent column is accepted only if it is a uniform
+ * unit/indicator column (isEmbeddedUnitColumn).  Stops at the first column
+ * that fails its test.  Always leaves at least one column as data.
+ *
+ * Returns 0 for strict numeric selections so the existing Run/Clear flow is
+ * unchanged.
+ */
+function detectEmbeddedLabelColumns(cleanedValues) {
+  if (!Array.isArray(cleanedValues) || !Array.isArray(cleanedValues[0])) return 0;
+  const colCount = cleanedValues[0].length;
+  if (colCount < 2) return 0;
+
+  const maxCols = Math.min(LABEL_SCAN_COLUMNS_LEFT, colCount - 1);
+  const rowCount = cleanedValues.length;
+  let embeddedLabelCols = 0;
+
+  for (let col = 0; col < maxCols; col++) {
+    if (col === 0) {
+      const hasGenuineText = cleanedValues.some((row) => {
+        const cell = row && row[col];
+        if (cell === "" || cell === null || cell === undefined) return false;
+        if (typeof cell === "number") return false;
+        const s = String(cell).trim().replace("%", "").replace(",", ".");
+        return s !== "" && Number.isNaN(Number(s));
+      });
+      if (hasGenuineText) {
+        embeddedLabelCols++;
+      } else {
+        break;
+      }
+    } else {
+      if (isEmbeddedUnitColumn(cleanedValues, col, rowCount)) {
+        embeddedLabelCols++;
+      } else {
+        break;
+      }
+    }
+  }
+
+  return embeddedLabelCols;
+}
+
+/**
  * Reads selected Excel range, detects metric blocks, calculates pairwise significance,
  * and writes significance letters only into actual value rows.
  *
@@ -676,11 +749,26 @@ async function runSignificanceFromSelection() {
       );
       runModel.selectedRangeGuardrailWarnings = [];
     } else {
-      runModel.leftLabelValues = await loadLabelValuesForSelectedRange(
-        context,
-        selectedRange,
-        calculationSettings
-      ); // Labels located 1-2 columns to the left of the selected data.
+      // Check for embedded label/unit columns before loading external labels.
+      const embeddedLabelCols = detectEmbeddedLabelColumns(cleanedValues);
+
+      if (embeddedLabelCols > 0) {
+        runModel.leftLabelValues = cleanedValues.map((row) => row.slice(0, embeddedLabelCols));
+        runModel.values = cleanedValues.map((row) => row.slice(embeddedLabelCols));
+        runModel.text = selectedText.map((row) => row.slice(embeddedLabelCols));
+        runModel.writeTargetRange = selectedRange
+          .getCell(0, embeddedLabelCols)
+          .getResizedRange(
+            selectedRange.rowCount - 1,
+            selectedRange.columnCount - embeddedLabelCols - 1
+          );
+      } else {
+        runModel.leftLabelValues = await loadLabelValuesForSelectedRange(
+          context,
+          selectedRange,
+          calculationSettings
+        ); // Labels located 1-2 columns to the left of the selected data.
+      }
     }
 
     if (!runModel.values || runModel.values.length < 2 || runModel.values[0].length < 2) {
@@ -1317,50 +1405,21 @@ async function runCheckTable() {
         parts.push(`колонок меток: ${normalized.labelColumns.length}`);
       if (parts.length > 0) normalizationLines.push(`Отделено: ${parts.join(", ")}.`);
     } else {
-      // State 1: numeric-only selection — existing flow unchanged.
-      let leftLabelValues = await loadLabelValuesForSelectedRange(
-        context,
-        selectedRange,
-        calculationSettings
-      );
-
+      // State 1: numeric-only selection.
+      let leftLabelValues;
       let valuesForModel = cleanedValues;
-      let embeddedLabelCols = 0;
 
-      // Fallback: the selection itself contains the label column(s) (labels are
-      // inside, not outside). This happens when the user selects [label_cols | data]
-      // without banner rows and the normalizer treats it as pass-through — e.g. an
-      // extended NPS table whose scale labels are mostly numeric, or a two-label-
-      // column table with a unit/type helper column like "%".
-      // Scans up to LABEL_SCAN_COLUMNS_LEFT initial columns for genuine text (at
-      // least one non-numeric-looking, non-empty cell). Stops at the first column
-      // with no such content so a real data column is never included as labels.
-      if (
-        (!Array.isArray(leftLabelValues) || leftLabelValues.length === 0) &&
-        Array.isArray(cleanedValues[0]) &&
-        cleanedValues[0].length >= 2
-      ) {
-        const maxEmbeddedCols = Math.min(LABEL_SCAN_COLUMNS_LEFT, cleanedValues[0].length - 1);
-
-        for (let col = 0; col < maxEmbeddedCols; col++) {
-          const colHasGenuineText = cleanedValues.some((row) => {
-            const cell = row && row[col];
-            if (cell === "" || cell === null || cell === undefined) return false;
-            if (typeof cell === "number") return false;
-            const s = String(cell).trim().replace("%", "").replace(",", ".");
-            return s !== "" && Number.isNaN(Number(s));
-          });
-          if (colHasGenuineText) {
-            embeddedLabelCols++;
-          } else {
-            break;
-          }
-        }
-
-        if (embeddedLabelCols > 0) {
-          leftLabelValues = cleanedValues.map((row) => row.slice(0, embeddedLabelCols));
-          valuesForModel = cleanedValues.map((row) => row.slice(embeddedLabelCols));
-        }
+      // Mirror Run: compute embedded label columns synchronously first.
+      const embeddedLabelCols = detectEmbeddedLabelColumns(cleanedValues);
+      if (embeddedLabelCols > 0) {
+        leftLabelValues = cleanedValues.map((row) => row.slice(0, embeddedLabelCols));
+        valuesForModel = cleanedValues.map((row) => row.slice(embeddedLabelCols));
+      } else {
+        leftLabelValues = await loadLabelValuesForSelectedRange(
+          context,
+          selectedRange,
+          calculationSettings
+        );
       }
 
       // When banner-aware settings are on, mirror Run by loading banner context

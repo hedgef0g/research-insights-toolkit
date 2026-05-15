@@ -409,6 +409,46 @@ function findLastDataBodyRow(values, startRow, endRow, dataColStart, dataColEnd)
 // ─── Label column detection ───────────────────────────────────────────────────
 
 /**
+ * Returns true when every non-empty cell in col[1] of the body rows shares the
+ * same trimmed text value AND that value is a unit-indicator pattern:
+ *   "%"             — pure percent sign (text cell, no numeric value)
+ *   "0%", "0.0%"   — zero-formatted percentage (value=0, format="%")
+ *   "0",  "0.0"    — zero decimal (value=0, no percent format)
+ *
+ * A uniform unit column adjacent to an already-identified label column is
+ * almost certainly a unit placeholder, not real data.  Non-zero values
+ * (e.g. "5%") are treated as real data even when uniform.
+ *
+ * colCount must be ≥ 3 before calling (caller responsibility).
+ */
+function isUniformUnitColumn(values, bodyStartRow, bodyEndRow) {
+  let seenValue;
+  let hasNonEmpty = false;
+
+  for (let r = bodyStartRow; r <= bodyEndRow; r++) {
+    const row = values[r] || [];
+    const cell = row[1];
+    if (isCellEmpty(cell)) continue;
+    const strVal = String(cell).trim();
+    if (!strVal) continue;
+    hasNonEmpty = true;
+    if (seenValue === undefined) {
+      seenValue = strVal;
+    } else if (strVal !== seenValue) {
+      return false;
+    }
+  }
+
+  if (!hasNonEmpty || seenValue === undefined) return false;
+
+  return (
+    seenValue === "%" ||
+    /^0(\.0+)?%$/.test(seenValue) ||
+    /^0(\.0+)?$/.test(seenValue)
+  );
+}
+
+/**
  * Detects up to 2 row-label columns at the left edge of the body rows.
  *
  * Rules (applied over body rows only):
@@ -417,6 +457,7 @@ function findLastDataBodyRow(values, startRow, endRow, dataColStart, dataColEnd)
  *   col[0] text fraction ≥ 0.6          → label column
  *     col[1] text fraction ≥ 0.6        → second label column
  *     col[1] text fraction < 0.6        → only one label column
+ *       col[1] is uniform unit value    → second label column (unit column)
  *
  * Never consumes a column with < 50% text as a label column.
  */
@@ -429,6 +470,9 @@ function detectLabelColumns(values, bodyStartRow, bodyEndRow, colCount) {
 
   if (col0Frac < LABEL_NUMERIC_THRESHOLD) {
     if (isExtendedNpsScaleLabelColumn(values, bodyStartRow, bodyEndRow, colCount)) {
+      if (colCount >= 3 && isUniformUnitColumn(values, bodyStartRow, bodyEndRow)) {
+        return { labelColCount: 2, labelSplitConfidence: "confident" };
+      }
       return { labelColCount: 1, labelSplitConfidence: "confident" };
     }
     return { labelColCount: 0, labelSplitConfidence: "confident" };
@@ -436,6 +480,9 @@ function detectLabelColumns(values, bodyStartRow, bodyEndRow, colCount) {
 
   if (col0Frac < LABEL_TEXT_FRACTION_THRESHOLD) {
     if (isExtendedNpsScaleLabelColumn(values, bodyStartRow, bodyEndRow, colCount)) {
+      if (colCount >= 3 && isUniformUnitColumn(values, bodyStartRow, bodyEndRow)) {
+        return { labelColCount: 2, labelSplitConfidence: "confident" };
+      }
       return { labelColCount: 1, labelSplitConfidence: "confident" };
     }
     // Ambiguous: col[0] is neither clearly text nor clearly numeric.
@@ -449,6 +496,10 @@ function detectLabelColumns(values, bodyStartRow, bodyEndRow, colCount) {
 
   const col1Frac = computeTextFraction(values, bodyStartRow, bodyEndRow, 1, 1);
   if (col1Frac >= LABEL_TEXT_FRACTION_THRESHOLD) {
+    return { labelColCount: 2, labelSplitConfidence: "confident" };
+  }
+
+  if (isUniformUnitColumn(values, bodyStartRow, bodyEndRow)) {
     return { labelColCount: 2, labelSplitConfidence: "confident" };
   }
 

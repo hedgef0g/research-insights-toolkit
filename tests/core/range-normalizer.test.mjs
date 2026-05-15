@@ -737,4 +737,154 @@ describe("normalizeSelectedRange", () => {
       `expected BODY_APPEARS_MULTI_TABLE in blockingReasons, got: ${JSON.stringify(result.blockingReasons)}`
     );
   });
+
+  // ── Issue #118: embedded % unit column handling ───────────────────────────────
+
+  it("[label | 0%-unit-col | data] strips both label and unit column (standard table)", () => {
+    // Simulates a selection where the '%' unit column stores value=0 with a
+    // standard "0%" number format so Excel's .text is "0%".
+    // isNumericCell("0%") = true, so without the fix the normalizer would only
+    // strip col[0] (the label) and leave col[1] ("0%") as the first data column.
+    const rawText = [
+      ["Metric A", "0%", "21%", "35%", "42%"],
+      ["Metric B", "0%", "15%", "22%", "33%"],
+      ["Base",     "0%", "100", "200", "150"],
+    ];
+    // cleanedValues mirrors how Run strips markers: body rows have col[0] zeroed
+    // out because the label cell was a pure-text label stripped by marker removal.
+    // The "0%" column stores numeric 0 in .values — after removeSignificanceMarkersFromMatrix
+    // numeric 0 becomes string "0", so we simulate that here.
+    const cleanedValues = [
+      ["Metric A", "0", "0.21", "0.35", "0.42"],
+      ["Metric B", "0", "0.15", "0.22", "0.33"],
+      ["Base",     "0", "100",  "200",  "150"],
+    ];
+
+    const result = normalizeSelectedRange(cleanedValues, rawText);
+
+    assert.strictEqual(result.normalizationNeeded, true);
+    assert.strictEqual(result.normalizationApplied, true, "should normalize, not block");
+    assert.deepStrictEqual(result.labelColumns, [0, 1], "both label and unit columns should be detected");
+    assert.strictEqual(result.dataColOffset, 2, "data should start at col 2");
+    assert.deepStrictEqual(
+      result.valuesForCalculation[0],
+      ["0.21", "0.35", "0.42"],
+      "valuesForCalculation must not include the unit column"
+    );
+    assert.deepStrictEqual(result.blockingReasons, []);
+  });
+
+  it("[label | 0%-unit-col | data] leftLabelValues includes both label columns, valuesForCalculation starts at col 2", () => {
+    const rawText = [
+      ["Alpha", "0%", "44%", "41%"],
+      ["Beta",  "0%", "56%", "59%"],
+      ["BASE",  "0%", "500", "600"],
+    ];
+    const cleanedValues = [
+      ["Alpha", "0", "0.44", "0.41"],
+      ["Beta",  "0", "0.56", "0.59"],
+      ["BASE",  "0", "500",  "600"],
+    ];
+
+    const result = normalizeSelectedRange(cleanedValues, rawText);
+
+    assert.strictEqual(result.normalizationApplied, true);
+    assert.strictEqual(result.dataColOffset, 2);
+    // leftLabelValues covers both detected label columns (col 0 = label, col 1 = unit).
+    // The row label itself is the first element in each row.
+    assert.deepStrictEqual(result.leftLabelValues, [["Alpha", "0%"], ["Beta", "0%"], ["BASE", "0%"]]);
+    assert.deepStrictEqual(result.valuesForCalculation[0], ["0.44", "0.41"]);
+  });
+
+  it("[NPS-scale-label | 0%-unit-col | data] strips both columns for NPS table", () => {
+    // Extended NPS table where col[0] is the scale label column (mostly numeric)
+    // and col[1] is a '%' unit column with "0%" in every row.
+    // detectLabelColumns uses the NPS early-return path, so col[1] was previously
+    // never checked.
+    const rawText = [
+      ["0",          "0%", "2%", "3%", "4%"],
+      ["1",          "0%", "3%", "4%", "5%"],
+      ["2",          "0%", "5%", "7%", "8%"],
+      ["3",          "0%", "4%", "3%", "2%"],
+      ["4",          "0%", "6%", "5%", "4%"],
+      ["5",          "0%", "8%", "9%", "10%"],
+      ["6",          "0%", "7%", "8%", "9%"],
+      ["7",          "0%", "9%", "10%", "11%"],
+      ["8",          "0%", "12%", "13%", "14%"],
+      ["9",          "0%", "8%",  "7%",  "6%"],
+      ["10",         "0%", "36%", "33%", "27%"],
+      ["Detractors", "0%", "12%", "14%", "10%"],
+      ["Neutral",    "0%", "14%", "16%", "19%"],
+      ["Promoters",  "0%", "74%", "70%", "71%"],
+      ["NPS",        "0%", "62%", "56%", "61%"],
+      ["Base",       "0%", "500", "600", "400"],
+    ];
+    const cleanedValues = rawText.map((row) => [row[0], "0", ...row.slice(2)]);
+
+    const result = normalizeSelectedRange(cleanedValues, rawText);
+
+    assert.strictEqual(result.normalizationNeeded, true);
+    assert.strictEqual(result.normalizationApplied, true, "NPS + unit column must normalize");
+    assert.strictEqual(result.dataColOffset, 2, "data must start at col 2, skipping NPS label and unit col");
+    assert.deepStrictEqual(result.labelColumns, [0, 1]);
+    assert.deepStrictEqual(result.valuesForCalculation[0], ["2%", "3%", "4%"]);
+    assert.deepStrictEqual(result.blockingReasons, []);
+  });
+
+  it("[NPS-scale-label | '%'-unit-col | data] strips both columns when unit column shows '%'", () => {
+    // Real Excel smoke case: col[1] contains the literal text "%" in every row
+    // (cells are text, not value=0 formatted as %).  isTextOnlyCell("%") = true,
+    // but the NPS early-return paths skip the col1Frac check and went straight to
+    // isUniformZeroPercentColumn which only accepted "0%".  isUniformUnitColumn now
+    // also accepts the bare "%" string.
+    const rawText = [
+      ["1 - Совершенно неудовлет", "%", "2%",  "3%",  "4%"],
+      ["2",          "%", "3%",  "4%",  "5%"],
+      ["3",          "%", "5%",  "7%",  "8%"],
+      ["4",          "%", "4%",  "3%",  "2%"],
+      ["5",          "%", "6%",  "5%",  "4%"],
+      ["6",          "%", "8%",  "9%",  "10%"],
+      ["7",          "%", "7%",  "8%",  "9%"],
+      ["8",          "%", "9%",  "10%", "11%"],
+      ["9",          "%", "8%",  "7%",  "6%"],
+      ["10",         "%", "36%", "33%", "27%"],
+      ["Detractors", "%", "12%", "14%", "10%"],
+      ["Neutral",    "%", "14%", "16%", "19%"],
+      ["Promoters",  "%", "74%", "70%", "71%"],
+      ["NPS",        "%", "62%", "56%", "61%"],
+      ["Base",       "%", "500", "600", "400"],
+    ];
+    const cleanedValues = rawText.map((row) => [row[0], "%", ...row.slice(2)]);
+
+    const result = normalizeSelectedRange(cleanedValues, rawText);
+
+    assert.strictEqual(result.normalizationNeeded, true);
+    assert.strictEqual(result.normalizationApplied, true, "NPS + '%' unit column must normalize");
+    assert.strictEqual(result.dataColOffset, 2, "data must start at col 2");
+    assert.deepStrictEqual(result.labelColumns, [0, 1]);
+    assert.deepStrictEqual(result.valuesForCalculation[0], ["2%", "3%", "4%"]);
+    assert.deepStrictEqual(result.blockingReasons, []);
+  });
+
+  it("[label | 0%-unit-col | data] with mixed 0% values does not strip non-uniform column", () => {
+    // If col[1] has different values (not all uniform), it must NOT be treated as a
+    // unit column even if some cells are "0%".  This protects real data columns.
+    const rawText = [
+      ["Metric A", "0%",  "21%", "35%"],
+      ["Metric B", "10%", "15%", "22%"],
+      ["Base",     "0%",  "100", "200"],
+    ];
+    const cleanedValues = [
+      ["Metric A", "0",    "0.21", "0.35"],
+      ["Metric B", "0.10", "0.15", "0.22"],
+      ["Base",     "0",    "100",  "200"],
+    ];
+
+    const result = normalizeSelectedRange(cleanedValues, rawText);
+
+    assert.strictEqual(result.normalizationApplied, true);
+    // col[1] is not uniform ("0%" and "10%" differ), so only col[0] is stripped.
+    assert.strictEqual(result.dataColOffset, 1, "non-uniform col[1] must not be treated as unit column");
+    assert.deepStrictEqual(result.labelColumns, [0]);
+  });
 });
