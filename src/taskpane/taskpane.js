@@ -21,7 +21,6 @@ import {
 } from "../core/significance";
 
 import {
-  LABEL_SCAN_COLUMNS_LEFT,
   detectMetricRowsFromLeftLabels,
   formatMetricDetectionDiagnostics,
   buildCalculationBlocks,
@@ -37,6 +36,11 @@ import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core
 
 import { normalizeSelectedRange } from "../core/range-normalizer";
 
+import {
+  interpretSelectedRange,
+  loadLabelValuesForSelectedRange,
+} from "./selected-range-interpreter";
+
 const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
   "GLOBAL_TOTAL_USED",
   "BANNER_AUTO_PREVIOUS_COLUMN_APPLIED",
@@ -46,9 +50,6 @@ const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
   "BANNER_MALFORMED_STRUCTURE",
   "BANNER_NO_ROWS_ABOVE_SELECTION",
 ]);
-
-const SELECTED_RANGE_GUARDRAIL_WARNING_TEXT =
-  "Похоже, вы выделили лейблы строк или шапку вместе с данными. Сейчас RIT ожидает выделение только числовой части таблицы.";
 
 const SCAN_CELL_LIMIT = 250000;
 
@@ -341,278 +342,7 @@ Office.onReady((info) => {
   }
 });
 
-/**
- * Detects high-confidence signs that labels or header rows were included in the data range.
- */
-function detectSelectedRangeGuardrails(selectedText, cleanedValues) {
-  const values = Array.isArray(cleanedValues) ? cleanedValues : [];
-  const rowCount = values.length;
-  const columnCount = rowCount > 0 && Array.isArray(values[0]) ? values[0].length : 0;
 
-  if (rowCount < 2 || columnCount < 2) {
-    return [];
-  }
-
-  const warnings = [];
-  const allCells = getSelectedRangeCells(selectedText, values, 0, 0, rowCount, columnCount);
-  const allStats = analyzeSelectedRangeCells(allCells);
-
-  if (rowCount >= 3 && columnCount >= 3) {
-    const firstColumnStats = analyzeSelectedRangeCells(
-      getSelectedRangeCells(selectedText, values, 0, 0, rowCount, 1)
-    );
-    const rightSideStats = analyzeSelectedRangeCells(
-      getSelectedRangeCells(selectedText, values, 0, 1, rowCount, columnCount - 1)
-    );
-
-    if (
-      firstColumnStats.nonEmptyCount >= Math.max(2, Math.ceil(rowCount * 0.5)) &&
-      firstColumnStats.textRatio >= 0.7 &&
-      rightSideStats.nonEmptyCount >= Math.max(4, Math.ceil(rowCount * (columnCount - 1) * 0.5)) &&
-      rightSideStats.numericRatio >= 0.7
-    ) {
-      warnings.push({
-        code: "SELECTED_RANGE_LIKELY_LEFT_LABEL_COLUMN",
-        severity: "warning",
-        text: SELECTED_RANGE_GUARDRAIL_WARNING_TEXT,
-        rowIndex: null,
-        columnIndex: 0,
-        evidence: {
-          firstColumnTextRatio: roundGuardrailRatio(firstColumnStats.textRatio),
-          rightSideNumericRatio: roundGuardrailRatio(rightSideStats.numericRatio),
-          firstColumnTextCount: firstColumnStats.textCount,
-          rightSideNumericCount: rightSideStats.numericCount,
-        },
-      });
-    }
-
-    const firstRowStats = analyzeSelectedRangeCells(
-      getSelectedRangeCells(selectedText, values, 0, 0, 1, columnCount)
-    );
-    const lowerRowsStats = analyzeSelectedRangeCells(
-      getSelectedRangeCells(selectedText, values, 1, 0, rowCount - 1, columnCount)
-    );
-
-    if (
-      firstRowStats.nonEmptyCount >= Math.max(2, Math.ceil(columnCount * 0.5)) &&
-      firstRowStats.textRatio >= 0.6 &&
-      lowerRowsStats.nonEmptyCount >= Math.max(4, Math.ceil((rowCount - 1) * columnCount * 0.5)) &&
-      lowerRowsStats.numericRatio >= 0.7
-    ) {
-      warnings.push({
-        code: "SELECTED_RANGE_LIKELY_TOP_HEADER_ROW",
-        severity: "warning",
-        text: SELECTED_RANGE_GUARDRAIL_WARNING_TEXT,
-        rowIndex: 0,
-        columnIndex: null,
-        evidence: {
-          firstRowTextRatio: roundGuardrailRatio(firstRowStats.textRatio),
-          lowerRowsNumericRatio: roundGuardrailRatio(lowerRowsStats.numericRatio),
-          firstRowTextCount: firstRowStats.textCount,
-          lowerRowsNumericCount: lowerRowsStats.numericCount,
-        },
-      });
-    }
-  }
-
-  if (
-    warnings.length === 0 &&
-    allStats.totalCount >= 12 &&
-    allStats.textCount >= 4 &&
-    allStats.textRatio >= 0.25 &&
-    allStats.numericRatio >= 0.5
-  ) {
-    warnings.push({
-      code: "SELECTED_RANGE_TEXT_HEAVY",
-      severity: "warning",
-      text: SELECTED_RANGE_GUARDRAIL_WARNING_TEXT,
-      rowIndex: null,
-      columnIndex: null,
-      evidence: {
-        textRatio: roundGuardrailRatio(allStats.textRatio),
-        numericRatio: roundGuardrailRatio(allStats.numericRatio),
-        textCount: allStats.textCount,
-        numericCount: allStats.numericCount,
-      },
-    });
-  }
-
-  return warnings;
-}
-
-function getSelectedRangeCells(selectedText, values, startRow, startColumn, rowCount, columnCount) {
-  const cells = [];
-
-  for (let rowOffset = 0; rowOffset < rowCount; rowOffset++) {
-    const rowIndex = startRow + rowOffset;
-
-    for (let columnOffset = 0; columnOffset < columnCount; columnOffset++) {
-      const columnIndex = startColumn + columnOffset;
-
-      cells.push({
-        value: values && values[rowIndex] ? values[rowIndex][columnIndex] : undefined,
-        text:
-          selectedText && selectedText[rowIndex] ? selectedText[rowIndex][columnIndex] : undefined,
-      });
-    }
-  }
-
-  return cells;
-}
-
-function analyzeSelectedRangeCells(cells) {
-  const stats = {
-    totalCount: cells.length,
-    nonEmptyCount: 0,
-    blankCount: 0,
-    numericCount: 0,
-    textCount: 0,
-    numericRatio: 0,
-    textRatio: 0,
-  };
-
-  for (const cell of cells) {
-    const cellValue = getGuardrailCellValue(cell);
-
-    if (isBlankLikeCellValue(cellValue)) {
-      stats.blankCount++;
-      continue;
-    }
-
-    stats.nonEmptyCount++;
-
-    if (isNumericLikeCellValue(cellValue)) {
-      stats.numericCount++;
-      continue;
-    }
-
-    if (isTextLikeCellValue(cellValue)) {
-      stats.textCount++;
-    }
-  }
-
-  if (stats.nonEmptyCount > 0) {
-    stats.numericRatio = stats.numericCount / stats.nonEmptyCount;
-    stats.textRatio = stats.textCount / stats.nonEmptyCount;
-  }
-
-  return stats;
-}
-
-function getGuardrailCellValue(cell) {
-  if (!cell) {
-    return "";
-  }
-
-  if (!isBlankLikeCellValue(cell.value)) {
-    return cell.value;
-  }
-
-  return cell.text;
-}
-
-function isBlankLikeCellValue(value) {
-  return value === null || value === undefined || String(value).trim() === "";
-}
-
-function isNumericLikeCellValue(value) {
-  if (isBlankLikeCellValue(value)) {
-    return false;
-  }
-
-  if (typeof value === "number") {
-    return Number.isFinite(value);
-  }
-
-  const normalizedValue = String(value)
-    .trim()
-    .replace(/\s/g, "")
-    .replace("%", "")
-    .replace(",", ".");
-
-  return normalizedValue !== "" && !Number.isNaN(Number(normalizedValue));
-}
-
-function isTextLikeCellValue(value) {
-  return !isBlankLikeCellValue(value) && !isNumericLikeCellValue(value);
-}
-
-function roundGuardrailRatio(value) {
-  return Math.round(value * 100) / 100;
-}
-
-/**
- * Returns true when every non-empty cell in `col` of `cleanedValues` is a
- * unit/indicator value.  Accepted forms:
- *   - numeric 0            (Excel .values for a 0%-formatted cell)
- *   - string "0" / "0.0"  (removeSignificanceMarkersFromText converts numbers
- *                           to strings via String(), so numeric 0 arrives as "0")
- *   - string "%"           (literal percent indicator text)
- *   - string "0%" / "0.0%" (explicit zero-percent string)
- * Any other value returns false so real data columns are not misclassified.
- */
-function isEmbeddedUnitColumn(cleanedValues, col, rowCount) {
-  let hasContent = false;
-  for (let r = 0; r < rowCount; r++) {
-    const row = cleanedValues[r] || [];
-    const cell = row[col];
-    if (cell === "" || cell === null || cell === undefined) continue;
-    hasContent = true;
-    if (typeof cell === "number" && cell === 0) continue;
-    if (typeof cell === "string") {
-      const t = cell.trim();
-      if (t === "%" || /^0(\.0+)?%$/.test(t) || /^0(\.0+)?$/.test(t)) continue;
-    }
-    return false;
-  }
-  return hasContent;
-}
-
-/**
- * Scans the leftmost columns of cleanedValues for embedded label/unit columns.
- *
- * Col 0 must have at least one genuine-text cell (non-numeric, non-empty after
- * stripping %).  Each subsequent column is accepted only if it is a uniform
- * unit/indicator column (isEmbeddedUnitColumn).  Stops at the first column
- * that fails its test.  Always leaves at least one column as data.
- *
- * Returns 0 for strict numeric selections so the existing Run/Clear flow is
- * unchanged.
- */
-function detectEmbeddedLabelColumns(cleanedValues) {
-  if (!Array.isArray(cleanedValues) || !Array.isArray(cleanedValues[0])) return 0;
-  const colCount = cleanedValues[0].length;
-  if (colCount < 2) return 0;
-
-  const maxCols = Math.min(LABEL_SCAN_COLUMNS_LEFT, colCount - 1);
-  const rowCount = cleanedValues.length;
-  let embeddedLabelCols = 0;
-
-  for (let col = 0; col < maxCols; col++) {
-    if (col === 0) {
-      const hasGenuineText = cleanedValues.some((row) => {
-        const cell = row && row[col];
-        if (cell === "" || cell === null || cell === undefined) return false;
-        if (typeof cell === "number") return false;
-        const s = String(cell).trim().replace("%", "").replace(",", ".");
-        return s !== "" && Number.isNaN(Number(s));
-      });
-      if (hasGenuineText) {
-        embeddedLabelCols++;
-      } else {
-        break;
-      }
-    } else {
-      if (isEmbeddedUnitColumn(cleanedValues, col, rowCount)) {
-        embeddedLabelCols++;
-      } else {
-        break;
-      }
-    }
-  }
-
-  return embeddedLabelCols;
-}
 
 /**
  * Reads selected Excel range, detects metric blocks, calculates pairwise significance,
@@ -691,118 +421,69 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
-    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
+    const interpretation = await interpretSelectedRange(
+      context,
+      selectedRange,
+      selectedValues,
+      selectedText,
+      calculationSettings
+    );
 
-    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+    if (interpretation.state === "blocked") {
       const codes =
-        normalized.blockingReasons && normalized.blockingReasons.length > 0
-          ? ` [${normalized.blockingReasons.join(", ")}]`
+        interpretation.blockingReasons && interpretation.blockingReasons.length > 0
+          ? ` [${interpretation.blockingReasons.join(", ")}]`
           : "";
-
-      setStatusMessage(`${normalized.blockingMessage}${codes}`);
+      setStatusMessage(`${interpretation.blockingMessage}${codes}`);
       return;
     }
 
-    const rawSelectedRangeGuardrailWarnings = detectSelectedRangeGuardrails(
-      selectedText,
-      cleanedValues
-    );
+    const {
+      valuesForCalculation,
+      textForCalculation,
+      leftLabelValues,
+      normalizationStatusLines,
+      bannerContext: interpretedBannerContext,
+    } = interpretation;
 
-    const runModel = {
-      values: cleanedValues,
-      text: selectedText,
-      leftLabelValues: null,
-      bannerContext: null,
-      writeTargetRange: selectedRange,
-      targetStartRowIndex: selectedRange.rowIndex,
-      normalizationApplied: false,
-      normalizationStatusLines: [],
-      selectedRangeGuardrailWarnings: rawSelectedRangeGuardrailWarnings,
-    };
+    const selectedRangeGuardrailWarnings = interpretation.selectedRangeGuardrailWarnings;
+    let { writeTargetRange } = interpretation;
 
-    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
-      if (
-        !normalized.valuesForCalculation ||
-        normalized.valuesForCalculation.length < 2 ||
-        !normalized.valuesForCalculation[0] ||
-        normalized.valuesForCalculation[0].length < 2
-      ) {
-        setStatusMessage("Please select at least 2 columns and 2 rows.");
-        return;
-      }
-
-      runModel.values = normalized.valuesForCalculation;
-      runModel.text = normalized.textForCalculation;
-      runModel.leftLabelValues = normalized.leftLabelValues;
-      runModel.bannerContext = normalized.bannerContext;
-      runModel.writeTargetRange = selectedRange
-        .getCell(normalized.dataRowOffset, normalized.dataColOffset)
-        .getResizedRange(
-          normalized.valuesForCalculation.length - 1,
-          normalized.valuesForCalculation[0].length - 1
-        );
-      runModel.targetStartRowIndex = selectedRange.rowIndex + normalized.dataRowOffset;
-      runModel.normalizationApplied = true;
-      runModel.normalizationStatusLines.push(
-        "Диапазон нормализован: расчёт выполнен только по области данных."
-      );
-      runModel.selectedRangeGuardrailWarnings = [];
-    } else {
-      // Check for embedded label/unit columns before loading external labels.
-      const embeddedLabelCols = detectEmbeddedLabelColumns(cleanedValues);
-
-      if (embeddedLabelCols > 0) {
-        runModel.leftLabelValues = cleanedValues.map((row) => row.slice(0, embeddedLabelCols));
-        runModel.values = cleanedValues.map((row) => row.slice(embeddedLabelCols));
-        runModel.text = selectedText.map((row) => row.slice(embeddedLabelCols));
-        runModel.writeTargetRange = selectedRange
-          .getCell(0, embeddedLabelCols)
-          .getResizedRange(
-            selectedRange.rowCount - 1,
-            selectedRange.columnCount - embeddedLabelCols - 1
-          );
-      } else {
-        runModel.leftLabelValues = await loadLabelValuesForSelectedRange(
-          context,
-          selectedRange,
-          calculationSettings
-        ); // Labels located 1-2 columns to the left of the selected data.
-      }
-    }
-
-    if (!runModel.values || runModel.values.length < 2 || runModel.values[0].length < 2) {
+    if (
+      !valuesForCalculation ||
+      valuesForCalculation.length < 2 ||
+      !valuesForCalculation[0] ||
+      valuesForCalculation[0].length < 2
+    ) {
       setStatusMessage("Please select at least 2 columns and 2 rows.");
       return;
     }
 
-    runModel.writeTargetRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    writeTargetRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
     await context.sync();
 
-    runModel.targetStartRowIndex = runModel.writeTargetRange.rowIndex;
+    const targetStartRowIndex = writeTargetRange.rowIndex;
 
-    if (calculationSettings.writeBannerLetters && runModel.targetStartRowIndex === 0) {
+    if (calculationSettings.writeBannerLetters && targetStartRowIndex === 0) {
       outputElement.textContent =
         "Данные расположены в первой строке. Добавьте строку над выделенным массивом и запустите расчёт повторно.";
 
       return;
     }
 
-    runModel.writeTargetRange.values = runModel.values;
+    writeTargetRange.values = valuesForCalculation;
 
-    runModel.writeTargetRange.format.font.bold = false;
-    runModel.writeTargetRange.format.fill.clear();
-    runModel.writeTargetRange.format.horizontalAlignment = "Center";
-    runModel.writeTargetRange.format.verticalAlignment = "Center";
+    writeTargetRange.format.font.bold = false;
+    writeTargetRange.format.fill.clear();
+    writeTargetRange.format.horizontalAlignment = "Center";
+    writeTargetRange.format.verticalAlignment = "Center";
 
     await context.sync();
 
-    const selectedRangeGuardrailWarnings = runModel.selectedRangeGuardrailWarnings;
-
     const detectionResult = detectMetricRowsFromLeftLabels(
-      runModel.values,
-      runModel.leftLabelValues
+      valuesForCalculation,
+      leftLabelValues
     ); // Row type diagnostics based on left-side labels.
 
     const calculationBlocks = buildCalculationBlocks(detectionResult); // List of metric blocks to calculate.
@@ -820,36 +501,26 @@ async function runSignificanceFromSelection() {
     let bannerStructure = null;
 
     if (calculationSettings.respectBannerStructure) {
-      const bannerContext =
-        buildRunBannerContext(runModel.bannerContext) ||
-        (await loadBannerContextForSelectedRange(
-          context,
-          runModel.writeTargetRange,
-          calculationSettings
-        ));
+      // interpretedBannerContext is already sanitized by selected-range-interpreter
+      // (all RIT markers stripped from banner rows) so detection is idempotent
+      // across repeated Runs and Checks.
+      const bannerContext = interpretedBannerContext;
 
       bannerStructure = detectBannerStructure(bannerContext, calculationSettings);
 
       if (bannerContext.messages && bannerContext.messages.length > 0) {
         bannerStructure.messages = [...bannerContext.messages, ...(bannerStructure.messages || [])];
       }
-
-      /** 
-      bannerSpanDiagnostics = await loadBannerSpanDiagnosticsForSelectedRange(
-        context,
-        selectedRange
-      );
-      */
     }
 
     const fullCellResultMatrix = createEmptyCellResultMatrix(
-      runModel.values.length,
-      runModel.values[0].length
+      valuesForCalculation.length,
+      valuesForCalculation[0].length
     ); // Full-size marker storage matching the data body being calculated.
 
     for (const calculationBlock of calculationBlocks) {
       const smallBaseResult = applySmallBaseRulesForCalculationBlock(
-        runModel.values,
+        valuesForCalculation,
         calculationBlock,
         fullCellResultMatrix,
         calculationSettings
@@ -872,7 +543,7 @@ async function runSignificanceFromSelection() {
       };
 
       const blockResults = calculateBlockResults(
-        runModel.values,
+        valuesForCalculation,
         calculationBlock,
         blockCalculationSettings
       );
@@ -915,25 +586,36 @@ async function runSignificanceFromSelection() {
     keepMarkersOnlyInAllowedRows(fullCellResultMatrix, allowedMarkerRows);
 
     writeCellResultsToSelectedRange(
-      runModel.writeTargetRange,
-      runModel.text,
+      writeTargetRange,
+      textForCalculation,
       fullCellResultMatrix,
       detectionResult,
       calculationSettings
     );
 
     if (calculationSettings.writeBannerLetters) {
+      // Remove any stale RIT markers that a previous run may have written at
+      // label-column positions (left of writeTargetRange).  These linger when
+      // the user re-runs without clearing first after the dataColOffset fix.
+      await clearStaleBannerMarkersLeftOfWriteRange(
+        context,
+        writeTargetRange.worksheet,
+        selectedRange.columnIndex,
+        writeTargetRange.rowIndex,
+        writeTargetRange.columnIndex
+      );
+
       if (calculationSettings.respectBannerStructure && bannerStructure) {
         await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
           context,
-          runModel.writeTargetRange,
+          writeTargetRange,
           bannerStructure,
           calculationSettings
         );
       } else {
         await writeBannerMarkersAboveSelectedRange(
           context,
-          runModel.writeTargetRange,
+          writeTargetRange,
           calculationSettings
         );
       }
@@ -943,9 +625,9 @@ async function runSignificanceFromSelection() {
 
     const statusMessages = [`Расчёт выполнен. Обработано блоков: ${calculationBlocks.length}.`];
 
-    if (runModel.normalizationStatusLines.length > 0) {
+    if (normalizationStatusLines.length > 0) {
       statusMessages.push("");
-      statusMessages.push(...runModel.normalizationStatusLines);
+      statusMessages.push(...normalizationStatusLines);
     }
 
     const bannerUserMessages = formatBannerUserMessages(bannerStructure);
@@ -963,32 +645,6 @@ async function runSignificanceFromSelection() {
   });
 }
 
-/**
- * Converts normalized banner context into the shape used by Run banner detection.
- */
-function buildRunBannerContext(bannerContext) {
-  if (!bannerContext) {
-    return null;
-  }
-
-  if (bannerContext.selectedColumnCount !== undefined) {
-    return bannerContext;
-  }
-
-  const scanRows = Array.isArray(bannerContext.scanRows) ? bannerContext.scanRows : [];
-  const selectedColumnCount = bannerContext.columnCount || 0;
-
-  if (!selectedColumnCount || scanRows.length === 0) {
-    return null;
-  }
-
-  return {
-    selectedColumnCount,
-    lowerBannerRow: scanRows[scanRows.length - 1],
-    upperScanRows: scanRows.slice(0, -1).reverse(),
-    messages: bannerContext.messages || [],
-  };
-}
 
 /**
  * Calculates one detected metric block.
@@ -1324,75 +980,28 @@ async function runCheckTable() {
       return;
     }
 
-    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
+    const interpretation = await interpretSelectedRange(
+      context,
+      selectedRange,
+      selectedValues,
+      selectedText,
+      calculationSettings
+    );
 
-    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
-
-    // State 3: normalization needed but blocked — stop and show reason.
-    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+    if (interpretation.state === "blocked") {
       const codes =
-        normalized.blockingReasons.length > 0 ? ` [${normalized.blockingReasons.join(", ")}]` : "";
-      setCheckMessage(`${normalized.blockingMessage}${codes}`);
+        interpretation.blockingReasons.length > 0
+          ? ` [${interpretation.blockingReasons.join(", ")}]`
+          : "";
+      setCheckMessage(`${interpretation.blockingMessage}${codes}`);
       return;
     }
 
-    let modelInput;
+    const { valuesForCalculation, leftLabelValues, bannerContext, normalized } = interpretation;
+
     const normalizationLines = [];
 
-    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
-      // State 2: broad selection successfully decomposed — use normalized partitions.
-      // Adapt normalized banner context through the same helper Run uses, so banner
-      // detection consumes the shape detectBannerStructure expects.
-
-      let leftLabelValues = normalized.leftLabelValues;
-
-      // Build a data body range once, offset to the normalizer-decomposed data
-      // area. Used by both label and banner fallbacks below.
-      const dataBodyRange = selectedRange
-        .getCell(normalized.dataRowOffset, normalized.dataColOffset)
-        .getResizedRange(
-          normalized.valuesForCalculation.length - 1,
-          normalized.valuesForCalculation[0].length - 1
-        );
-
-      // Fallback: normalization did not extract label columns (selection excluded
-      // the label column). Load labels from the worksheet using the same helper
-      // Run uses, applied to the data body range so row alignment matches the
-      // normalized values.
-      if (!Array.isArray(leftLabelValues) || leftLabelValues.length === 0) {
-        leftLabelValues = await loadLabelValuesForSelectedRange(
-          context,
-          dataBodyRange,
-          calculationSettings
-        );
-      }
-
-      // Banner context: prefer banner rows detected inside the selection (normalizer
-      // already slices them to data columns only). When none were found — the banner
-      // is above the selection in the sheet — fall back to loading from the
-      // worksheet using the data body range, the same path State 1 uses. The data
-      // body range excludes label columns via normalized.dataColOffset so
-      // selectedColumnCount is automatically aligned to valuesForCalculation.
-      let bannerContext = buildRunBannerContext(normalized.bannerContext);
-      if (
-        bannerContext === null &&
-        calculationSettings &&
-        calculationSettings.respectBannerStructure
-      ) {
-        bannerContext = await loadBannerContextForSelectedRange(
-          context,
-          dataBodyRange,
-          calculationSettings
-        );
-      }
-
-      modelInput = {
-        values: normalized.valuesForCalculation,
-        leftLabelValues,
-        bannerContext,
-        settings: calculationSettings,
-      };
-
+    if (interpretation.state === "normalized") {
       normalizationLines.push("Диапазон нормализован: заголовки/лейблы/баннер отделены от данных.");
 
       const parts = [];
@@ -1404,54 +1013,14 @@ async function runCheckTable() {
       if (normalized.labelColumns.length > 0)
         parts.push(`колонок меток: ${normalized.labelColumns.length}`);
       if (parts.length > 0) normalizationLines.push(`Отделено: ${parts.join(", ")}.`);
-    } else {
-      // State 1: numeric-only selection.
-      let leftLabelValues;
-      let valuesForModel = cleanedValues;
-
-      // Mirror Run: compute embedded label columns synchronously first.
-      const embeddedLabelCols = detectEmbeddedLabelColumns(cleanedValues);
-      if (embeddedLabelCols > 0) {
-        leftLabelValues = cleanedValues.map((row) => row.slice(0, embeddedLabelCols));
-        valuesForModel = cleanedValues.map((row) => row.slice(embeddedLabelCols));
-      } else {
-        leftLabelValues = await loadLabelValuesForSelectedRange(
-          context,
-          selectedRange,
-          calculationSettings
-        );
-      }
-
-      // When banner-aware settings are on, mirror Run by loading banner context
-      // from the rows above the selected range. Read-only: no Excel mutation.
-      // When embedded label columns were extracted from the selection, align the
-      // banner range to the data columns only — otherwise selectedColumnCount
-      // includes the label column(s) and detectBannerStructure misaligns groups.
-      let bannerContext = null;
-      if (calculationSettings && calculationSettings.respectBannerStructure) {
-        const bannerRangeForContext =
-          embeddedLabelCols > 0
-            ? selectedRange
-                .getCell(0, embeddedLabelCols)
-                .getResizedRange(
-                  selectedRange.rowCount - 1,
-                  selectedRange.columnCount - embeddedLabelCols - 1
-                )
-            : selectedRange;
-        bannerContext = await loadBannerContextForSelectedRange(
-          context,
-          bannerRangeForContext,
-          calculationSettings
-        );
-      }
-
-      modelInput = {
-        values: valuesForModel,
-        leftLabelValues,
-        bannerContext,
-        settings: calculationSettings,
-      };
     }
+
+    const modelInput = {
+      values: valuesForCalculation,
+      leftLabelValues,
+      bannerContext,
+      settings: calculationSettings,
+    };
 
     const model = buildTablePreviewModel(modelInput);
     const { summary, qualitySummary, warnings, bannerStructure, calculationBlocks, rowDiagnostics } = model;
@@ -1716,105 +1285,6 @@ function setInventoryMessage(message) {
   const result = document.getElementById("inventory-result");
   if (panel) panel.style.display = "block";
   if (result) result.textContent = message || "";
-}
-
-/**
- * Reads label values for selected range.
- *
- * PURPOSE:
- * By default, reads labels immediately to the left of selected data.
- * If labelsOnLeftSide is enabled, reads labels from the leftmost sheet columns.
- */
-async function loadLabelValuesForSelectedRange(context, selectedRange, calculationSettings) {
-  if (calculationSettings.labelsOnLeftSide) {
-    return loadLabelsFromLeftSideOfSheet(context, selectedRange);
-  }
-
-  return loadLabelsImmediatelyLeftOfSelection(context, selectedRange);
-}
-
-/**
- * Reads banner rows above selected range.
- *
- * PURPOSE:
- * Detection-only banner engine stage.
- * Reads:
- * - lower banner row directly above selection;
- * - up to maxBannerScanRows rows above it.
- *
- * This function does not read merge metadata yet.
- */
-async function loadBannerContextForSelectedRange(context, selectedRange, calculationSettings) {
-  const maxBannerScanRows = 5;
-
-  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
-
-  await context.sync();
-
-  const selectedStartRowIndex = selectedRange.rowIndex;
-  const selectedStartColumnIndex = selectedRange.columnIndex;
-  const selectedColumnCount = selectedRange.columnCount;
-
-  if (selectedStartRowIndex === 0) {
-    return {
-      selectedColumnCount,
-      lowerBannerRow: [],
-      upperScanRows: [],
-      messages: [
-        {
-          severity: MESSAGE_SEVERITY.WARNING,
-          code: "BANNER_NO_ROWS_ABOVE_SELECTION",
-          text: "Баннер: над выделенным диапазоном нет строк для анализа.",
-        },
-      ],
-    };
-  }
-
-  const worksheet = selectedRange.worksheet;
-
-  const lowerBannerRange = worksheet.getRangeByIndexes(
-    selectedStartRowIndex - 1,
-    selectedStartColumnIndex,
-    1,
-    selectedColumnCount
-  );
-
-  lowerBannerRange.load("text");
-
-  const availableUpperRowCount = Math.min(maxBannerScanRows, selectedStartRowIndex - 1);
-
-  let upperScanRows = [];
-
-  if (availableUpperRowCount > 0) {
-    const upperScanRange = worksheet.getRangeByIndexes(
-      selectedStartRowIndex - 1 - availableUpperRowCount,
-      selectedStartColumnIndex,
-      availableUpperRowCount,
-      selectedColumnCount
-    );
-
-    upperScanRange.load("text");
-
-    await context.sync();
-
-    upperScanRows = upperScanRange.text.slice().reverse();
-
-    return {
-      selectedColumnCount,
-      lowerBannerRow: lowerBannerRange.text[0],
-      upperScanRows,
-      messages: [],
-    };
-  }
-
-  await context.sync();
-
-  return {
-    selectedColumnCount,
-    lowerBannerRow: lowerBannerRange.text[0],
-    upperScanRows: [],
-    messages: [],
-  };
 }
 
 /**
@@ -2208,80 +1678,6 @@ async function getCellMergeDiagnosticInfo(context, worksheet, rowIndex, columnIn
   }
 }
 
-/**
- * Reads labels immediately to the left of selected range.
- *
- * PURPOSE:
- * Default detection mode.
- */
-async function loadLabelsImmediatelyLeftOfSelection(context, selectedRange) {
-  selectedRange.load(["rowIndex", "columnIndex", "rowCount"]);
-
-  await context.sync();
-
-  const selectedStartRowIndex = selectedRange.rowIndex;
-  const selectedStartColumnIndex = selectedRange.columnIndex;
-  const selectedRowCount = selectedRange.rowCount;
-
-  if (selectedStartColumnIndex === 0) {
-    return [];
-  }
-
-  const labelColumnCount = Math.min(LABEL_SCAN_COLUMNS_LEFT, selectedStartColumnIndex);
-
-  const labelStartColumnIndex = selectedStartColumnIndex - labelColumnCount;
-
-  const leftLabelRange = selectedRange.worksheet.getRangeByIndexes(
-    selectedStartRowIndex,
-    labelStartColumnIndex,
-    selectedRowCount,
-    labelColumnCount
-  );
-
-  leftLabelRange.load("values");
-
-  await context.sync();
-
-  return leftLabelRange.values;
-}
-
-/**
- * Reads labels from the leftmost columns of the worksheet.
- *
- * PURPOSE:
- * Supports wide horizontal tables where metric labels stay on the far left,
- * while the user selects data columns far to the right.
- */
-async function loadLabelsFromLeftSideOfSheet(context, selectedRange) {
-  selectedRange.load(["rowIndex", "rowCount", "columnIndex"]);
-
-  await context.sync();
-
-  const selectedStartRowIndex = selectedRange.rowIndex;
-  const selectedRowCount = selectedRange.rowCount;
-  const selectedStartColumnIndex = selectedRange.columnIndex;
-
-  // Cannot read labels to the left when range starts at column 0.
-  if (selectedStartColumnIndex === 0) {
-    return [];
-  }
-
-  // Cap at the range's column position so we never read into the data columns.
-  const labelColumnCount = Math.min(LABEL_SCAN_COLUMNS_LEFT, selectedStartColumnIndex);
-
-  const leftLabelRange = selectedRange.worksheet.getRangeByIndexes(
-    selectedStartRowIndex,
-    0,
-    selectedRowCount,
-    labelColumnCount
-  );
-
-  leftLabelRange.load("values");
-
-  await context.sync();
-
-  return leftLabelRange.values;
-}
 
 /**
  * Reads calculation settings from the task pane UI.
@@ -3192,6 +2588,82 @@ function appendOrReplaceTrailingBannerMarker(rawText, label) {
 }
 
 /**
+ * Clears RIT-generated banner markers from banner cells that are within the
+ * full selected range but LEFT of writeTargetRange (i.e., label-column
+ * positions that were stripped by detectEmbeddedLabelColumns).
+ *
+ * This removes stale markers written by pre-fix runs so they do not appear
+ * alongside the correctly-placed new markers after an in-place Run without
+ * an explicit Clear between runs.
+ *
+ * Only acts when writeTargetRange is narrower than the original selection
+ * (i.e., at least one label column was stripped on the left).
+ *
+ * @param {Excel.RequestContext} context
+ * @param {Excel.Worksheet} worksheet
+ * @param {number} selectedRangeColIndex  - column index of the original selectedRange
+ * @param {number} writeTargetRowIndex    - rowIndex of writeTargetRange (first data row)
+ * @param {number} writeTargetColIndex    - columnIndex of writeTargetRange (first data col)
+ */
+async function clearStaleBannerMarkersLeftOfWriteRange(
+  context,
+  worksheet,
+  selectedRangeColIndex,
+  writeTargetRowIndex,
+  writeTargetColIndex
+) {
+  const leftColumnCount = writeTargetColIndex - selectedRangeColIndex;
+
+  // Nothing to clean: write target starts at the selection boundary, or data
+  // starts in row 0 (no banner rows above it).
+  if (leftColumnCount <= 0 || writeTargetRowIndex === 0) {
+    return;
+  }
+
+  const BANNER_SCAN_LIMIT = 6;
+  const totalScanRows = Math.min(BANNER_SCAN_LIMIT, writeTargetRowIndex);
+
+  const bannerScanRange = worksheet.getRangeByIndexes(
+    writeTargetRowIndex - totalScanRows,
+    selectedRangeColIndex,
+    totalScanRows,
+    leftColumnCount
+  );
+  bannerScanRange.load("text");
+  await context.sync();
+
+  const writeQueue = [];
+
+  for (let rowOffset = 0; rowOffset < totalScanRows; rowOffset++) {
+    const rowTexts = bannerScanRange.text[rowOffset] || [];
+
+    for (let colOffset = 0; colOffset < leftColumnCount; colOffset++) {
+      const cellText = rowTexts[colOffset] || "";
+
+      if (!getTrailingBannerMarker(cellText)) {
+        continue;
+      }
+
+      writeQueue.push({
+        rowIndex: writeTargetRowIndex - totalScanRows + rowOffset,
+        colIndex: selectedRangeColIndex + colOffset,
+        text: removeTrailingBannerMarker(cellText),
+      });
+    }
+  }
+
+  if (writeQueue.length === 0) {
+    return;
+  }
+
+  for (const { rowIndex, colIndex, text } of writeQueue) {
+    worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1).values = [[text]];
+  }
+
+  await context.sync();
+}
+
+/**
  * Removes trailing banner marker.
  *
  * Used when a column should no longer have a banner marker,
@@ -3214,13 +2686,19 @@ function removeTrailingBannerMarker(rawText) {
 
 function getTrailingBannerMarker(rawText) {
   const text = rawText === null || rawText === undefined ? "" : String(rawText);
-  const markerMatch = text.match(/\s*\(([^()]*)\)\s*$/);
+
+  // Require the marker token to be preceded by whitespace or appear at the
+  // very start of the cell.  This prevents parenthesised fragments inside
+  // words — e.g. "сам(а)" — from being mistaken for RIT significance markers
+  // even when the single letter inside happens to be a valid label (Cyrillic
+  // "а" is the first Cyrillic entry in generateSignificanceLabels()).
+  const markerMatch = text.match(/(^|\s)\(([^()]*)\)\s*$/);
 
   if (!markerMatch) {
     return null;
   }
 
-  const markerLabel = markerMatch[1];
+  const markerLabel = markerMatch[2]; // group 2: label inside parens
 
   if (!generateSignificanceLabels().includes(markerLabel)) {
     return null;

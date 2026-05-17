@@ -573,7 +573,16 @@ function detectReconstructedSpanGroupLevel(
   selectedColumnCount,
   rowIndex
 ) {
-  const spans = buildReconstructedSpansFromUpperRow(upperRow, lowerBannerRow, selectedColumnCount);
+  const rawSpans = buildReconstructedSpansFromUpperRow(upperRow, lowerBannerRow, selectedColumnCount);
+
+  // Merge consecutive adjacent single-column wave-value spans whose lower-
+  // banner cell is blank.  Without this, quarter labels like "2025Q4" / "2026Q1"
+  // that appear without an explicit parent-group label (e.g., when the label
+  // column was stripped from a partial selection) each create a separate
+  // one-column group, which makes both data columns receive local label "a".
+  // After merging, the run forms one multi-column span whose columns get "a"
+  // and "b" respectively.
+  const spans = mergeAdjacentWaveValueSpans(rawSpans, lowerBannerRow);
 
   const meaningfulSpans = spans.filter((span) => span.label && span.columnIndexes.length >= 2);
 
@@ -799,6 +808,98 @@ function buildGroupKey(groupLabel, span) {
     span.startColumnIndex,
     span.endColumnIndex,
   ].join(":");
+}
+
+/**
+ * Merges consecutive adjacent single-column wave-value spans that have an
+ * empty lower-banner cell into a single multi-column span.
+ *
+ * PURPOSE:
+ * When a wave pair (e.g. "2025Q4" / "2026Q1") appears at the start of a
+ * stripped partial-selection banner without an explicit parent-group label,
+ * the upper scan row contains the quarter labels as consecutive single-column
+ * spans with blank lower-banner cells beneath them.
+ *
+ * Without merging, each column gets its own group key and is separately
+ * assigned local label "a", producing duplicate markers.  After merging, the
+ * run forms one multi-column span so its columns receive distinct labels
+ * ("a" and "b") exactly as wave pairs under an explicit "Волна (квартал)"
+ * parent do.
+ *
+ * RULE: a run is merged when every span in the run satisfies all of:
+ *   - exactly 1 column;
+ *   - label is a technical wave value label (e.g. "2025Q4", "2026Q1");
+ *   - the lower-banner cell at that column is blank;
+ *   - the span is immediately adjacent (no gap) to the previous one in the run.
+ * Runs of length 1 are left unchanged so the existing
+ * `hasMergedDownSingleColumnSpan` guard can still handle them.
+ */
+function mergeAdjacentWaveValueSpans(spans, lowerBannerRow) {
+  if (!spans || spans.length === 0) {
+    return spans;
+  }
+
+  const result = [];
+  let i = 0;
+
+  while (i < spans.length) {
+    const span = spans[i];
+
+    const isWaveValueSingleColBlankLower =
+      span.columnIndexes.length === 1 &&
+      isTechnicalWaveOrValueLabel(span.label) &&
+      !normalizeRawBannerCellValue((lowerBannerRow || [])[span.startColumnIndex]);
+
+    if (!isWaveValueSingleColBlankLower) {
+      result.push(span);
+      i++;
+      continue;
+    }
+
+    // Collect the full run of adjacent wave-value single-column spans.
+    const runSpans = [span];
+    let j = i + 1;
+
+    while (j < spans.length) {
+      const next = spans[j];
+
+      const nextIsWaveValueSingleColBlankLower =
+        next.columnIndexes.length === 1 &&
+        isTechnicalWaveOrValueLabel(next.label) &&
+        !normalizeRawBannerCellValue((lowerBannerRow || [])[next.startColumnIndex]);
+
+      const isAdjacent =
+        next.startColumnIndex === runSpans[runSpans.length - 1].startColumnIndex + 1;
+
+      if (!nextIsWaveValueSingleColBlankLower || !isAdjacent) {
+        break;
+      }
+
+      runSpans.push(next);
+      j++;
+    }
+
+    if (runSpans.length === 1) {
+      // Single span — keep as-is so hasMergedDownSingleColumnSpan can handle it.
+      result.push(span);
+    } else {
+      // Merge the run into one multi-column span.  Use the first span's label
+      // (position-based group key makes each merged run unique regardless of
+      // label choice; the label only affects the comparisonGroupLabel display).
+      const merged = {
+        label: runSpans[0].label,
+        normalizedLabel: runSpans[0].normalizedLabel,
+        startColumnIndex: runSpans[0].startColumnIndex,
+        endColumnIndex: runSpans[runSpans.length - 1].endColumnIndex,
+        columnIndexes: runSpans.flatMap((s) => s.columnIndexes),
+      };
+      result.push(merged);
+    }
+
+    i = j;
+  }
+
+  return result;
 }
 
 /**

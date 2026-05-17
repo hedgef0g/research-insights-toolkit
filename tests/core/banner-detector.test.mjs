@@ -372,6 +372,76 @@ describe("detectBannerStructure - group level selection", () => {
       ]
     );
   });
+
+  it("groups first wave-value pair together when label column was stripped and no explicit parent label exists", () => {
+    // Reproduces the partial-banner-selection bug: after stripping one label
+    // column, the bannerContext upper row starts with consecutive single-column
+    // wave-value spans ("2025Q4", "2026Q1") with blank lower-banner cells,
+    // while the remaining columns are covered by explicit "Волна (квартал)"
+    // parent spans.  Without the merge fix, "2025Q4" and "2026Q1" each become
+    // a one-column group and both receive local label "a".  After the fix they
+    // form one two-column group and receive "a" and "b".
+    const bannerContext = {
+      selectedColumnCount: 12,
+      lowerBannerRow: [
+        "", "", "2025Q4", "2026Q1", "2025Q4", "2026Q1",
+        "2025Q4", "2026Q1", "2025Q4", "2026Q1", "2025Q4", "2026Q1",
+      ],
+      upperScanRows: [
+        [
+          "2025Q4", "2026Q1",
+          "Волна (квартал)", "", "Волна (квартал)", "",
+          "Волна (квартал)", "", "Волна (квартал)", "",
+          "Волна (квартал)", "",
+        ],
+      ],
+    };
+
+    const result = detectBannerStructure(bannerContext, { autoDetectWaveBanners: false });
+
+    // Columns 0 and 1 must belong to the SAME group — they are the first wave
+    // pair and are compared with each other.
+    const groupForCol0 = result.groups.find((g) => g.columnIndexes.includes(0));
+    const groupForCol1 = result.groups.find((g) => g.columnIndexes.includes(1));
+
+    assert.ok(groupForCol0, "column 0 must be in a group");
+    assert.ok(groupForCol1, "column 1 must be in a group");
+    assert.strictEqual(
+      groupForCol0.groupKey,
+      groupForCol1.groupKey,
+      "columns 0 and 1 must share the same group key"
+    );
+    assert.deepStrictEqual(
+      groupForCol0.columnIndexes,
+      [0, 1],
+      "the first group must cover exactly columns 0 and 1"
+    );
+
+    // labelMap must assign distinct labels to cols 0 and 1.
+    const labelMap = buildBannerLocalSignificanceLabelMap(result, { autoDetectWaveBanners: false });
+
+    assert.strictEqual(labelMap.get(0), "a", "first data column must get label a");
+    assert.strictEqual(labelMap.get(1), "b", "second data column must get label b");
+
+    // Columns 2-3 must also form their own group (not collapsed into the first group).
+    const groupForCol2 = result.groups.find((g) => g.columnIndexes.includes(2));
+    const groupForCol3 = result.groups.find((g) => g.columnIndexes.includes(3));
+
+    assert.ok(groupForCol2, "column 2 must be in a group");
+    assert.strictEqual(
+      groupForCol2.groupKey,
+      groupForCol3.groupKey,
+      "columns 2 and 3 must share the same group key"
+    );
+    assert.notStrictEqual(
+      groupForCol0.groupKey,
+      groupForCol2.groupKey,
+      "the first group and the second group must be distinct"
+    );
+
+    assert.strictEqual(labelMap.get(2), "a", "first column of second group must get label a");
+    assert.strictEqual(labelMap.get(3), "b", "second column of second group must get label b");
+  });
 });
 
 describe("detectBannerStructure - sparse lower banner totals", () => {
