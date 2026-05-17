@@ -1090,14 +1090,25 @@ function formatCheckCalculationBlocks(calculationBlocks, rowDiagnostics) {
     return label ? `стр. ${rowIndex + 1} «${label}»` : `стр. ${rowIndex + 1}`;
   };
 
+  const baseSubtypeNote = (subtype) => {
+    if (subtype === "effective") return " [эффективная]";
+    if (subtype === "unweighted") return " [невзвешенная]";
+    if (subtype === "weighted") return " [взвешенная — ПРИМЕЧАНИЕ: резервный вариант]";
+    return "";
+  };
+
+  const baseRef = (block) => {
+    if (block.baseRowIndex == null) return "";
+    return ` База: ${rowRef(block.baseRowIndex)}${baseSubtypeNote(block.baseSubtype)}.`;
+  };
+
   const lines = [`Блоки расчёта: ${calculationBlocks.length}.`];
 
   for (const block of calculationBlocks) {
     switch (block.metricType) {
       case "proportion": {
         const count = Array.isArray(block.valueRowIndexes) ? block.valueRowIndexes.length : 0;
-        const base = block.baseRowIndex != null ? ` База: ${rowRef(block.baseRowIndex)}.` : "";
-        lines.push(`- Пропорции: строк со значениями: ${count}.${base}`);
+        lines.push(`- Пропорции: строк со значениями: ${count}.${baseRef(block)}`);
         break;
       }
       case "mean": {
@@ -1105,8 +1116,7 @@ function formatCheckCalculationBlocks(calculationBlocks, rowDiagnostics) {
         const sdPart = block.sdRowIndex != null ? ` СО: ${rowRef(block.sdRowIndex)}.` : "";
         const varPart =
           block.varianceRowIndex != null ? ` Дисперсия: ${rowRef(block.varianceRowIndex)}.` : "";
-        const base = block.baseRowIndex != null ? ` База: ${rowRef(block.baseRowIndex)}.` : "";
-        lines.push(`- Среднее: ${meanRef}.${sdPart}${varPart}${base}`);
+        lines.push(`- Среднее: ${meanRef}.${sdPart}${varPart}${baseRef(block)}`);
         break;
       }
       case "npsStructure": {
@@ -1117,8 +1127,7 @@ function formatCheckCalculationBlocks(calculationBlocks, rowDiagnostics) {
           block.neutralRowIndex != null ? ` Нейтральные: ${rowRef(block.neutralRowIndex)}.` : "";
         const detPart =
           block.detractorsRowIndex != null ? ` Критики: ${rowRef(block.detractorsRowIndex)}.` : "";
-        const base = block.baseRowIndex != null ? ` База: ${rowRef(block.baseRowIndex)}.` : "";
-        lines.push(`- NPS: ${npsRef}.${promPart}${neutPart}${detPart}${base}`);
+        lines.push(`- NPS: ${npsRef}.${promPart}${neutPart}${detPart}${baseRef(block)}`);
         break;
       }
       case "npsSpread": {
@@ -1126,8 +1135,7 @@ function formatCheckCalculationBlocks(calculationBlocks, rowDiagnostics) {
         const sdPart = block.sdRowIndex != null ? ` СО: ${rowRef(block.sdRowIndex)}.` : "";
         const varPart =
           block.varianceRowIndex != null ? ` Дисперсия: ${rowRef(block.varianceRowIndex)}.` : "";
-        const base = block.baseRowIndex != null ? ` База: ${rowRef(block.baseRowIndex)}.` : "";
-        lines.push(`- NPS (разброс): ${npsRef}.${sdPart}${varPart}${base}`);
+        lines.push(`- NPS (разброс): ${npsRef}.${sdPart}${varPart}${baseRef(block)}`);
         break;
       }
       default:

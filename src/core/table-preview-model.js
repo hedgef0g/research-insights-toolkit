@@ -126,6 +126,7 @@ export function buildTablePreviewModel(input) {
   const rawBlocks = buildCalculationBlocks(detectionResult);
   const rowDiagnostics = buildPreviewRowDiagnostics(rawRowDiagnostics, safeLeft);
   const calculationBlocks = buildPreviewBlocks(rawBlocks, rawRowDiagnostics, safeValues);
+  enrichBlocksWithBaseSelection(calculationBlocks, rowDiagnostics);
 
   // Data quality analysis.
   const dataQualityIssues = [
@@ -138,6 +139,7 @@ export function buildTablePreviewModel(input) {
     ...checkSuspiciousCodeLikeLabels(rowDiagnostics),
     ...checkBaseConsistency(safeValues, calculationBlocks, bannerStructure),
     ...checkNpsMismatch(safeValues, calculationBlocks),
+    ...checkWeightedBaseFallback(calculationBlocks),
   ];
 
   const qualitySummary = buildQualitySummary(dataQualityIssues);
@@ -262,8 +264,8 @@ function buildPreviewRowDiagnostics(rawDiagnostics, leftLabelValues) {
 
       // Classification.
       rowType: diag.rowType,
-      // rowSubtype is reserved for future weighted/unweighted/effective base variants.
-      rowSubtype: null,
+      // rowSubtype carries base variant for base rows (effective/unweighted/weighted); null otherwise.
+      rowSubtype: diag.baseSubtype ?? null,
       confidence: inferRowTypeConfidence(diag.rowType),
       notes: [],
     };
@@ -426,6 +428,8 @@ function normalizeBlockShape(block) {
     valueRowIndexes: null,
     valueRowIndex: null,
     baseRowIndex: block.baseRowIndex ?? null,
+    baseSubtype: block.baseSubtype ?? null,
+    baseSelection: null,
     promotersRowIndex: null,
     detractorsRowIndex: null,
     neutralRowIndex: null,
@@ -512,6 +516,31 @@ function enrichNpsBlocksWithNeutralRow(previewBlocks) {
     if (neutralCandidates.length === 1) {
       block.neutralRowIndex = neutralCandidates[0];
     }
+  }
+}
+
+/**
+ * Fills in baseSelection on each block using the enriched preview row diagnostics
+ * (which carry primaryLabel and other label metadata).
+ *
+ * Mutates blocks in place. Called after buildPreviewRowDiagnostics and buildPreviewBlocks.
+ */
+function enrichBlocksWithBaseSelection(blocks, previewRowDiagnostics) {
+  for (const block of blocks) {
+    if (block.baseRowIndex === null) {
+      block.baseSelection = null;
+      continue;
+    }
+    const baseDiag = previewRowDiagnostics[block.baseRowIndex];
+    const selectedBaseLabel = baseDiag
+      ? (baseDiag.primaryLabel || baseDiag.label || null)
+      : null;
+    block.baseSelection = {
+      selectedBaseRowIndex: block.baseRowIndex,
+      selectedBaseSubtype: block.baseSubtype,
+      selectedBaseLabel,
+      isWeightedFallback: block.baseSubtype === "weighted",
+    };
   }
 }
 
@@ -1107,6 +1136,41 @@ function checkNpsMismatch(values, calculationBlocks) {
         },
       });
     }
+  }
+
+  return issues;
+}
+
+/**
+ * Flags calculation blocks where only a Weighted Base was available.
+ *
+ * Weighted base is the lowest-priority fallback in the selection order:
+ * Effective > Unweighted > plain Base > Weighted.
+ * When it is the selected base, the analyst should verify no better base exists.
+ */
+function checkWeightedBaseFallback(calculationBlocks) {
+  const issues = [];
+  const seenBaseRows = new Set();
+
+  for (const block of calculationBlocks) {
+    if (block.baseSubtype !== "weighted") continue;
+    if (block.baseRowIndex === null) continue;
+    if (seenBaseRows.has(block.baseRowIndex)) continue;
+    seenBaseRows.add(block.baseRowIndex);
+
+    issues.push({
+      code: "WEIGHTED_BASE_FALLBACK",
+      severity: "warning",
+      message:
+        `Row ${block.baseRowIndex + 1}: Weighted Base selected as fallback — ` +
+        `no Effective or Unweighted Base was found. ` +
+        `Verify that this is the intended base for significance testing.`,
+      rowIndex: block.baseRowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: { baseRowIndex: block.baseRowIndex, baseSubtype: "weighted" },
+    });
   }
 
   return issues;
