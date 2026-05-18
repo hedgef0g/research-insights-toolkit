@@ -140,6 +140,10 @@ export function buildTablePreviewModel(input) {
     ...checkBaseConsistency(safeValues, calculationBlocks, bannerStructure),
     ...checkNpsMismatch(safeValues, calculationBlocks),
     ...checkWeightedBaseFallback(calculationBlocks),
+    // Inspect rawBlocks (pre-filter) so that blank/non-numeric base rows are
+    // flagged even when blockHasPreviewEvidence later drops the block from
+    // calculationBlocks.  Deduplication by base row index is done inside.
+    ...checkSelectedBaseValidity(safeValues, rawBlocks, safeSettings),
   ];
 
   const qualitySummary = buildQualitySummary(dataQualityIssues);
@@ -1171,6 +1175,158 @@ function checkWeightedBaseFallback(calculationBlocks) {
       relatedColumnIndexes: [],
       evidence: { baseRowIndex: block.baseRowIndex, baseSubtype: "weighted" },
     });
+  }
+
+  return issues;
+}
+
+/**
+ * Checks that the selected base row for each raw block candidate contains usable values.
+ *
+ * Runs against rawBlocks (before blockHasPreviewEvidence filtering) so that a
+ * blank or non-numeric base row is flagged even when the block is later dropped
+ * from the final calculationBlocks list.
+ *
+ * Deduplicates by base row index — a shared base row is only inspected once.
+ *
+ * Issue codes and severities:
+ *   BASE_NO_VALID_VALUES     — critical: row has no numeric positive values at all
+ *   BASE_BLANK_VALUES        — warning: some cells are blank (other columns still valid)
+ *   BASE_NON_NUMERIC_VALUES  — warning: some cells are non-numeric (other columns still valid)
+ *   BASE_NON_POSITIVE_VALUES — warning: some cells are zero or negative (other columns still valid)
+ *   BASE_BELOW_THRESHOLD     — warning: some cells are below settings.smallBaseThreshold
+ */
+function checkSelectedBaseValidity(values, blocks, settings) {
+  const issues = [];
+  const seenBaseRows = new Set();
+
+  const threshold =
+    settings && typeof settings.smallBaseThreshold === "number"
+      ? settings.smallBaseThreshold
+      : null;
+
+  for (const block of blocks || []) {
+    // Use == null to handle both null and undefined — raw blocks are not yet
+    // normalised so baseRowIndex may be undefined rather than null.
+    if (block.baseRowIndex == null) continue;
+    if (seenBaseRows.has(block.baseRowIndex)) continue;
+    seenBaseRows.add(block.baseRowIndex);
+
+    const rowIndex = block.baseRowIndex;
+    const rawRow = Array.isArray(values) ? values[rowIndex] : null;
+    if (!Array.isArray(rawRow) || rawRow.length === 0) continue;
+
+    let blankCount = 0;
+    let nonNumericCount = 0;
+    let nonPositiveCount = 0;
+    let belowThresholdCount = 0;
+
+    for (const cell of rawRow) {
+      if (cell === null || cell === undefined || cell === "") {
+        blankCount++;
+        continue;
+      }
+      const s = String(cell).trim();
+      if (!s) {
+        blankCount++;
+        continue;
+      }
+      const n = Number(s.replace(",", "."));
+      if (Number.isNaN(n)) {
+        nonNumericCount++;
+        continue;
+      }
+      if (n <= 0) {
+        nonPositiveCount++;
+        continue;
+      }
+      // n is positive numeric
+      if (threshold !== null && n < threshold) {
+        belowThresholdCount++;
+      }
+    }
+
+    const totalCount = rawRow.length;
+    const invalidCount = blankCount + nonNumericCount + nonPositiveCount;
+    const rowLabel = `Row ${rowIndex + 1}`;
+
+    if (invalidCount === totalCount) {
+      // No usable base value in any column — significance is impossible.
+      issues.push({
+        code: "BASE_NO_VALID_VALUES",
+        severity: "critical",
+        message:
+          `${rowLabel}: selected base row has no valid numeric positive values ` +
+          `across all ${totalCount} column(s). Significance cannot be calculated.`,
+        rowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: { blankCount, nonNumericCount, nonPositiveCount, totalCount },
+      });
+      continue;
+    }
+
+    // Partial issues — some valid columns remain.
+    if (blankCount > 0) {
+      issues.push({
+        code: "BASE_BLANK_VALUES",
+        severity: "warning",
+        message:
+          `${rowLabel}: selected base row has ${blankCount} blank cell(s) out of ${totalCount}. ` +
+          `Significance cannot be calculated for those columns.`,
+        rowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: { blankCount, totalCount },
+      });
+    }
+
+    if (nonNumericCount > 0) {
+      issues.push({
+        code: "BASE_NON_NUMERIC_VALUES",
+        severity: "warning",
+        message:
+          `${rowLabel}: selected base row has ${nonNumericCount} non-numeric cell(s) out of ${totalCount}. ` +
+          `Significance cannot be calculated for those columns.`,
+        rowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: { nonNumericCount, totalCount },
+      });
+    }
+
+    if (nonPositiveCount > 0) {
+      issues.push({
+        code: "BASE_NON_POSITIVE_VALUES",
+        severity: "warning",
+        message:
+          `${rowLabel}: selected base row has ${nonPositiveCount} zero or negative value(s) out of ${totalCount}. ` +
+          `Significance cannot be calculated for those columns.`,
+        rowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: { nonPositiveCount, totalCount },
+      });
+    }
+
+    if (belowThresholdCount > 0) {
+      issues.push({
+        code: "BASE_BELOW_THRESHOLD",
+        severity: "warning",
+        message:
+          `${rowLabel}: selected base row has ${belowThresholdCount} column(s) with base below ` +
+          `the small-base threshold (${threshold}). Results for those columns may be unreliable.`,
+        rowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: { belowThresholdCount, threshold, totalCount },
+      });
+    }
   }
 
   return issues;
