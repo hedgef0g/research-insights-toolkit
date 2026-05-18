@@ -36,6 +36,10 @@ function warningCodes(model) {
   return model.warnings.map((warning) => warning.code);
 }
 
+function userVisibleIssueCodes(model) {
+  return (model.userVisibleIssues || []).map((issue) => issue.code);
+}
+
 function findBlock(model, metricType) {
   return model.calculationBlocks.find((block) => block.metricType === metricType);
 }
@@ -377,6 +381,26 @@ describe("buildTablePreviewModel - explicit base requirement", () => {
 
     assert.deepStrictEqual(model.calculationBlocks, []);
     assert.strictEqual(model.summary.detectedBlocks, 0);
+  });
+
+  it("keeps user-visible preview issues available when no calculation blocks are detected", () => {
+    const model = makeCustomPreviewModel(
+      [
+        [0.21, 0.45, 0.33],
+        [0.15, 0.28, 0.57],
+        ["", "", ""],
+      ],
+      ["Agree", "Disagree", "BASE"]
+    );
+
+    assert.deepStrictEqual(model.calculationBlocks, []);
+    assert.deepStrictEqual(userVisibleIssueCodes(model), ["BASE_NO_VALID_VALUES"]);
+    assert.strictEqual(model.qualitySummary.criticalCount, 1);
+    assert.strictEqual(model.qualitySummary.warningCount, 0);
+    assert.strictEqual(
+      model.userVisibleIssues.length,
+      model.qualitySummary.criticalCount + model.qualitySummary.warningCount
+    );
   });
 
   it("still reports a proportion block when an explicit base is present", () => {

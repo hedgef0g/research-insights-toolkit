@@ -16,6 +16,10 @@ function warningCodes(model) {
   return model.warnings.map((w) => w.code);
 }
 
+function userVisibleIssueCodes(model) {
+  return (model.userVisibleIssues || []).map((issue) => issue.code);
+}
+
 describe("base subtype selection — preview model metadata", () => {
   it("Weighted Base only → selected as fallback, WEIGHTED_BASE_FALLBACK warning present", () => {
     const model = makeModel(
@@ -363,6 +367,12 @@ describe("checkSelectedBaseValidity — selected base row quality issues", () =>
       model.dataQualityIssues.find((i) => i.code === "BASE_NO_VALID_VALUES").severity,
       "critical"
     );
+    assert.deepStrictEqual(userVisibleIssueCodes(model), ["BASE_NO_VALID_VALUES"]);
+    assert.strictEqual(
+      model.userVisibleIssues.length,
+      model.qualitySummary.criticalCount + model.qualitySummary.warningCount,
+      "userVisibleIssues must stay aligned with summary counts"
+    );
   });
 
   it("all-non-numeric base row → BASE_NO_VALID_VALUES critical even when block is filtered (regression)", () => {
@@ -424,6 +434,10 @@ describe("checkSelectedBaseValidity — selected base row quality issues", () =>
       `expected WEIGHTED_BASE_FALLBACK; got: ${JSON.stringify(codes)}`);
     assert.ok(codes.includes("BASE_NON_POSITIVE_VALUES"),
       `expected BASE_NON_POSITIVE_VALUES alongside WEIGHTED_BASE_FALLBACK; got: ${JSON.stringify(codes)}`);
+    assert.deepStrictEqual(userVisibleIssueCodes(model), [
+      "BASE_NON_POSITIVE_VALUES",
+      "WEIGHTED_BASE_FALLBACK",
+    ]);
   });
 });
 

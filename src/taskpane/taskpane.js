@@ -1055,7 +1055,14 @@ async function runCheckTable() {
     };
 
     const model = buildTablePreviewModel(modelInput);
-    const { summary, qualitySummary, warnings, bannerStructure, calculationBlocks, rowDiagnostics } = model;
+    const {
+      summary,
+      qualitySummary,
+      userVisibleIssues,
+      bannerStructure,
+      calculationBlocks,
+      rowDiagnostics,
+    } = model;
 
     if (summary.rowCount === 0) {
       setCheckMessage("Выделенный диапазон пуст.");
@@ -1077,22 +1084,32 @@ async function runCheckTable() {
       lines.push(...bannerLines);
     }
 
+    const issueLines = formatCheckUserVisibleIssues(userVisibleIssues);
+    if (issueLines.length > 0) {
+      lines.push("");
+      lines.push(...issueLines);
+    }
+
     const blockLines = formatCheckCalculationBlocks(calculationBlocks, rowDiagnostics);
     if (blockLines.length > 0) {
       lines.push("");
       lines.push(...blockLines);
     }
 
-    if (warnings && warnings.length > 0) {
-      lines.push("");
-      lines.push("Предупреждения:");
-      for (const warning of warnings) {
-        lines.push(`- [${warning.severity}] ${warning.text}`);
-      }
-    }
-
     setCheckMessage(lines.join("\n"));
   });
+}
+
+function formatCheckUserVisibleIssues(issues) {
+  if (!Array.isArray(issues) || issues.length === 0) {
+    return [];
+  }
+
+  const lines = ["Проблемы проверки:"];
+  for (const issue of issues) {
+    lines.push(`- [${issue.severity}] ${issue.message}`);
+  }
+  return lines;
 }
 
 /**

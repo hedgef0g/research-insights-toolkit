@@ -150,6 +150,7 @@ export function buildTablePreviewModel(input) {
   ];
 
   const qualitySummary = buildQualitySummary(dataQualityIssues);
+  const userVisibleIssues = buildUserVisibleIssues(dataQualityIssues);
   const summary = buildSummary(safeValues, rowDiagnostics, calculationBlocks, bannerStructure);
 
   // Flat warnings array — a convenience alias for UI compatibility.
@@ -167,6 +168,7 @@ export function buildTablePreviewModel(input) {
     bannerStructure,
     dataQualityIssues,
     qualitySummary,
+    userVisibleIssues,
     summary,
     warnings,
   };
@@ -1390,6 +1392,34 @@ function buildQualitySummary(issues) {
     infoCount,
     hasBlockingIssues: criticalCount > 0,
   };
+}
+
+function buildUserVisibleIssues(issues) {
+  return [...(issues || [])]
+    .filter((issue) => issue?.severity === "critical" || issue?.severity === "warning")
+    .sort((left, right) => {
+      const severityRank = { critical: 0, warning: 1 };
+      const severityDelta =
+        (severityRank[left.severity] ?? Number.MAX_SAFE_INTEGER) -
+        (severityRank[right.severity] ?? Number.MAX_SAFE_INTEGER);
+      if (severityDelta !== 0) {
+        return severityDelta;
+      }
+
+      const leftRow = left.rowIndex ?? Number.MAX_SAFE_INTEGER;
+      const rightRow = right.rowIndex ?? Number.MAX_SAFE_INTEGER;
+      if (leftRow !== rightRow) {
+        return leftRow - rightRow;
+      }
+
+      const leftCol = left.columnIndex ?? Number.MAX_SAFE_INTEGER;
+      const rightCol = right.columnIndex ?? Number.MAX_SAFE_INTEGER;
+      if (leftCol !== rightCol) {
+        return leftCol - rightCol;
+      }
+
+      return String(left.code || "").localeCompare(String(right.code || ""));
+    });
 }
 
 // ─── Summary ───────────────────────────────────────────────────────────────
