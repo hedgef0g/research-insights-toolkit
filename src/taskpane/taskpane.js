@@ -1262,80 +1262,158 @@ function setCheckMessage(message) {
   }
 }
 
-async function runTableInventory() {
-  await Excel.run(async (context) => {
-    const worksheet = context.workbook.worksheets.getActiveWorksheet();
-    worksheet.load("name");
+function getInventoryCandidateStatusLabel(candidateStatus) {
+  if (candidateStatus === "available") {
+    return "Кандидат — рекомендуется «Проверить таблицу»";
+  }
 
-    const usedRange = worksheet.getUsedRangeOrNullObject();
-    usedRange.load(["isNullObject", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+  if (candidateStatus === "uncertain") {
+    return "Кандидат (неопределён) — требует «Проверить таблицу»";
+  }
 
-    await context.sync();
+  return "Не опознан как таблица RIT";
+}
 
-    if (usedRange.isNullObject) {
-      setInventoryMessage("Лист пуст. Таблицы не найдены.");
-      return;
-    }
+function formatInventoryItemLines(item, index) {
+  const lines = [];
+  const header = item.title ? `${index}. ${item.title} — ${item.rangeAddress}` : `${index}. ${item.rangeAddress}`;
 
-    const cellCount = usedRange.rowCount * usedRange.columnCount;
-    if (cellCount > SCAN_CELL_LIMIT) {
-      setInventoryMessage(
-        `Лист слишком большой для сканирования (${usedRange.rowCount} стр. × ${usedRange.columnCount} кол. = ${cellCount} ячеек, лимит: ${SCAN_CELL_LIMIT}).\nИспользуйте «Проверить таблицу» с выделенным диапазоном.`
-      );
-      return;
-    }
+  lines.push(header);
+  lines.push(`   ${item.rowCount} строк, ${item.columnCount} колонок.`);
 
-    usedRange.load("values");
-    await context.sync();
+  if (item.previewSummary) {
+    lines.push(`   ${item.previewSummary}.`);
+  }
 
-    const items = scanWorksheetForTables({
-      values: usedRange.values,
-      usedRangeRowOffset: usedRange.rowIndex,
-      usedRangeColOffset: usedRange.columnIndex,
-      sheetName: worksheet.name,
-    });
+  const warnParts = [];
+  if (item.criticalCount > 0) warnParts.push(`Критических: ${item.criticalCount}`);
+  if (item.warningsCount > 0) warnParts.push(`Предупреждений: ${item.warningsCount}`);
+  if (warnParts.length > 0) lines.push(`   ${warnParts.join(". ")}.`);
 
-    if (items.length === 0) {
-      setInventoryMessage("Таблицы не найдены. RIT не обнаружил блоков с данными на этом листе.");
-      return;
-    }
+  // candidateStatus replaces the former "Значимость: да/нет" line.
+  // Inventory is a candidate finder only; Check Table is the authoritative step.
+  lines.push(`   ${getInventoryCandidateStatusLabel(item.candidateStatus)}.`);
 
-    const lines = [`Найдено таблиц: ${items.length}.`, ""];
+  if (item.candidateNotes && item.candidateNotes.length > 0) {
+    lines.push(`   [${item.candidateNotes.join("; ")}]`);
+  }
 
-    items.forEach((item, idx) => {
-      const header = item.title
-        ? `${idx + 1}. ${item.title} — ${item.rangeAddress}`
-        : `${idx + 1}. ${item.rangeAddress}`;
-      lines.push(header);
-      lines.push(`   ${item.rowCount} строк, ${item.columnCount} колонок.`);
+  return lines;
+}
 
-      if (item.previewSummary) {
-        lines.push(`   ${item.previewSummary}.`);
-      }
+function formatWorkbookInventoryMessage({ scannedSheets, sheetResults, skippedSheets }) {
+  const totalCandidates = sheetResults.reduce((sum, sheetResult) => sum + sheetResult.items.length, 0);
+  const lines = [
+    `Таблиц в книге: ${totalCandidates}.`,
+    `Листов с кандидатами: ${sheetResults.length}.`,
+    `Просканировано листов: ${scannedSheets}.`,
+  ];
 
-      const warnParts = [];
-      if (item.criticalCount > 0) warnParts.push(`Критических: ${item.criticalCount}`);
-      if (item.warningsCount > 0) warnParts.push(`Предупреждений: ${item.warningsCount}`);
-      if (warnParts.length > 0) lines.push(`   ${warnParts.join(". ")}.`);
+  if (totalCandidates === 0) {
+    lines.push("");
+    lines.push("RIT не обнаружил в книге блоков данных, похожих на таблицы для проверки.");
+  }
 
-      // candidateStatus replaces the former "Значимость: да/нет" line.
-      // Inventory is a candidate finder only; Check Table is the authoritative step.
-      const statusLabel =
-        item.candidateStatus === "available"
-          ? "Кандидат — рекомендуется «Проверить таблицу»"
-          : item.candidateStatus === "uncertain"
-          ? "Кандидат (неопределён) — требует «Проверить таблицу»"
-          : "Не опознан как таблица RIT";
-      lines.push(`   ${statusLabel}.`);
+  for (const sheetResult of sheetResults) {
+    lines.push("");
+    lines.push(`Лист: ${sheetResult.sheetName}`);
 
-      if (item.candidateNotes && item.candidateNotes.length > 0) {
-        lines.push(`   [${item.candidateNotes.join("; ")}]`);
-      }
-
+    sheetResult.items.forEach((item, index) => {
+      lines.push(...formatInventoryItemLines(item, index + 1));
       lines.push("");
     });
 
-    setInventoryMessage(lines.join("\n").trimEnd());
+    if (lines[lines.length - 1] === "") {
+      lines.pop();
+    }
+  }
+
+  if (skippedSheets.length > 0) {
+    lines.push("");
+    lines.push("Пропущенные листы:");
+
+    skippedSheets.forEach((sheet) => {
+      if (sheet.reason === "empty") {
+        lines.push(`- ${sheet.sheetName}: пустой лист.`);
+        return;
+      }
+
+      lines.push(
+        `- ${sheet.sheetName}: слишком большой для сканирования (${sheet.rowCount} стр. × ${sheet.columnCount} кол. = ${sheet.cellCount} ячеек, лимит: ${SCAN_CELL_LIMIT}).`
+      );
+    });
+  }
+
+  lines.push("");
+  lines.push("Table Inventory — это только поиск кандидатов. Для проверки используйте «Проверить таблицу».");
+
+  return lines.join("\n").trimEnd();
+}
+
+async function runTableInventory() {
+  await Excel.run(async (context) => {
+    const worksheets = context.workbook.worksheets;
+    worksheets.load("items/name");
+
+    await context.sync();
+
+    const worksheetEntries = worksheets.items.map((worksheet) => {
+      const usedRange = worksheet.getUsedRangeOrNullObject();
+      usedRange.load(["isNullObject", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+
+      return { worksheet, usedRange };
+    });
+
+    await context.sync();
+
+    const scannedEntries = [];
+    const skippedSheets = [];
+
+    for (const entry of worksheetEntries) {
+      const { worksheet, usedRange } = entry;
+
+      if (usedRange.isNullObject) {
+        skippedSheets.push({ sheetName: worksheet.name, reason: "empty" });
+        continue;
+      }
+
+      const cellCount = usedRange.rowCount * usedRange.columnCount;
+      if (cellCount > SCAN_CELL_LIMIT) {
+        skippedSheets.push({
+          sheetName: worksheet.name,
+          reason: "tooLarge",
+          rowCount: usedRange.rowCount,
+          columnCount: usedRange.columnCount,
+          cellCount,
+        });
+        continue;
+      }
+
+      usedRange.load("values");
+      scannedEntries.push(entry);
+    }
+
+    await context.sync();
+
+    const sheetResults = scannedEntries
+      .map(({ worksheet, usedRange }) => ({
+        sheetName: worksheet.name,
+        items: scanWorksheetForTables({
+          values: usedRange.values,
+          usedRangeRowOffset: usedRange.rowIndex,
+          usedRangeColOffset: usedRange.columnIndex,
+          sheetName: worksheet.name,
+        }),
+      }))
+      .filter((sheetResult) => sheetResult.items.length > 0);
+
+    setInventoryMessage(
+      formatWorkbookInventoryMessage({
+        scannedSheets: scannedEntries.length,
+        sheetResults,
+        skippedSheets,
+      })
+    );
   });
 }
 
