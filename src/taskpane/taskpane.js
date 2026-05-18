@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) Microsoft Corporation. All rights reserved. Licensed under the MIT license.
  * See LICENSE in the project root for license information.
  */
@@ -32,6 +32,11 @@ import { writeCellResultsToSelectedRange, resolveNumericOutput } from "../core/e
 
 import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core/banner-detector";
 
+import { normalizeSelectedRange } from "../core/range-normalizer";
+
+import { interpretSelectedRange, detectLeadingEmptyColumns } from "./selected-range-interpreter";
+
+
 const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
   "GLOBAL_TOTAL_USED",
   "BANNER_AUTO_PREVIOUS_COLUMN_APPLIED",
@@ -43,7 +48,7 @@ const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
 ]);
 
 const SELECTED_RANGE_GUARDRAIL_WARNING_TEXT =
-  "Похоже, вы выделили лейблы строк или шапку вместе с данными. Сейчас RIT ожидает выделение только числовой части таблицы.";
+  "РџРѕС…РѕР¶Рµ, РІС‹ РІС‹РґРµР»РёР»Рё Р»РµР№Р±Р»С‹ СЃС‚СЂРѕРє РёР»Рё С€Р°РїРєСѓ РІРјРµСЃС‚Рµ СЃ РґР°РЅРЅС‹РјРё. РЎРµР№С‡Р°СЃ RIT РѕР¶РёРґР°РµС‚ РІС‹РґРµР»РµРЅРёРµ С‚РѕР»СЊРєРѕ С‡РёСЃР»РѕРІРѕР№ С‡Р°СЃС‚Рё С‚Р°Р±Р»РёС†С‹.";
 
 function formatBannerUserMessages(bannerStructure) {
   if (!bannerStructure || !bannerStructure.messages) {
@@ -62,7 +67,7 @@ function formatBannerUserMessages(bannerStructure) {
     return visibleMessages[0].text;
   }
 
-  return ["Сообщения:", ...visibleMessages.map((message) => `- ${message.text}`)].join("\n");
+  return ["РЎРѕРѕР±С‰РµРЅРёСЏ:", ...visibleMessages.map((message) => `- ${message.text}`)].join("\n");
 }
 
 function formatSelectedRangeGuardrailMessages(warnings) {
@@ -76,7 +81,7 @@ function formatSelectedRangeGuardrailMessages(warnings) {
     return uniqueTexts[0];
   }
 
-  return ["Предупреждения:", ...uniqueTexts.map((text) => `- ${text}`)].join("\n");
+  return ["РџСЂРµРґСѓРїСЂРµР¶РґРµРЅРёСЏ:", ...uniqueTexts.map((text) => `- ${text}`)].join("\n");
 }
 
 function appendSelectedRangeGuardrailMessages(statusMessages, warnings) {
@@ -113,7 +118,7 @@ function formatBannerUserMessagesExcludingCodes(bannerStructure, excludedCodes =
     return visibleMessages[0].text;
   }
 
-  return ["Сообщения:", ...visibleMessages.map((message) => `- ${message.text}`)].join("\n");
+  return ["РЎРѕРѕР±С‰РµРЅРёСЏ:", ...visibleMessages.map((message) => `- ${message.text}`)].join("\n");
 }
 
 const LOCAL_SETTINGS_STORAGE_KEY = "rit.settings.v1";
@@ -217,67 +222,67 @@ const DEFAULT_CALCULATION_SETTINGS = {
 
 const SETTINGS_TOOLTIPS = {
   "confidence-level":
-    "Выберите уровень значимости для статистических тестов. Чем выше уровень, тем строже проверка и тем меньше отличий будут признаны значимыми.",
+    "Р’С‹Р±РµСЂРёС‚Рµ СѓСЂРѕРІРµРЅСЊ Р·РЅР°С‡РёРјРѕСЃС‚Рё РґР»СЏ СЃС‚Р°С‚РёСЃС‚РёС‡РµСЃРєРёС… С‚РµСЃС‚РѕРІ. Р§РµРј РІС‹С€Рµ СѓСЂРѕРІРµРЅСЊ, С‚РµРј СЃС‚СЂРѕР¶Рµ РїСЂРѕРІРµСЂРєР° Рё С‚РµРј РјРµРЅСЊС€Рµ РѕС‚Р»РёС‡РёР№ Р±СѓРґСѓС‚ РїСЂРёР·РЅР°РЅС‹ Р·РЅР°С‡РёРјС‹РјРё.",
 
   "one-tailed-test":
-    "Использовать односторонний тест вместо двустороннего. При том же уровне значимости такой тест легче находит отличия, но предполагает проверку различия в одном направлении.",
+    "РСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РѕРґРЅРѕСЃС‚РѕСЂРѕРЅРЅРёР№ С‚РµСЃС‚ РІРјРµСЃС‚Рѕ РґРІСѓСЃС‚РѕСЂРѕРЅРЅРµРіРѕ. РџСЂРё С‚РѕРј Р¶Рµ СѓСЂРѕРІРЅРµ Р·РЅР°С‡РёРјРѕСЃС‚Рё С‚Р°РєРѕР№ С‚РµСЃС‚ Р»РµРіС‡Рµ РЅР°С…РѕРґРёС‚ РѕС‚Р»РёС‡РёСЏ, РЅРѕ РїСЂРµРґРїРѕР»Р°РіР°РµС‚ РїСЂРѕРІРµСЂРєСѓ СЂР°Р·Р»РёС‡РёСЏ РІ РѕРґРЅРѕРј РЅР°РїСЂР°РІР»РµРЅРёРё.",
 
   "round-cell-values":
-    "Округлять отображаемые значения перед добавлением маркеров. Расчёты при этом выполняются по исходным очищенным значениям, а не по округлённым.",
+    "РћРєСЂСѓРіР»СЏС‚СЊ РѕС‚РѕР±СЂР°Р¶Р°РµРјС‹Рµ Р·РЅР°С‡РµРЅРёСЏ РїРµСЂРµРґ РґРѕР±Р°РІР»РµРЅРёРµРј РјР°СЂРєРµСЂРѕРІ. Р Р°СЃС‡С‘С‚С‹ РїСЂРё СЌС‚РѕРј РІС‹РїРѕР»РЅСЏСЋС‚СЃСЏ РїРѕ РёСЃС…РѕРґРЅС‹Рј РѕС‡РёС‰РµРЅРЅС‹Рј Р·РЅР°С‡РµРЅРёСЏРј, Р° РЅРµ РїРѕ РѕРєСЂСѓРіР»С‘РЅРЅС‹Рј.",
 
   "compare-with-previous-column":
-    "Сравнивать каждую колонку только с колонкой слева: колонка 2 с колонкой 1, колонка 3 с колонкой 2 и так далее. Вместо букв используются стрелки вверх или вниз.",
+    "РЎСЂР°РІРЅРёРІР°С‚СЊ РєР°Р¶РґСѓСЋ РєРѕР»РѕРЅРєСѓ С‚РѕР»СЊРєРѕ СЃ РєРѕР»РѕРЅРєРѕР№ СЃР»РµРІР°: РєРѕР»РѕРЅРєР° 2 СЃ РєРѕР»РѕРЅРєРѕР№ 1, РєРѕР»РѕРЅРєР° 3 СЃ РєРѕР»РѕРЅРєРѕР№ 2 Рё С‚Р°Рє РґР°Р»РµРµ. Р’РјРµСЃС‚Рѕ Р±СѓРєРІ РёСЃРїРѕР»СЊР·СѓСЋС‚СЃСЏ СЃС‚СЂРµР»РєРё РІРІРµСЂС… РёР»Рё РІРЅРёР·.",
 
   "apply-previous-column-fill":
-    "Применять заливку к ячейкам со значимыми отличиями в режиме сравнения с предыдущей колонкой. Для роста используется обычная заливка значимости, для снижения — цвет “ниже Total”.",
+    "РџСЂРёРјРµРЅСЏС‚СЊ Р·Р°Р»РёРІРєСѓ Рє СЏС‡РµР№РєР°Рј СЃРѕ Р·РЅР°С‡РёРјС‹РјРё РѕС‚Р»РёС‡РёСЏРјРё РІ СЂРµР¶РёРјРµ СЃСЂР°РІРЅРµРЅРёСЏ СЃ РїСЂРµРґС‹РґСѓС‰РµР№ РєРѕР»РѕРЅРєРѕР№. Р”Р»СЏ СЂРѕСЃС‚Р° РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РѕР±С‹С‡РЅР°СЏ Р·Р°Р»РёРІРєР° Р·РЅР°С‡РёРјРѕСЃС‚Рё, РґР»СЏ СЃРЅРёР¶РµРЅРёСЏ вЂ” С†РІРµС‚ вЂњРЅРёР¶Рµ TotalвЂќ.",
 
   "write-banner-letters":
-    "Добавлять буквенные индексы колонок в строку над выделенным диапазоном. Например: Segment 1 (a), Segment 2 (b). В режиме учёта структуры баннера буквы ставятся локально внутри групп.",
+    "Р”РѕР±Р°РІР»СЏС‚СЊ Р±СѓРєРІРµРЅРЅС‹Рµ РёРЅРґРµРєСЃС‹ РєРѕР»РѕРЅРѕРє РІ СЃС‚СЂРѕРєСѓ РЅР°Рґ РІС‹РґРµР»РµРЅРЅС‹Рј РґРёР°РїР°Р·РѕРЅРѕРј. РќР°РїСЂРёРјРµСЂ: Segment 1 (a), Segment 2 (b). Р’ СЂРµР¶РёРјРµ СѓС‡С‘С‚Р° СЃС‚СЂСѓРєС‚СѓСЂС‹ Р±Р°РЅРЅРµСЂР° Р±СѓРєРІС‹ СЃС‚Р°РІСЏС‚СЃСЏ Р»РѕРєР°Р»СЊРЅРѕ РІРЅСѓС‚СЂРё РіСЂСѓРїРї.",
 
   "respect-banner-structure":
-    "Анализировать структуру баннера над выделенным диапазоном. Это позволяет сравнивать колонки только внутри групп, определять локальные и глобальные Total, а также распознавать волновые баннеры.",
+    "РђРЅР°Р»РёР·РёСЂРѕРІР°С‚СЊ СЃС‚СЂСѓРєС‚СѓСЂСѓ Р±Р°РЅРЅРµСЂР° РЅР°Рґ РІС‹РґРµР»РµРЅРЅС‹Рј РґРёР°РїР°Р·РѕРЅРѕРј. Р­С‚Рѕ РїРѕР·РІРѕР»СЏРµС‚ СЃСЂР°РІРЅРёРІР°С‚СЊ РєРѕР»РѕРЅРєРё С‚РѕР»СЊРєРѕ РІРЅСѓС‚СЂРё РіСЂСѓРїРї, РѕРїСЂРµРґРµР»СЏС‚СЊ Р»РѕРєР°Р»СЊРЅС‹Рµ Рё РіР»РѕР±Р°Р»СЊРЅС‹Рµ Total, Р° С‚Р°РєР¶Рµ СЂР°СЃРїРѕР·РЅР°РІР°С‚СЊ РІРѕР»РЅРѕРІС‹Рµ Р±Р°РЅРЅРµСЂС‹.",
 
   "auto-detect-wave-banners":
-    "Автоматически распознавать волновые группы в баннере, например Wave, Period, Волна, Период, и применять к ним сравнение с предыдущей колонкой. Обычные группы при этом продолжают сравниваться внутри группы обычным способом.",
+    "РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРё СЂР°СЃРїРѕР·РЅР°РІР°С‚СЊ РІРѕР»РЅРѕРІС‹Рµ РіСЂСѓРїРїС‹ РІ Р±Р°РЅРЅРµСЂРµ, РЅР°РїСЂРёРјРµСЂ Wave, Period, Р’РѕР»РЅР°, РџРµСЂРёРѕРґ, Рё РїСЂРёРјРµРЅСЏС‚СЊ Рє РЅРёРј СЃСЂР°РІРЅРµРЅРёРµ СЃ РїСЂРµРґС‹РґСѓС‰РµР№ РєРѕР»РѕРЅРєРѕР№. РћР±С‹С‡РЅС‹Рµ РіСЂСѓРїРїС‹ РїСЂРё СЌС‚РѕРј РїСЂРѕРґРѕР»Р¶Р°СЋС‚ СЃСЂР°РІРЅРёРІР°С‚СЊСЃСЏ РІРЅСѓС‚СЂРё РіСЂСѓРїРїС‹ РѕР±С‹С‡РЅС‹Рј СЃРїРѕСЃРѕР±РѕРј.",
 
   "labels-on-left-side":
-    "Искать лейблы строк не рядом с выделенным диапазоном, а в самых левых колонках листа. Полезно для широких таблиц, где данные выделены справа, а названия строк находятся далеко слева.",
+    "РСЃРєР°С‚СЊ Р»РµР№Р±Р»С‹ СЃС‚СЂРѕРє РЅРµ СЂСЏРґРѕРј СЃ РІС‹РґРµР»РµРЅРЅС‹Рј РґРёР°РїР°Р·РѕРЅРѕРј, Р° РІ СЃР°РјС‹С… Р»РµРІС‹С… РєРѕР»РѕРЅРєР°С… Р»РёСЃС‚Р°. РџРѕР»РµР·РЅРѕ РґР»СЏ С€РёСЂРѕРєРёС… С‚Р°Р±Р»РёС†, РіРґРµ РґР°РЅРЅС‹Рµ РІС‹РґРµР»РµРЅС‹ СЃРїСЂР°РІР°, Р° РЅР°Р·РІР°РЅРёСЏ СЃС‚СЂРѕРє РЅР°С…РѕРґСЏС‚СЃСЏ РґР°Р»РµРєРѕ СЃР»РµРІР°.",
 
   "compare-only-with-total":
-    "Сравнивать каждую колонку только с колонкой Total. Обычные попарные сравнения между сегментами выполняться не будут.",
+    "РЎСЂР°РІРЅРёРІР°С‚СЊ РєР°Р¶РґСѓСЋ РєРѕР»РѕРЅРєСѓ С‚РѕР»СЊРєРѕ СЃ РєРѕР»РѕРЅРєРѕР№ Total. РћР±С‹С‡РЅС‹Рµ РїРѕРїР°СЂРЅС‹Рµ СЃСЂР°РІРЅРµРЅРёСЏ РјРµР¶РґСѓ СЃРµРіРјРµРЅС‚Р°РјРё РІС‹РїРѕР»РЅСЏС‚СЊСЃСЏ РЅРµ Р±СѓРґСѓС‚.",
 
   "exclude-total-from-comparisons":
-    "Исключить Total из расчётов. Total не будет использоваться как база сравнения и не будет сравниваться с другими колонками.",
+    "РСЃРєР»СЋС‡РёС‚СЊ Total РёР· СЂР°СЃС‡С‘С‚РѕРІ. Total РЅРµ Р±СѓРґРµС‚ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊСЃСЏ РєР°Рє Р±Р°Р·Р° СЃСЂР°РІРЅРµРЅРёСЏ Рё РЅРµ Р±СѓРґРµС‚ СЃСЂР°РІРЅРёРІР°С‚СЊСЃСЏ СЃ РґСЂСѓРіРёРјРё РєРѕР»РѕРЅРєР°РјРё.",
 
   "first-column-is-total":
-    "Считать первую колонку выделенного диапазона Total. Она будет использоваться как референс для сравнения с остальными колонками.",
+    "РЎС‡РёС‚Р°С‚СЊ РїРµСЂРІСѓСЋ РєРѕР»РѕРЅРєСѓ РІС‹РґРµР»РµРЅРЅРѕРіРѕ РґРёР°РїР°Р·РѕРЅР° Total. РћРЅР° Р±СѓРґРµС‚ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊСЃСЏ РєР°Рє СЂРµС„РµСЂРµРЅСЃ РґР»СЏ СЃСЂР°РІРЅРµРЅРёСЏ СЃ РѕСЃС‚Р°Р»СЊРЅС‹РјРё РєРѕР»РѕРЅРєР°РјРё.",
 
   "total-in-each-banner":
-    "Считать, что Total находится внутри каждой группы баннера. При включённом учёте структуры баннера расположение Total определяется автоматически.",
+    "РЎС‡РёС‚Р°С‚СЊ, С‡С‚Рѕ Total РЅР°С…РѕРґРёС‚СЃСЏ РІРЅСѓС‚СЂРё РєР°Р¶РґРѕР№ РіСЂСѓРїРїС‹ Р±Р°РЅРЅРµСЂР°. РџСЂРё РІРєР»СЋС‡С‘РЅРЅРѕРј СѓС‡С‘С‚Рµ СЃС‚СЂСѓРєС‚СѓСЂС‹ Р±Р°РЅРЅРµСЂР° СЂР°СЃРїРѕР»РѕР¶РµРЅРёРµ Total РѕРїСЂРµРґРµР»СЏРµС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.",
 
   "significant-fill-color":
-    "Цвет заливки для ячеек, которые статистически значимо выше другой сравниваемой ячейки или Total.",
+    "Р¦РІРµС‚ Р·Р°Р»РёРІРєРё РґР»СЏ СЏС‡РµРµРє, РєРѕС‚РѕСЂС‹Рµ СЃС‚Р°С‚РёСЃС‚РёС‡РµСЃРєРё Р·РЅР°С‡РёРјРѕ РІС‹С€Рµ РґСЂСѓРіРѕР№ СЃСЂР°РІРЅРёРІР°РµРјРѕР№ СЏС‡РµР№РєРё РёР»Рё Total.",
 
   "lower-than-total-fill-color":
-    "Цвет заливки для ячеек, которые статистически значимо ниже Total или ниже предыдущей колонки в режиме сравнения с предыдущей колонкой.",
+    "Р¦РІРµС‚ Р·Р°Р»РёРІРєРё РґР»СЏ СЏС‡РµРµРє, РєРѕС‚РѕСЂС‹Рµ СЃС‚Р°С‚РёСЃС‚РёС‡РµСЃРєРё Р·РЅР°С‡РёРјРѕ РЅРёР¶Рµ Total РёР»Рё РЅРёР¶Рµ РїСЂРµРґС‹РґСѓС‰РµР№ РєРѕР»РѕРЅРєРё РІ СЂРµР¶РёРјРµ СЃСЂР°РІРЅРµРЅРёСЏ СЃ РїСЂРµРґС‹РґСѓС‰РµР№ РєРѕР»РѕРЅРєРѕР№.",
 
   "fill-only-total-comparisons":
-    "Применять обычную зелёную заливку только к ячейкам, которые значимо выше Total. Отличия между обычными сегментами будут отмечаться буквами, но без зелёной заливки.",
+    "РџСЂРёРјРµРЅСЏС‚СЊ РѕР±С‹С‡РЅСѓСЋ Р·РµР»С‘РЅСѓСЋ Р·Р°Р»РёРІРєСѓ С‚РѕР»СЊРєРѕ Рє СЏС‡РµР№РєР°Рј, РєРѕС‚РѕСЂС‹Рµ Р·РЅР°С‡РёРјРѕ РІС‹С€Рµ Total. РћС‚Р»РёС‡РёСЏ РјРµР¶РґСѓ РѕР±С‹С‡РЅС‹РјРё СЃРµРіРјРµРЅС‚Р°РјРё Р±СѓРґСѓС‚ РѕС‚РјРµС‡Р°С‚СЊСЃСЏ Р±СѓРєРІР°РјРё, РЅРѕ Р±РµР· Р·РµР»С‘РЅРѕР№ Р·Р°Р»РёРІРєРё.",
 
   "exclude-small-bases":
-    "Исключать из расчётов колонки, где база меньше заданного порога. Такие колонки не участвуют в статистических сравнениях и получают отдельную заливку.",
+    "РСЃРєР»СЋС‡Р°С‚СЊ РёР· СЂР°СЃС‡С‘С‚РѕРІ РєРѕР»РѕРЅРєРё, РіРґРµ Р±Р°Р·Р° РјРµРЅСЊС€Рµ Р·Р°РґР°РЅРЅРѕРіРѕ РїРѕСЂРѕРіР°. РўР°РєРёРµ РєРѕР»РѕРЅРєРё РЅРµ СѓС‡Р°СЃС‚РІСѓСЋС‚ РІ СЃС‚Р°С‚РёСЃС‚РёС‡РµСЃРєРёС… СЃСЂР°РІРЅРµРЅРёСЏС… Рё РїРѕР»СѓС‡Р°СЋС‚ РѕС‚РґРµР»СЊРЅСѓСЋ Р·Р°Р»РёРІРєСѓ.",
 
   "small-base-threshold":
-    "Минимальный допустимый размер базы. Если база колонки меньше этого значения, колонка исключается из расчётов.",
+    "РњРёРЅРёРјР°Р»СЊРЅС‹Р№ РґРѕРїСѓСЃС‚РёРјС‹Р№ СЂР°Р·РјРµСЂ Р±Р°Р·С‹. Р•СЃР»Рё Р±Р°Р·Р° РєРѕР»РѕРЅРєРё РјРµРЅСЊС€Рµ СЌС‚РѕРіРѕ Р·РЅР°С‡РµРЅРёСЏ, РєРѕР»РѕРЅРєР° РёСЃРєР»СЋС‡Р°РµС‚СЃСЏ РёР· СЂР°СЃС‡С‘С‚РѕРІ.",
 
   "small-base-fill-color":
-    "Цвет заливки для колонок с маленькой базой. Эта заливка имеет самый высокий приоритет и перекрывает остальные типы заливки.",
+    "Р¦РІРµС‚ Р·Р°Р»РёРІРєРё РґР»СЏ РєРѕР»РѕРЅРѕРє СЃ РјР°Р»РµРЅСЊРєРѕР№ Р±Р°Р·РѕР№. Р­С‚Р° Р·Р°Р»РёРІРєР° РёРјРµРµС‚ СЃР°РјС‹Р№ РІС‹СЃРѕРєРёР№ РїСЂРёРѕСЂРёС‚РµС‚ Рё РїРµСЂРµРєСЂС‹РІР°РµС‚ РѕСЃС‚Р°Р»СЊРЅС‹Рµ С‚РёРїС‹ Р·Р°Р»РёРІРєРё.",
 
   "settings-storage-mode":
-    "Выберите, сохранять ли настройки панели. Локальное сохранение работает только на этом устройстве и в этом браузере/Excel WebView.",
+    "Р’С‹Р±РµСЂРёС‚Рµ, СЃРѕС…СЂР°РЅСЏС‚СЊ Р»Рё РЅР°СЃС‚СЂРѕР№РєРё РїР°РЅРµР»Рё. Р›РѕРєР°Р»СЊРЅРѕРµ СЃРѕС…СЂР°РЅРµРЅРёРµ СЂР°Р±РѕС‚Р°РµС‚ С‚РѕР»СЊРєРѕ РЅР° СЌС‚РѕРј СѓСЃС‚СЂРѕР№СЃС‚РІРµ Рё РІ СЌС‚РѕРј Р±СЂР°СѓР·РµСЂРµ/Excel WebView.",
 
   "reset-settings":
-    "Сбросить все настройки к значениям по умолчанию и удалить локально сохранённые настройки.",
+    "РЎР±СЂРѕСЃРёС‚СЊ РІСЃРµ РЅР°СЃС‚СЂРѕР№РєРё Рє Р·РЅР°С‡РµРЅРёСЏРј РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ Рё СѓРґР°Р»РёС‚СЊ Р»РѕРєР°Р»СЊРЅРѕ СЃРѕС…СЂР°РЅС‘РЅРЅС‹Рµ РЅР°СЃС‚СЂРѕР№РєРё.",
 };
 
 const ENABLE_BANNER_SPAN_DIAGNOSTICS = false;
@@ -574,16 +579,9 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    selectedRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    selectedRange.load(["address", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
     await context.sync();
-
-    if (calculationSettings.writeBannerLetters && selectedRange.rowIndex === 0) {
-      outputElement.textContent =
-        "Данные расположены в первой строке. Добавьте строку над выделенным массивом и запустите расчёт повторно.";
-
-      return;
-    }
 
     if (
       calculationSettings.compareWithPreviousColumn &&
@@ -597,9 +595,6 @@ async function runSignificanceFromSelection() {
 
     selectedRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
-    selectedRange.format.horizontalAlignment = "Center";
-    selectedRange.format.verticalAlignment = "Center";
-
     await context.sync();
 
     const selectedValues = selectedRange.values;
@@ -610,25 +605,70 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
-    const selectedRangeGuardrailWarnings = detectSelectedRangeGuardrails(selectedText, cleanedValues);
+    const interpretation = await interpretSelectedRange(
+      context,
+      selectedRange,
+      selectedValues,
+      selectedText,
+      calculationSettings
+    );
 
-    selectedRange.values = cleanedValues;
+    if (interpretation.state === "blocked") {
+      const codes =
+        interpretation.blockingReasons && interpretation.blockingReasons.length > 0
+          ? ` [${interpretation.blockingReasons.join(", ")}]`
+          : "";
+      setStatusMessage(`${interpretation.blockingMessage}${codes}`);
+      return;
+    }
 
-    selectedRange.format.font.bold = false;
-    selectedRange.format.fill.clear();
-    selectedRange.format.horizontalAlignment = "Center";
-    selectedRange.format.verticalAlignment = "Center";
+    const {
+      valuesForCalculation,
+      textForCalculation,
+      leftLabelValues,
+      normalizationStatusLines,
+      bannerContext: interpretedBannerContext,
+    } = interpretation;
+
+    const selectedRangeGuardrailWarnings = interpretation.selectedRangeGuardrailWarnings;
+    let { writeTargetRange } = interpretation;
+
+    if (
+      !valuesForCalculation ||
+      valuesForCalculation.length < 2 ||
+      !valuesForCalculation[0] ||
+      valuesForCalculation[0].length < 2
+    ) {
+      setStatusMessage("Please select at least 2 columns and 2 rows.");
+      return;
+    }
+
+    writeTargetRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
     await context.sync();
 
-    const leftLabelValues = await loadLabelValuesForSelectedRange(
-      context,
-      selectedRange,
-      calculationSettings
-    ); // Labels located 1-2 columns to the left of the selected data.
+    const targetStartRowIndex = writeTargetRange.rowIndex;
 
-    const detectionResult = detectMetricRowsFromLeftLabels(cleanedValues, leftLabelValues); // Row type diagnostics based on left-side labels.
+    if (calculationSettings.writeBannerLetters && targetStartRowIndex === 0) {
+      outputElement.textContent =
+        "Данные расположены в первой строке. Добавьте строку над выделенным массивом и запустите расчёт повторно.";
+
+      return;
+    }
+
+    writeTargetRange.values = valuesForCalculation;
+
+    writeTargetRange.format.font.bold = false;
+    writeTargetRange.format.fill.clear();
+    writeTargetRange.format.horizontalAlignment = "Center";
+    writeTargetRange.format.verticalAlignment = "Center";
+
+    await context.sync();
+
+    const detectionResult = detectMetricRowsFromLeftLabels(
+      valuesForCalculation,
+      leftLabelValues
+    ); // Row type diagnostics based on left-side labels.
 
     const calculationBlocks = buildCalculationBlocks(detectionResult); // List of metric blocks to calculate.
 
@@ -645,34 +685,26 @@ async function runSignificanceFromSelection() {
     let bannerStructure = null;
 
     if (calculationSettings.respectBannerStructure) {
-      const bannerContext = await loadBannerContextForSelectedRange(
-        context,
-        selectedRange,
-        calculationSettings
-      );
+      // interpretedBannerContext is already sanitized by selected-range-interpreter
+      // (all RIT markers stripped from banner rows) so detection is idempotent
+      // across repeated Runs and Checks.
+      const bannerContext = interpretedBannerContext;
 
       bannerStructure = detectBannerStructure(bannerContext, calculationSettings);
 
       if (bannerContext.messages && bannerContext.messages.length > 0) {
         bannerStructure.messages = [...bannerContext.messages, ...(bannerStructure.messages || [])];
       }
-
-      /** 
-      bannerSpanDiagnostics = await loadBannerSpanDiagnosticsForSelectedRange(
-        context,
-        selectedRange
-      );
-      */
     }
 
     const fullCellResultMatrix = createEmptyCellResultMatrix(
-      cleanedValues.length,
-      cleanedValues[0].length
-    ); // Full-size marker storage matching the selected range.
+      valuesForCalculation.length,
+      valuesForCalculation[0].length
+    ); // Full-size marker storage matching the data body being calculated.
 
     for (const calculationBlock of calculationBlocks) {
       const smallBaseResult = applySmallBaseRulesForCalculationBlock(
-        cleanedValues,
+        valuesForCalculation,
         calculationBlock,
         fullCellResultMatrix,
         calculationSettings
@@ -695,7 +727,7 @@ async function runSignificanceFromSelection() {
       };
 
       const blockResults = calculateBlockResults(
-        cleanedValues,
+        valuesForCalculation,
         calculationBlock,
         blockCalculationSettings
       );
@@ -738,29 +770,49 @@ async function runSignificanceFromSelection() {
     keepMarkersOnlyInAllowedRows(fullCellResultMatrix, allowedMarkerRows);
 
     writeCellResultsToSelectedRange(
-      selectedRange,
-      selectedText,
+      writeTargetRange,
+      textForCalculation,
       fullCellResultMatrix,
       detectionResult,
       calculationSettings
     );
 
     if (calculationSettings.writeBannerLetters) {
+      // Remove any stale RIT markers that a previous run may have written at
+      // label-column positions (left of writeTargetRange).  These linger when
+      // the user re-runs without clearing first after the dataColOffset fix.
+      await clearStaleBannerMarkersLeftOfWriteRange(
+        context,
+        writeTargetRange.worksheet,
+        selectedRange.columnIndex,
+        writeTargetRange.rowIndex,
+        writeTargetRange.columnIndex
+      );
+
       if (calculationSettings.respectBannerStructure && bannerStructure) {
         await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
           context,
-          selectedRange,
+          writeTargetRange,
           bannerStructure,
           calculationSettings
         );
       } else {
-        await writeBannerMarkersAboveSelectedRange(context, selectedRange, calculationSettings);
+        await writeBannerMarkersAboveSelectedRange(
+          context,
+          writeTargetRange,
+          calculationSettings
+        );
       }
     }
 
     await context.sync();
 
     const statusMessages = [`Расчёт выполнен. Обработано блоков: ${calculationBlocks.length}.`];
+
+    if (normalizationStatusLines.length > 0) {
+      statusMessages.push("");
+      statusMessages.push(...normalizationStatusLines);
+    }
 
     const bannerUserMessages = formatBannerUserMessages(bannerStructure);
 
@@ -770,10 +822,13 @@ async function runSignificanceFromSelection() {
     }
 
     setStatusMessage(
-      appendSelectedRangeGuardrailMessages(statusMessages, selectedRangeGuardrailWarnings).join("\n")
+      appendSelectedRangeGuardrailMessages(statusMessages, selectedRangeGuardrailWarnings).join(
+        "\n"
+      )
     );
   });
 }
+
 
 /**
  * Calculates one detected metric block.
@@ -838,26 +893,111 @@ async function clearSignificanceFromSelection() {
   await Excel.run(async (context) => {
     const selectedRange = context.workbook.getSelectedRange();
 
-    selectedRange.load(["values", "numberFormat"]);
+    // Read-only load: needed to decide whether to operate on the whole
+    // selection (strict numeric case) or only on the detected data body
+    // (forgiving full-table case). No writes happen before the target is known.
+    selectedRange.load(["values", "text"]);
 
     await context.sync();
 
     const selectedValues = selectedRange.values;
-    const selectedNumberFormats = selectedRange.numberFormat;
+    const selectedText = selectedRange.text;
+
+    if (
+      !selectedValues ||
+      selectedValues.length < 1 ||
+      !selectedValues[0] ||
+      selectedValues[0].length < 1
+    ) {
+      setStatusMessage("Нет данных в выделенном диапазоне.");
+      return;
+    }
+
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
+    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
+
+    // State 3: broad/full-table-like selection but decomposition failed.
+    // Block and return without mutating anything.
+    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+      const codes =
+        normalized.blockingReasons && normalized.blockingReasons.length > 0
+          ? ` [${normalized.blockingReasons.join(", ")}]`
+          : "";
+      setStatusMessage(`${normalized.blockingMessage}${codes}`);
+      return;
+    }
+
+    // Resolve the clear target:
+    //   - State 1 (pass-through): the original selection is numeric-only.
+    //   - State 2 (normalized):   only the detected data body subrange.
+    let clearTargetRange;
+
+    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
+      const bodyRowCount = normalized.valuesForCalculation.length;
+      let bodyColCount = normalized.valuesForCalculation[0].length;
+      let effectiveClearColOffset = normalized.dataColOffset;
+
+      // Mirror the tertiary strip in interpretSelectedRange State 2: the
+      // normalizer may leave leading all-blank helper columns (e.g. column B
+      // in a mean-only table) inside the normalized body.  Clear must exclude
+      // those same columns so it does not widen the clear target beyond the
+      // real data body.
+      const clearLeadingEmptyCols = detectLeadingEmptyColumns(
+        normalized.textForCalculation
+      );
+      if (clearLeadingEmptyCols > 0) {
+        bodyColCount -= clearLeadingEmptyCols;
+        effectiveClearColOffset += clearLeadingEmptyCols;
+      }
+
+      if (bodyRowCount < 1 || bodyColCount < 1) {
+        setStatusMessage("Нет данных в выделенном диапазоне.");
+        return;
+      }
+
+      clearTargetRange = selectedRange
+        .getCell(normalized.dataRowOffset, effectiveClearColOffset)
+        .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
+    } else {
+      // Pass-through: the selection is a clean numeric-only range.
+      // Detect leading all-blank helper columns and exclude them from the
+      // clear target so that Clear does not remove fill/formatting from helper
+      // cells.  Uses the same detectLeadingEmptyColumns function as Run's
+      // interpretSelectedRange passThrough path.
+      const leadingBlankColsForClear = detectLeadingEmptyColumns(selectedText);
+
+      if (leadingBlankColsForClear > 0) {
+        clearTargetRange = selectedRange
+          .getCell(0, leadingBlankColsForClear)
+          .getResizedRange(
+            selectedRange.rowCount - 1,
+            selectedRange.columnCount - leadingBlankColsForClear - 1
+          );
+      } else {
+        clearTargetRange = selectedRange;
+      }
+    }
+
+    clearTargetRange.load(["values", "numberFormat"]);
+
+    await context.sync();
+
+    const targetValues = clearTargetRange.values;
+    const targetNumberFormats = clearTargetRange.numberFormat;
 
     const nextValues = [];
     const nextNumberFormats = [];
 
-    for (let rowIndex = 0; rowIndex < selectedValues.length; rowIndex++) {
+    for (let rowIndex = 0; rowIndex < targetValues.length; rowIndex++) {
       const valueRow = [];
       const formatRow = [];
 
-      for (let columnIndex = 0; columnIndex < selectedValues[rowIndex].length; columnIndex++) {
-        const rawValue = selectedValues[rowIndex][columnIndex];
+      for (let columnIndex = 0; columnIndex < targetValues[rowIndex].length; columnIndex++) {
+        const rawValue = targetValues[rowIndex][columnIndex];
 
         if (typeof rawValue === "number") {
           valueRow.push(rawValue);
-          formatRow.push(selectedNumberFormats[rowIndex][columnIndex]);
+          formatRow.push(targetNumberFormats[rowIndex][columnIndex]);
           continue;
         }
 
@@ -877,16 +1017,106 @@ async function clearSignificanceFromSelection() {
       nextNumberFormats.push(formatRow);
     }
 
-    selectedRange.numberFormat = nextNumberFormats;
-    selectedRange.values = nextValues;
+    clearTargetRange.numberFormat = nextNumberFormats;
+    clearTargetRange.values = nextValues;
 
-    selectedRange.format.font.bold = false;
-    selectedRange.format.fill.clear();
+    clearTargetRange.format.font.bold = false;
+    clearTargetRange.format.fill.clear();
 
     await context.sync();
 
+    await clearBannerMarkersAboveRange(context, clearTargetRange);
+
     setStatusMessage("Significance markers removed.");
   });
+}
+
+/**
+ * Removes RIT-generated trailing banner significance markers from the visible
+ * banner/header cells above the data body that was just cleared.
+ *
+ * PURPOSE:
+ * Mirrors the Run "mark letters in banner" placement so Clear undoes the same
+ * cells Run wrote into, including sparse / vertically merged banner layouts
+ * where the nearest non-empty cell above receives the marker.
+ *
+ * RULES:
+ * - Scans the row immediately above the data body plus up to
+ *   BANNER_UPPER_SCAN_LIMIT additional rows above, matching Run.
+ * - Removes only trailing markers recognized by getTrailingBannerMarker,
+ *   which restricts matches to single-character significance labels.
+ *   Ordinary parenthesized header text such as "Wave (quarter)",
+ *   "Brand (new)", or "Волна (квартал)" is preserved.
+ * - Never writes to the data body or to the label column.
+ */
+async function clearBannerMarkersAboveRange(context, targetRange) {
+  const BANNER_UPPER_SCAN_LIMIT = 5;
+
+  targetRange.load(["rowIndex", "columnIndex", "columnCount"]);
+
+  await context.sync();
+
+  const targetStartRowIndex = targetRange.rowIndex;
+  const targetStartColumnIndex = targetRange.columnIndex;
+  const targetColumnCount = targetRange.columnCount;
+
+  if (targetStartRowIndex === 0 || targetColumnCount < 1) {
+    return;
+  }
+
+  const totalScanRowCount = Math.min(BANNER_UPPER_SCAN_LIMIT + 1, targetStartRowIndex);
+
+  if (totalScanRowCount < 1) {
+    return;
+  }
+
+  const bannerScanRange = targetRange.worksheet.getRangeByIndexes(
+    targetStartRowIndex - totalScanRowCount,
+    targetStartColumnIndex,
+    totalScanRowCount,
+    targetColumnCount
+  );
+
+  bannerScanRange.load("text");
+
+  await context.sync();
+
+  const bannerTexts = bannerScanRange.text;
+  const cellWriteQueue = [];
+
+  for (let rowOffset = 0; rowOffset < totalScanRowCount; rowOffset++) {
+    const rowTexts = bannerTexts[rowOffset] || [];
+
+    for (let columnIndex = 0; columnIndex < targetColumnCount; columnIndex++) {
+      const currentText = rowTexts[columnIndex];
+
+      if (currentText === null || currentText === undefined || currentText === "") {
+        continue;
+      }
+
+      if (!getTrailingBannerMarker(currentText)) {
+        continue;
+      }
+
+      cellWriteQueue.push({
+        rowIndex: targetStartRowIndex - totalScanRowCount + rowOffset,
+        colIndex: targetStartColumnIndex + columnIndex,
+        text: removeTrailingBannerMarker(currentText),
+      });
+    }
+  }
+
+  if (cellWriteQueue.length === 0) {
+    return;
+  }
+
+  for (const { rowIndex, colIndex, text } of cellWriteQueue) {
+    const cell = targetRange.worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1);
+
+    cell.values = [[text]];
+  }
+
+  await context.sync();
 }
 
 /**
@@ -978,7 +1208,7 @@ async function loadBannerContextForSelectedRange(context, selectedRange, calcula
         {
           severity: MESSAGE_SEVERITY.WARNING,
           code: "BANNER_NO_ROWS_ABOVE_SELECTION",
-          text: "Баннер: над выделенным диапазоном нет строк для анализа.",
+          text: "Р‘Р°РЅРЅРµСЂ: РЅР°Рґ РІС‹РґРµР»РµРЅРЅС‹Рј РґРёР°РїР°Р·РѕРЅРѕРј РЅРµС‚ СЃС‚СЂРѕРє РґР»СЏ Р°РЅР°Р»РёР·Р°.",
         },
       ],
     };
@@ -1061,7 +1291,7 @@ async function loadBannerSpanDiagnosticsForSelectedRange(context, selectedRange)
   if (selectedStartRowIndex === 0) {
     return [
       "Banner span diagnostics:",
-      "- Над выделенным диапазоном нет строк для анализа span-структуры.",
+      "- РќР°Рґ РІС‹РґРµР»РµРЅРЅС‹Рј РґРёР°РїР°Р·РѕРЅРѕРј РЅРµС‚ СЃС‚СЂРѕРє РґР»СЏ Р°РЅР°Р»РёР·Р° span-СЃС‚СЂСѓРєС‚СѓСЂС‹.",
     ].join("\n");
   }
 
@@ -1089,10 +1319,10 @@ async function loadBannerSpanDiagnosticsForSelectedRange(context, selectedRange)
 
   lines.push("Banner span diagnostics:");
   lines.push(
-    `- Диапазон проверки: строки ${firstBannerRowIndex + 1}:${selectedStartRowIndex}, колонки ${getExcelColumnLetter(scanStartColumnIndex)}:${getExcelColumnLetter(scanEndColumnIndex)}.`
+    `- Р”РёР°РїР°Р·РѕРЅ РїСЂРѕРІРµСЂРєРё: СЃС‚СЂРѕРєРё ${firstBannerRowIndex + 1}:${selectedStartRowIndex}, РєРѕР»РѕРЅРєРё ${getExcelColumnLetter(scanStartColumnIndex)}:${getExcelColumnLetter(scanEndColumnIndex)}.`
   );
   lines.push(
-    `- Выделение по колонкам: ${getExcelColumnLetter(selectedStartColumnIndex)}:${getExcelColumnLetter(selectedEndColumnIndex)}.`
+    `- Р’С‹РґРµР»РµРЅРёРµ РїРѕ РєРѕР»РѕРЅРєР°Рј: ${getExcelColumnLetter(selectedStartColumnIndex)}:${getExcelColumnLetter(selectedEndColumnIndex)}.`
   );
 
   const lowerBannerLocalRowIndex = availableRowCount - 1;
@@ -1326,7 +1556,7 @@ async function loadBannerMergeDiagnosticsForSelectedRange(context, selectedRange
   if (selectedStartRowIndex === 0) {
     return [
       "Merge diagnostics:",
-      "- Над выделенным диапазоном нет строк для анализа merge-структуры.",
+      "- РќР°Рґ РІС‹РґРµР»РµРЅРЅС‹Рј РґРёР°РїР°Р·РѕРЅРѕРј РЅРµС‚ СЃС‚СЂРѕРє РґР»СЏ Р°РЅР°Р»РёР·Р° merge-СЃС‚СЂСѓРєС‚СѓСЂС‹.",
     ].join("\n");
   }
 
@@ -1348,7 +1578,7 @@ async function loadBannerMergeDiagnosticsForSelectedRange(context, selectedRange
 
   lines.push("Merge diagnostics:");
   lines.push(
-    `- Диапазон проверки: ${availableRowCount} строк над выделением, ${selectedColumnCount} колонок.`
+    `- Р”РёР°РїР°Р·РѕРЅ РїСЂРѕРІРµСЂРєРё: ${availableRowCount} СЃС‚СЂРѕРє РЅР°Рґ РІС‹РґРµР»РµРЅРёРµРј, ${selectedColumnCount} РєРѕР»РѕРЅРѕРє.`
   );
 
   for (let localRowIndex = 0; localRowIndex < availableRowCount; localRowIndex++) {
@@ -1672,7 +1902,7 @@ function initializeSettingsToggle() {
   settingsToggle.addEventListener("click", () => {
     const isCollapsed = settingsContent.classList.toggle("collapsed");
 
-    settingsToggleIcon.textContent = isCollapsed ? "▸" : "▾";
+    settingsToggleIcon.textContent = isCollapsed ? "в–ё" : "в–ѕ";
   });
 }
 
@@ -1687,6 +1917,12 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
   if (!calculationSettings.writeBannerLetters) {
     return;
   }
+
+  const BANNER_UPPER_SCAN_LIMIT = 5;
+
+  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
+
+  await context.sync();
 
   const selectedStartRowIndex = selectedRange.rowIndex;
   const selectedStartColumnIndex = selectedRange.columnIndex;
@@ -1705,15 +1941,18 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
     selectedColumnCount
   );
 
-  bannerRange.load("values");
+  bannerRange.load("text");
 
   await context.sync();
 
-  const bannerValues = bannerRange.values[0];
+  const bannerTexts = bannerRange.text[0] || [];
+  const markerByColumnIndex = new Map();
+  const clearMarkerColumnIndexes = new Set();
 
-  const updatedBannerValues = bannerValues.map((currentValue, columnIndex) => {
+  const updatedBannerTexts = bannerTexts.map((currentText, columnIndex) => {
     if (calculationSettings.firstColumnIsTotal && columnIndex === 0) {
-      return removeBannerCellMarker(currentValue);
+      clearMarkerColumnIndexes.add(columnIndex);
+      return removeTrailingBannerMarker(currentText);
     }
 
     const markerIndex = calculationSettings.firstColumnIsTotal ? columnIndex - 1 : columnIndex;
@@ -1721,28 +1960,104 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
     const marker = significanceLabels[markerIndex];
 
     if (!marker) {
-      return currentValue;
+      return currentText;
     }
 
-    return updateBannerCellMarker(currentValue, marker);
+    markerByColumnIndex.set(columnIndex, marker);
+
+    return appendOrReplaceTrailingBannerMarker(currentText, marker);
   });
 
-  /**
-   * Removes significance marker from the end of a banner cell.
-   *
-   * PURPOSE:
-   * In firstColumnIsTotal mode, the Total banner cell must not have
-   * a significance marker.
-   */
-  function removeBannerCellMarker(rawValue) {
-    const textValue = rawValue === null || rawValue === undefined ? "" : String(rawValue);
+  const upperScanRowCount = Math.min(BANNER_UPPER_SCAN_LIMIT, selectedStartRowIndex - 1);
+  const needsUpperScan =
+    upperScanRowCount > 0 &&
+    bannerTexts.some(
+      (text, columnIndex) =>
+        (text || "") === "" &&
+        (markerByColumnIndex.has(columnIndex) || clearMarkerColumnIndexes.has(columnIndex))
+    );
 
-    const markerSuffixPattern = /\s*\([^()]+\)$/;
+  let upperScanTexts = [];
 
-    return textValue.replace(markerSuffixPattern, "").trim();
+  if (needsUpperScan) {
+    const upperScanRange = selectedRange.worksheet.getRangeByIndexes(
+      selectedStartRowIndex - 1 - upperScanRowCount,
+      selectedStartColumnIndex,
+      upperScanRowCount,
+      selectedColumnCount
+    );
+
+    upperScanRange.load("text");
+
+    await context.sync();
+
+    upperScanTexts = upperScanRange.text.slice().reverse();
   }
 
-  bannerRange.values = [updatedBannerValues];
+  const cellWriteQueue = [];
+
+  for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
+    const currentText = bannerTexts[columnIndex] || "";
+    const nextText = updatedBannerTexts[columnIndex] || "";
+    const marker = markerByColumnIndex.get(columnIndex);
+    const shouldClearMarker = clearMarkerColumnIndexes.has(columnIndex);
+
+    if (currentText === "" && (marker || shouldClearMarker)) {
+      let queued = false;
+
+      for (let rowOffset = 0; rowOffset < upperScanTexts.length; rowOffset++) {
+        const upperCellText =
+          (upperScanTexts[rowOffset] && upperScanTexts[rowOffset][columnIndex]) || "";
+
+        if (upperCellText !== "") {
+          const updatedUpperCellText = marker
+            ? appendOrReplaceTrailingBannerMarker(upperCellText, marker)
+            : getTrailingBannerMarker(upperCellText)
+              ? removeTrailingBannerMarker(upperCellText)
+              : upperCellText;
+
+          if (updatedUpperCellText === upperCellText) {
+            queued = true;
+            break;
+          }
+
+          cellWriteQueue.push({
+            rowIndex: selectedStartRowIndex - 2 - rowOffset,
+            colIndex: selectedStartColumnIndex + columnIndex,
+            text: updatedUpperCellText,
+          });
+          queued = true;
+          break;
+        }
+      }
+
+      if (queued) {
+        continue;
+      }
+    }
+
+    if (nextText === "" && currentText === "") {
+      continue;
+    }
+
+    if (nextText === currentText) {
+      continue;
+    }
+
+    cellWriteQueue.push({
+      rowIndex: selectedStartRowIndex - 1,
+      colIndex: selectedStartColumnIndex + columnIndex,
+      text: nextText,
+    });
+  }
+
+  for (const { rowIndex, colIndex, text } of cellWriteQueue) {
+    const cell = selectedRange.worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1);
+
+    cell.values = [[text]];
+  }
+
+  await context.sync();
 }
 
 /**
@@ -1776,7 +2091,7 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
 
   if (selectedStartRowIndex === 0) {
     setStatusMessage(
-      "Данные расположены в первой строке. Добавьте строку над выделенным массивом для подстановки букв в баннер."
+      "Р”Р°РЅРЅС‹Рµ СЂР°СЃРїРѕР»РѕР¶РµРЅС‹ РІ РїРµСЂРІРѕР№ СЃС‚СЂРѕРєРµ. Р”РѕР±Р°РІСЊС‚Рµ СЃС‚СЂРѕРєСѓ РЅР°Рґ РІС‹РґРµР»РµРЅРЅС‹Рј РјР°СЃСЃРёРІРѕРј РґР»СЏ РїРѕРґСЃС‚Р°РЅРѕРІРєРё Р±СѓРєРІ РІ Р±Р°РЅРЅРµСЂ."
     );
 
     return;
@@ -1895,33 +2210,6 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
   }
 
   await context.sync();
-}
-
-/**
- * Adds or replaces significance marker at the end of a banner cell.
- *
- * PURPOSE:
- * Banner cells may already contain an old marker like "Segment A (/b/)".
- * We replace old marker with the current marker for this column.
- */
-function updateBannerCellMarker(rawValue, marker) {
-  const textValue = rawValue === null || rawValue === undefined ? "" : String(rawValue);
-
-  const expectedMarkerSuffix = `(${marker})`;
-
-  if (textValue.trim().endsWith(expectedMarkerSuffix)) {
-    return textValue;
-  }
-
-  const markerSuffixPattern = /\s*\([^()]+\)$/;
-
-  const textWithoutOldMarker = textValue.replace(markerSuffixPattern, "").trim();
-
-  if (!textWithoutOldMarker) {
-    return expectedMarkerSuffix;
-  }
-
-  return `${textWithoutOldMarker} ${expectedMarkerSuffix}`;
 }
 
 /**
@@ -2233,7 +2521,7 @@ function resetSettingsToDefaults() {
   clearSavedLocalSettings();
   refreshSettingsPanelState();
 
-  setStatusMessage("Настройки сброшены к значениям по умолчанию.");
+  setStatusMessage("РќР°СЃС‚СЂРѕР№РєРё СЃР±СЂРѕС€РµРЅС‹ Рє Р·РЅР°С‡РµРЅРёСЏРј РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ.");
 }
 
 /**
@@ -2329,13 +2617,89 @@ function appendOrReplaceTrailingBannerMarker(rawText, label) {
   const text = rawText === null || rawText === undefined ? "" : String(rawText).trim();
 
   const marker = `(${label})`;
-  const markerPattern = /\s*\([^)]+\)\s*$/;
+  const currentMarker = getTrailingBannerMarker(text);
 
-  if (markerPattern.test(text)) {
-    return text.replace(markerPattern, ` ${marker}`);
+  if (currentMarker) {
+    return `${text.slice(0, currentMarker.start).trim()} ${marker}`.trim();
   }
 
   return `${text} ${marker}`.trim();
+}
+
+/**
+ * Clears RIT-generated banner markers from banner cells that are within the
+ * full selected range but LEFT of writeTargetRange (i.e., label-column
+ * positions that were stripped by detectEmbeddedLabelColumns).
+ *
+ * This removes stale markers written by pre-fix runs so they do not appear
+ * alongside the correctly-placed new markers after an in-place Run without
+ * an explicit Clear between runs.
+ *
+ * Only acts when writeTargetRange is narrower than the original selection
+ * (i.e., at least one label column was stripped on the left).
+ *
+ * @param {Excel.RequestContext} context
+ * @param {Excel.Worksheet} worksheet
+ * @param {number} selectedRangeColIndex  - column index of the original selectedRange
+ * @param {number} writeTargetRowIndex    - rowIndex of writeTargetRange (first data row)
+ * @param {number} writeTargetColIndex    - columnIndex of writeTargetRange (first data col)
+ */
+async function clearStaleBannerMarkersLeftOfWriteRange(
+  context,
+  worksheet,
+  selectedRangeColIndex,
+  writeTargetRowIndex,
+  writeTargetColIndex
+) {
+  const leftColumnCount = writeTargetColIndex - selectedRangeColIndex;
+
+  // Nothing to clean: write target starts at the selection boundary, or data
+  // starts in row 0 (no banner rows above it).
+  if (leftColumnCount <= 0 || writeTargetRowIndex === 0) {
+    return;
+  }
+
+  const BANNER_SCAN_LIMIT = 6;
+  const totalScanRows = Math.min(BANNER_SCAN_LIMIT, writeTargetRowIndex);
+
+  const bannerScanRange = worksheet.getRangeByIndexes(
+    writeTargetRowIndex - totalScanRows,
+    selectedRangeColIndex,
+    totalScanRows,
+    leftColumnCount
+  );
+  bannerScanRange.load("text");
+  await context.sync();
+
+  const writeQueue = [];
+
+  for (let rowOffset = 0; rowOffset < totalScanRows; rowOffset++) {
+    const rowTexts = bannerScanRange.text[rowOffset] || [];
+
+    for (let colOffset = 0; colOffset < leftColumnCount; colOffset++) {
+      const cellText = rowTexts[colOffset] || "";
+
+      if (!getTrailingBannerMarker(cellText)) {
+        continue;
+      }
+
+      writeQueue.push({
+        rowIndex: writeTargetRowIndex - totalScanRows + rowOffset,
+        colIndex: selectedRangeColIndex + colOffset,
+        text: removeTrailingBannerMarker(cellText),
+      });
+    }
+  }
+
+  if (writeQueue.length === 0) {
+    return;
+  }
+
+  for (const { rowIndex, colIndex, text } of writeQueue) {
+    worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1).values = [[text]];
+  }
+
+  await context.sync();
 }
 
 /**
@@ -2349,7 +2713,38 @@ function removeTrailingBannerMarker(rawText) {
     return "";
   }
 
-  return String(rawText)
-    .replace(/\s*\([^)]+\)\s*$/, "")
-    .trim();
+  const text = String(rawText);
+  const currentMarker = getTrailingBannerMarker(text);
+
+  if (!currentMarker) {
+    return text.trim();
+  }
+
+  return text.slice(0, currentMarker.start).trim();
+}
+
+function getTrailingBannerMarker(rawText) {
+  const text = rawText === null || rawText === undefined ? "" : String(rawText);
+
+  // Require the marker token to be preceded by whitespace or appear at the
+  // very start of the cell.  This prevents parenthesised fragments inside
+  // words — e.g. "сам(а)" — from being mistaken for RIT significance markers
+  // even when the single letter inside happens to be a valid label (Cyrillic
+  // "а" is the first Cyrillic entry in generateSignificanceLabels()).
+  const markerMatch = text.match(/(^|\s)\(([^()]*)\)\s*$/);
+
+  if (!markerMatch) {
+    return null;
+  }
+
+  const markerLabel = markerMatch[2]; // group 2: label inside parens
+
+  if (!generateSignificanceLabels().includes(markerLabel)) {
+    return null;
+  }
+
+  return {
+    label: markerLabel,
+    start: markerMatch.index,
+  };
 }
