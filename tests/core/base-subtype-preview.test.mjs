@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { buildTablePreviewModel } from "../../src/core/table-preview-model.js";
+import { normalizeSelectedRange } from "../../src/core/range-normalizer.js";
 
 function makeModel(labels, values, settings = {}) {
   const leftLabelValues = labels.map((label) => [label]);
@@ -423,5 +424,92 @@ describe("checkSelectedBaseValidity — selected base row quality issues", () =>
       `expected WEIGHTED_BASE_FALLBACK; got: ${JSON.stringify(codes)}`);
     assert.ok(codes.includes("BASE_NON_POSITIVE_VALUES"),
       `expected BASE_NON_POSITIVE_VALUES alongside WEIGHTED_BASE_FALLBACK; got: ${JSON.stringify(codes)}`);
+  });
+});
+
+// ─── Integration: normalizer path ─────────────────────────────────────────────
+// These tests go through normalizeSelectedRange → buildTablePreviewModel to verify
+// that BASE_NO_VALID_VALUES fires even when findLastDataBodyRow strips the base row
+// from valuesForCalculation (the regression caught by smoke testing).
+
+function makeNormalizedModel(rawValues, settings = {}) {
+  const normalized = normalizeSelectedRange(rawValues);
+  return buildTablePreviewModel({
+    values: normalized.valuesForCalculation,
+    leftLabelValues: normalized.leftLabelValues,
+    settings,
+    trailingBodyRows: normalized.trailingBodyRows,
+  });
+}
+
+describe("checkSelectedBaseValidity — normalizer integration (regression guard)", () => {
+  it("all-blank base row via normalizer path → BASE_NO_VALID_VALUES (regression)", () => {
+    // Full-table selection including label column. The normalizer strips the blank
+    // BASE row from valuesForCalculation because findLastDataBodyRow sees no numeric
+    // data there. trailingBodyRows must carry the BASE label so the Check preview
+    // can still emit BASE_NO_VALID_VALUES.
+    const rawValues = [
+      ["Agree", 0.4, 0.6],
+      ["Disagree", 0.6, 0.4],
+      ["BASE", "", ""],
+    ];
+    const normalized = normalizeSelectedRange(rawValues);
+    assert.strictEqual(normalized.normalizationApplied, true, "normalizer must apply");
+    assert.strictEqual(normalized.valuesForCalculation.length, 2,
+      "blank BASE row must be excluded from valuesForCalculation");
+    assert.ok(Array.isArray(normalized.trailingBodyRows?.leftLabelValues),
+      "trailingBodyRows must carry the stripped rows");
+    assert.strictEqual(normalized.trailingBodyRows.leftLabelValues.length, 1,
+      "one trailing row (BASE) must be present");
+
+    const model = makeNormalizedModel(rawValues);
+    const codes = warningCodes(model);
+    assert.ok(codes.includes("BASE_NO_VALID_VALUES"),
+      `expected BASE_NO_VALID_VALUES via normalizer path; got: ${JSON.stringify(codes)}`);
+  });
+
+  it("all-non-numeric base row via normalizer path → BASE_NO_VALID_VALUES (regression)", () => {
+    const rawValues = [
+      ["Agree", 0.4, 0.6],
+      ["Disagree", 0.6, 0.4],
+      ["BASE", "n/a", "n/a"],
+    ];
+    const normalized = normalizeSelectedRange(rawValues);
+    assert.strictEqual(normalized.valuesForCalculation.length, 2,
+      "non-numeric BASE row must be excluded from valuesForCalculation");
+
+    const model = makeNormalizedModel(rawValues);
+    assert.ok(warningCodes(model).includes("BASE_NO_VALID_VALUES"),
+      "BASE_NO_VALID_VALUES must fire for all-non-numeric base in normalizer path");
+  });
+
+  it("valid BASE row via normalizer path → no BASE_NO_VALID_VALUES", () => {
+    const rawValues = [
+      ["Agree", 0.4, 0.6],
+      ["Disagree", 0.6, 0.4],
+      ["BASE", 100, 200],
+    ];
+    const model = makeNormalizedModel(rawValues);
+    assert.ok(!warningCodes(model).includes("BASE_NO_VALID_VALUES"),
+      "valid base must not fire BASE_NO_VALID_VALUES");
+  });
+
+  it("trailing footer row (non-base label) via normalizer → no false BASE_NO_VALID_VALUES", () => {
+    // A legitimate trailing footer row with non-base label must not trigger the warning.
+    const rawValues = [
+      ["Agree", 0.4, 0.6],
+      ["Disagree", 0.6, 0.4],
+      ["BASE", 100, 200],
+      ["Все респонденты", "", ""],
+    ];
+    const normalized = normalizeSelectedRange(rawValues);
+    assert.strictEqual(normalized.valuesForCalculation.length, 3,
+      "footer row must be excluded from valuesForCalculation");
+    assert.strictEqual(normalized.trailingBodyRows.leftLabelValues.length, 1,
+      "one trailing row (footer) must be present");
+
+    const model = makeNormalizedModel(rawValues);
+    assert.ok(!warningCodes(model).includes("BASE_NO_VALID_VALUES"),
+      "non-base trailing footer must not produce BASE_NO_VALID_VALUES");
   });
 });

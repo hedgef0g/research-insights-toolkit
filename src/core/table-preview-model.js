@@ -22,6 +22,7 @@
 import {
   detectMetricRowsFromLeftLabels,
   buildCalculationBlocks,
+  classifyMetricLabel,
   normalizeLabelText,
 } from "./metric-detector";
 
@@ -109,7 +110,7 @@ const PREVIEW_NUMERIC_WITH_MARKER_SUFFIX_RE =
  * @returns {object} Preview model — plain JSON-compatible object.
  */
 export function buildTablePreviewModel(input) {
-  const { values, leftLabelValues, bannerContext, settings } = input || {};
+  const { values, leftLabelValues, bannerContext, settings, trailingBodyRows } = input || {};
 
   const safeValues = Array.isArray(values) ? values : [];
   const safeLeft = Array.isArray(leftLabelValues) ? leftLabelValues : [];
@@ -143,7 +144,9 @@ export function buildTablePreviewModel(input) {
     // Inspect rawBlocks (pre-filter) so that blank/non-numeric base rows are
     // flagged even when blockHasPreviewEvidence later drops the block from
     // calculationBlocks.  Deduplication by base row index is done inside.
-    ...checkSelectedBaseValidity(safeValues, rawBlocks, safeSettings),
+    // trailingBodyRows covers base rows the normalizer stripped entirely because
+    // their data was all-blank — they never appear in rawBlocks at all.
+    ...checkSelectedBaseValidity(safeValues, rawBlocks, safeSettings, trailingBodyRows),
   ];
 
   const qualitySummary = buildQualitySummary(dataQualityIssues);
@@ -1196,7 +1199,7 @@ function checkWeightedBaseFallback(calculationBlocks) {
  *   BASE_NON_POSITIVE_VALUES — warning: some cells are zero or negative (other columns still valid)
  *   BASE_BELOW_THRESHOLD     — warning: some cells are below settings.smallBaseThreshold
  */
-function checkSelectedBaseValidity(values, blocks, settings) {
+function checkSelectedBaseValidity(values, blocks, settings, trailingBodyRows) {
   const issues = [];
   const seenBaseRows = new Set();
 
@@ -1325,6 +1328,38 @@ function checkSelectedBaseValidity(values, blocks, settings) {
         relatedRowIndexes: [],
         relatedColumnIndexes: [],
         evidence: { belowThresholdCount, threshold, totalCount },
+      });
+    }
+  }
+
+  // Secondary scan: trailing rows stripped by the normalizer.
+  // findLastDataBodyRow trims rows whose data is all-blank or all-non-numeric,
+  // so an invalid base row may not appear in values or rawBlocks at all.
+  // trailingBodyRows.leftLabelValues exposes those rows for label-based detection.
+  const trailingLeft = trailingBodyRows?.leftLabelValues;
+  if (Array.isArray(trailingLeft) && trailingLeft.length > 0) {
+    const valuesLength = Array.isArray(values) ? values.length : 0;
+    for (let i = 0; i < trailingLeft.length; i++) {
+      const labelRow = trailingLeft[i];
+      const rawLabel = Array.isArray(labelRow) ? labelRow[0] : undefined;
+      const classification = classifyMetricLabel(rawLabel);
+      if (classification?.rowType !== "base") continue;
+      const virtualRowIndex = valuesLength + i;
+      if (seenBaseRows.has(virtualRowIndex)) continue;
+      seenBaseRows.add(virtualRowIndex);
+      const trailingDataRow = trailingBodyRows.values?.[i];
+      const colCount = Array.isArray(trailingDataRow) ? trailingDataRow.length : 0;
+      issues.push({
+        code: "BASE_NO_VALID_VALUES",
+        severity: "critical",
+        message:
+          `Row ${virtualRowIndex + 1}: selected base row has no valid numeric positive values ` +
+          `across all ${colCount} column(s). Significance cannot be calculated.`,
+        rowIndex: virtualRowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: { blankCount: colCount, nonNumericCount: 0, nonPositiveCount: 0, totalCount: colCount },
       });
     }
   }

@@ -813,8 +813,13 @@ function buildNormalizedModel(
   bodyStartRow,
   bodyEndRow,
   confidence,
-  warnings
+  warnings,
+  fullBodyEndRow
 ) {
+  // fullBodyEndRow is the pre-trim body end (before findLastDataBodyRow).
+  // bodyEndRow is the trimmed end actually used for data slicing.
+  const safeFullBodyEndRow = fullBodyEndRow !== undefined ? fullBodyEndRow : bodyEndRow;
+
   const labelColumns = labelColCount > 0 ? buildIndexRange(0, labelColCount - 1) : [];
   const dataColumns  = buildIndexRange(dataColStart, dataColEnd);
   const bodyRows     = buildIndexRange(bodyStartRow, bodyEndRow);
@@ -828,10 +833,22 @@ function buildNormalizedModel(
   // Significance marker removal (applied to values before normalization) can erase
   // pure-letter label cells like "mean" or "BASE". Use text (Office.js selectedRange.text,
   // never marker-stripped) when it covers the body rows.
-  const leftLabelSource = text.length > bodyEndRow ? text : values;
+  const leftLabelSource = text.length > safeFullBodyEndRow ? text : values;
   const leftLabelValues = labelColCount > 0
     ? sliceGrid(leftLabelSource, bodyStartRow, bodyEndRow, 0, labelColCount - 1)
     : [];
+
+  // Rows trimmed by findLastDataBodyRow (blank/non-numeric trailing rows excluded from
+  // valuesForCalculation). The Check preview uses this to detect base rows whose data
+  // was stripped — without affecting Run calculations or the bodyRows slice.
+  const trailingBodyRows = safeFullBodyEndRow > bodyEndRow
+    ? {
+        values: sliceGrid(values, bodyEndRow + 1, safeFullBodyEndRow, dataColStart, dataColEnd),
+        leftLabelValues: labelColCount > 0
+          ? sliceGrid(leftLabelSource, bodyEndRow + 1, safeFullBodyEndRow, 0, labelColCount - 1)
+          : [],
+      }
+    : { values: [], leftLabelValues: [] };
 
   // Banner scan rows are sliced to data columns only so they align with
   // valuesForCalculation. detectBannerStructure expects column indices to
@@ -872,6 +889,7 @@ function buildNormalizedModel(
     warnings,
     blockingReasons: [],
     blockingMessage: "",
+    trailingBodyRows,
   };
 }
 
@@ -1086,6 +1104,7 @@ export function normalizeSelectedRange(rawValues, rawText, options = {}) {
     bodyStartRow,
     bodyDataEndRow,
     confidence,
-    warnings
+    warnings,
+    bodyEndRow   // full pre-trim end row — used only for trailingBodyRows
   );
 }
