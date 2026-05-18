@@ -7,12 +7,22 @@
  * Office.js-free: input is a plain 2D values array with sheet offset metadata.
  * Calls buildTablePreviewModel as the interpretation engine for each candidate.
  *
- * DOES NOT:
- * - Call Office.js or depend on Excel context
- * - Write to Excel
- * - Run significance calculation
- * - Implement workbook-scope scanning
- * - Detect side-by-side tables within the same row band
+ * ROLE: read-only candidate finder only.
+ *   - Returns candidates for the user to inspect via Check Table.
+ *   - Does NOT claim a candidate is ready for Run significance.
+ *   - Does NOT write to the workbook.
+ *
+ * KNOWN LIMITATIONS (intentionally preserved, not blocking):
+ *   - Side-by-side tables within one contiguous row band are not detected
+ *     separately; the entire band appears as a single (possibly uncertain) candidate.
+ *   - Non-empty commentary rows between two tables prevent band splitting;
+ *     the tables are merged into one band.
+ *   - Multi-column labels beyond the two-column heuristic may degrade split quality.
+ *   - Title inference from rows above the band is heuristic and may mis-assign
+ *     text that belongs to an unrelated preceding section.
+ *   - Candidates with no explicit Base row are not flagged by the scanner;
+ *     Check Table should be used for authoritative interpretation.
+ *   - Inventory candidate ranges should route to Check Table, not directly to Run.
  */
 
 import { buildTablePreviewModel } from "./table-preview-model";
@@ -295,11 +305,12 @@ function inferTitle(values, band) {
   const rowAbove = values[localStartRow - 1];
 
   if (isRowEmpty(rowAbove)) {
-    // Separator row above — look two rows up for a title
+    // Separator row above — look two rows up for a title.
+    // Confidence is medium: the text could belong to a preceding section.
     if (localStartRow >= 2) {
       const text = firstNonEmptyNonNumericText(values[localStartRow - 2]);
       if (text) {
-        return { title: text, titleConfidence: "high", titleSource: "twoRowsAbove" };
+        return { title: text, titleConfidence: "medium", titleSource: "twoRowsAbove" };
       }
     }
   } else {
@@ -315,31 +326,56 @@ function inferTitle(values, band) {
 
 // ─── Item builder ─────────────────────────────────────────────────────────────
 
+/**
+ * Derives a plain-language candidate status from model quality signals.
+ *
+ * "available"  — looks like a recognisable table with no blocking issues or
+ *                uncertain boundaries; worth checking via Check Table.
+ * "uncertain"  — table-like but has blocking issues, quality warnings, or an
+ *                ambiguous label/data boundary; Check Table may still work but
+ *                results should be verified.
+ * "rejected"   — no metric rows detected; unlikely to be a RIT research table.
+ *
+ * This replaces the former canRunSignificance flag which implied Run-readiness.
+ * The scanner is a candidate finder only; Check Table is the authoritative step.
+ */
+function deriveCandidateStatus({ isLikelyTable, hasBlockingIssues, warningCount, labelSplitConfidence }) {
+  if (!isLikelyTable) return "rejected";
+  if (hasBlockingIssues || labelSplitConfidence === "uncertain" || warningCount > 0) return "uncertain";
+  return "available";
+}
+
 function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetName, labelSplitConfidence }) {
   const { summary, qualitySummary, calculationBlocks } = model;
   const tableId = sheetName + "!" + rangeAddress;
 
   const isLikelyTable = summary.detectedMetricRows > 0;
+  // canRunCheckTable: true when the candidate looks table-like enough to pass to
+  // Check Table. Does NOT imply the candidate is ready for Run significance.
   const canRunCheckTable = isLikelyTable;
 
-  const reasonsIfNotRunnable = [];
+  const candidateNotes = [];
   if (!isLikelyTable) {
-    reasonsIfNotRunnable.push("Нет опознанных строк метрик");
+    candidateNotes.push("Нет опознанных строк метрик");
   } else if (calculationBlocks.length === 0) {
-    reasonsIfNotRunnable.push("Нет блоков расчёта");
+    candidateNotes.push("Нет блоков расчёта");
   }
   if (isLikelyTable && qualitySummary.hasBlockingIssues) {
-    reasonsIfNotRunnable.push("Критические проблемы качества");
+    candidateNotes.push("Критические проблемы качества");
   }
   if (labelSplitConfidence === "uncertain") {
-    reasonsIfNotRunnable.push("Разделение лейблов и данных не определено (uncertain)");
+    candidateNotes.push("Граница лейблов/данных не определена");
+  }
+  if (isLikelyTable && qualitySummary.warningCount > 0) {
+    candidateNotes.push(`Предупреждений в превью: ${qualitySummary.warningCount}`);
   }
 
-  const canRunSignificance =
-    canRunCheckTable &&
-    calculationBlocks.length > 0 &&
-    !qualitySummary.hasBlockingIssues &&
-    labelSplitConfidence === "confident";
+  const candidateStatus = deriveCandidateStatus({
+    isLikelyTable,
+    hasBlockingIssues: qualitySummary.hasBlockingIssues,
+    warningCount: qualitySummary.warningCount,
+    labelSplitConfidence,
+  });
 
   let previewSummary = "";
   if (isLikelyTable) {
@@ -365,8 +401,8 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     previewSummary,
     isLikelyTable,
     canRunCheckTable,
-    canRunSignificance,
-    reasonsIfNotRunnable,
+    candidateStatus,
+    candidateNotes,
     labelSplitConfidence,
     warningsCount: isLikelyTable ? qualitySummary.warningCount : 0,
     criticalCount: isLikelyTable ? qualitySummary.criticalCount : 0,

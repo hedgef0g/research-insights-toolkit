@@ -1300,16 +1300,18 @@ async function runTableInventory() {
       if (item.warningsCount > 0) warnParts.push(`Предупреждений: ${item.warningsCount}`);
       if (warnParts.length > 0) lines.push(`   ${warnParts.join(". ")}.`);
 
-      if (!item.isLikelyTable) {
-        lines.push("   Не опознана как таблица RIT.");
-      }
+      // candidateStatus replaces the former "Значимость: да/нет" line.
+      // Inventory is a candidate finder only; Check Table is the authoritative step.
+      const statusLabel =
+        item.candidateStatus === "available"
+          ? "Кандидат — рекомендуется «Проверить таблицу»"
+          : item.candidateStatus === "uncertain"
+          ? "Кандидат (неопределён) — требует «Проверить таблицу»"
+          : "Не опознан как таблица RIT";
+      lines.push(`   ${statusLabel}.`);
 
-      lines.push(
-        `   Проверка: ${item.canRunCheckTable ? "да" : "нет"}. Значимость: ${item.canRunSignificance ? "да" : "нет"}.`
-      );
-
-      if (item.reasonsIfNotRunnable.length > 0) {
-        lines.push(`   [${item.reasonsIfNotRunnable.join("; ")}]`);
+      if (item.candidateNotes && item.candidateNotes.length > 0) {
+        lines.push(`   [${item.candidateNotes.join("; ")}]`);
       }
 
       lines.push("");
