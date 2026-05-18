@@ -91,25 +91,26 @@ export function extractRowLabelFromLeftCells(leftLabelRowValues) {
     return "";
   }
 
-  for (
-    let labelColumnIndex = leftLabelRowValues.length - 1;
-    labelColumnIndex >= 0;
-    labelColumnIndex--
-  ) {
-    const currentLabelValue = leftLabelRowValues[labelColumnIndex];
+  // Collect all non-empty, non-numeric text cells left-to-right so that
+  // split two-column labels (e.g. ["Base", "weighted"]) are concatenated
+  // and detected as a single label ("Base weighted").
+  const parts = [];
 
-    if (isNumericLikeCellValue(currentLabelValue)) {
+  for (let i = 0; i < leftLabelRowValues.length; i++) {
+    const cellValue = leftLabelRowValues[i];
+
+    if (isNumericLikeCellValue(cellValue)) {
       continue;
     }
 
-    const normalizedLabel = normalizeLabelText(currentLabelValue);
+    const normalizedLabel = normalizeLabelText(cellValue);
 
     if (normalizedLabel) {
-      return String(currentLabelValue);
+      parts.push(String(cellValue));
     }
   }
 
-  return "";
+  return parts.join(" ");
 }
 
 /**

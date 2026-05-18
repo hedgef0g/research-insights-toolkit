@@ -2,7 +2,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildCalculationBlocks,
+  classifyMetricLabel,
   detectMetricRowsFromLeftLabels,
+  extractRowLabelFromLeftCells,
 } from "../../src/core/metric-detector.js";
 
 function detectBlocks(values, labels) {
@@ -10,6 +12,116 @@ function detectBlocks(values, labels) {
   const detectionResult = detectMetricRowsFromLeftLabels(values, leftLabelValues);
   return buildCalculationBlocks(detectionResult);
 }
+
+// ─── Suffix base-subtype label detection ──────────────────────────────────────
+
+describe("classifyMetricLabel — suffix base-subtype patterns", () => {
+  it('"BASE weighted" is classified as weighted base', () => {
+    const r = classifyMetricLabel("BASE weighted");
+    assert.strictEqual(r.rowType, "base");
+    assert.strictEqual(r.baseSubtype, "weighted");
+  });
+
+  it('"Base weighted" is classified as weighted base', () => {
+    const r = classifyMetricLabel("Base weighted");
+    assert.strictEqual(r.rowType, "base");
+    assert.strictEqual(r.baseSubtype, "weighted");
+  });
+
+  it('"Base unweighted" is classified as unweighted base', () => {
+    const r = classifyMetricLabel("Base unweighted");
+    assert.strictEqual(r.rowType, "base");
+    assert.strictEqual(r.baseSubtype, "unweighted");
+  });
+
+  it('"Base effective" is classified as effective base', () => {
+    const r = classifyMetricLabel("Base effective");
+    assert.strictEqual(r.rowType, "base");
+    assert.strictEqual(r.baseSubtype, "effective");
+  });
+
+  it('"Base" (plain) remains plain base — no baseSubtype set', () => {
+    const r = classifyMetricLabel("Base");
+    assert.strictEqual(r.rowType, "base");
+    assert.strictEqual(r.baseSubtype, undefined);
+  });
+
+  it('"BASE" (all-caps plain) remains plain base — no baseSubtype set', () => {
+    const r = classifyMetricLabel("BASE");
+    assert.strictEqual(r.rowType, "base");
+    assert.strictEqual(r.baseSubtype, undefined);
+  });
+});
+
+// ─── Split two-column label extraction ───────────────────────────────────────
+
+describe("extractRowLabelFromLeftCells — split two-column base-subtype labels", () => {
+  it('["Base", "weighted"] → concatenated label "Base weighted"', () => {
+    assert.strictEqual(extractRowLabelFromLeftCells(["Base", "weighted"]), "Base weighted");
+  });
+
+  it('["Base", "unweighted"] → concatenated label "Base unweighted"', () => {
+    assert.strictEqual(extractRowLabelFromLeftCells(["Base", "unweighted"]), "Base unweighted");
+  });
+
+  it('["Base", "effective"] → concatenated label "Base effective"', () => {
+    assert.strictEqual(extractRowLabelFromLeftCells(["Base", "effective"]), "Base effective");
+  });
+
+  it('single-cell ["Base"] still returns "Base" unchanged', () => {
+    assert.strictEqual(extractRowLabelFromLeftCells(["Base"]), "Base");
+  });
+
+  it('numeric cell is skipped — ["Base", 100] → "Base"', () => {
+    assert.strictEqual(extractRowLabelFromLeftCells(["Base", 100]), "Base");
+  });
+
+  it('empty cell is skipped — ["", "Agree"] → "Agree"', () => {
+    assert.strictEqual(extractRowLabelFromLeftCells(["", "Agree"]), "Agree");
+  });
+});
+
+// ─── Split two-column labels — end-to-end block detection ────────────────────
+
+describe("split two-column base-subtype labels — end-to-end block detection", () => {
+  function detectSplitBlocks(rowLabels, values) {
+    // rowLabels is an array of [col1, col2] or [col1] arrays
+    const detectionResult = detectMetricRowsFromLeftLabels(values, rowLabels);
+    return buildCalculationBlocks(detectionResult);
+  }
+
+  it('[Base][weighted] split label → proportion block with weighted baseSubtype', () => {
+    const blocks = detectSplitBlocks(
+      [["Agree"], ["Disagree"], ["Base", "weighted"]],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]]
+    );
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].metricType, "proportion");
+    assert.strictEqual(blocks[0].baseSubtype, "weighted");
+  });
+
+  it('[Base][unweighted] split label → proportion block with unweighted baseSubtype', () => {
+    const blocks = detectSplitBlocks(
+      [["Agree"], ["Disagree"], ["Base", "unweighted"]],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]]
+    );
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].metricType, "proportion");
+    assert.strictEqual(blocks[0].baseSubtype, "unweighted");
+  });
+
+  it('[Base][effective] split label → proportion block with effective baseSubtype', () => {
+    const blocks = detectSplitBlocks(
+      [["Agree"], ["Disagree"], ["Base", "effective"]],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]]
+    );
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].metricType, "proportion");
+    assert.strictEqual(blocks[0].baseSubtype, "effective");
+  });
+});
+
+// ─── Explicit base requirement ────────────────────────────────────────────────
 
 describe("buildCalculationBlocks - explicit base requirement", () => {
   it("does not invent a proportion base from the last selected row", () => {
