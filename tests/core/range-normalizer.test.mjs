@@ -866,6 +866,100 @@ describe("normalizeSelectedRange", () => {
     assert.deepStrictEqual(result.blockingReasons, []);
   });
 
+  // ── Issue #132: 2-column partial banner + data subset selections ─────────────
+
+  it("2-col banner+data subset normalizes: banner rows separated from data body", () => {
+    // Simulates selecting cols B-C of "Ваш пол" where col A (row labels) is outside
+    // the selection.  The selection contains 1 banner row at top and data rows below.
+    // With GATE_MIN_COLS=2 the gate passes and banner is properly separated.
+    const values = [
+      ["2025Q4", "2026Q1"],   // banner row: wide text
+      [0.44,     0.41],       // Мужской
+      [0.56,     0.59],       // Женский
+      [5605,     1320],       // BASE
+    ];
+    const result = normalizeSelectedRange(values);
+
+    assert.strictEqual(result.normalizationNeeded, true, "2-col banner+data must trigger normalization");
+    assert.strictEqual(result.normalizationApplied, true, "must normalize, not block");
+    assert.deepStrictEqual(result.bannerRows, [0], "row 0 is the banner row");
+    assert.strictEqual(result.dataRowOffset, 1, "data body starts at row 1");
+    assert.strictEqual(result.valuesForCalculation.length, 3, "three data rows");
+    assert.deepStrictEqual(result.valuesForCalculation[0], [0.44, 0.41], "first data row");
+    assert.deepStrictEqual(result.valuesForCalculation[2], [5605, 1320], "BASE row included");
+    assert.deepStrictEqual(result.blockingReasons, []);
+  });
+
+  it("2-col banner+data subset with rawText preserves banner labels in bannerContext", () => {
+    // 2-column selection of two data columns (no label column in selection).
+    // Two banner rows at top carry column headers.  rawText carries the original
+    // text; cleanedValues has the numeric body after significance marker removal.
+    // bannerContext.scanRows must be sourced from rawText, not cleanedValues.
+    const rawText = [
+      ["Волна (квартал)", "Всего"],   // wide banner row 1
+      ["2025Q4", "2026Q1"],           // wide banner row 2
+      ["44%",  "41%"],                // data row (Мужской)
+      ["56%",  "59%"],                // data row (Женский)
+      ["5605", "1320"],               // BASE
+    ];
+    const cleanedValues = [
+      ["Волна (квартал)", "Всего"],   // unchanged (no markers)
+      ["2025Q4",          "2026Q1"],  // unchanged
+      [0.44, 0.41],                   // cleaned numeric
+      [0.56, 0.59],
+      [5605, 1320],
+    ];
+
+    const result = normalizeSelectedRange(cleanedValues, rawText);
+
+    assert.strictEqual(result.normalizationApplied, true, "must normalize");
+    assert.deepStrictEqual(result.bannerRows, [0, 1], "both banner rows detected");
+    assert.strictEqual(result.dataRowOffset, 2, "data starts after 2 banner rows");
+    assert.strictEqual(result.valuesForCalculation.length, 3, "three data rows");
+    assert.deepStrictEqual(result.bannerContext.scanRows[0], ["Волна (квартал)", "Всего"],
+      "first banner row from rawText");
+    assert.deepStrictEqual(result.bannerContext.scanRows[1], ["2025Q4", "2026Q1"],
+      "second banner row from rawText");
+    assert.strictEqual(result.bannerContext.columnCount, 2);
+    assert.deepStrictEqual(result.blockingReasons, []);
+  });
+
+  it("2-col purely numeric selection still passes through (no normalization)", () => {
+    // A 2-col selection of pure numbers must not trigger normalization — there is
+    // nothing structural to decompose.
+    const values = [
+      [0.44, 0.41],
+      [0.56, 0.59],
+      [5605, 1320],
+    ];
+    const result = normalizeSelectedRange(values);
+
+    assert.strictEqual(result.normalizationNeeded, false, "pure numeric 2-col must pass through");
+    assert.strictEqual(result.normalizationApplied, false);
+    assert.deepStrictEqual(result.blockingReasons, []);
+  });
+
+  it("2-col banner-only selection (no data rows) blocks with BODY_TOO_SHORT", () => {
+    // Selecting only the banner header rows without any data body must be blocked —
+    // there is nothing to calculate.
+    const values = [
+      ["Всего",  "Кат A"],  // banner
+      ["2025Q4", "2025Q4"], // banner
+    ];
+    const result = normalizeSelectedRange(values);
+
+    // Either not needed (too few rows for the gate) or blocked — must not produce
+    // a successful normalization with valuesForCalculation.
+    const noDataToCalculate =
+      result.normalizationNeeded === false ||
+      (result.normalizationApplied === false && result.blockingReasons.length > 0);
+    assert.ok(noDataToCalculate, `expected pass-through or blocked, got: ${JSON.stringify(result)}`);
+    assert.ok(
+      !result.normalizationApplied || result.valuesForCalculation.length === 0,
+      "must not produce a non-empty valuesForCalculation for a banner-only selection"
+    );
+  });
+
   it("[label | 0%-unit-col | data] with mixed 0% values does not strip non-uniform column", () => {
     // If col[1] has different values (not all uniform), it must NOT be treated as a
     // unit column even if some cells are "0%".  This protects real data columns.

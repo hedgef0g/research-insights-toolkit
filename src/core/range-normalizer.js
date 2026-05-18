@@ -39,7 +39,7 @@
 // Minimum selection size for structural analysis.
 // Smaller selections are always treated as pass-through.
 const GATE_MIN_ROWS = 3;
-const GATE_MIN_COLS = 3;
+const GATE_MIN_COLS = 2;
 
 // Pass-through gate: left-column pattern.
 // First column is text-heavy AND the remaining columns are numeric-heavy.
@@ -287,6 +287,13 @@ function isTitleLikeRow(values, rowIndex, colCount) {
   }
 
   if (!hasText || nonEmptyCount === 0 || nonEmptyCount > MAX_TITLE_ROW_NON_EMPTY_CELLS) {
+    return false;
+  }
+
+  // A row that fills most columns is a banner row, not a sparse title row.
+  // This guards 2-column selections where any fully-filled text row would
+  // otherwise satisfy the ≤3 cell count and be misclassified as a title.
+  if (colCount > 0 && nonEmptyCount / colCount > BANNER_MIN_FILL_FRACTION) {
     return false;
   }
 
