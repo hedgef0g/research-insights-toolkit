@@ -92,4 +92,147 @@ describe("scanWorksheetForTables", () => {
     assert.strictEqual(item.columnCount, 4);
     assert.strictEqual(item.isLikelyTable, true);
   });
+
+  // ─── New hardening tests for issue #110 ──────────────────────────────────
+
+  it("item does not expose canRunSignificance — scanner is a candidate finder only", () => {
+    const values = [
+      ["Label1", 10, 20, 30],
+      ["Label2", 40, 50, 60],
+      ["Base", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    assert.strictEqual(
+      items[0].canRunSignificance,
+      undefined,
+      "canRunSignificance must not exist on inventory items"
+    );
+    assert.ok(
+      ["available", "uncertain", "rejected"].includes(items[0].candidateStatus),
+      `candidateStatus must be available/uncertain/rejected; got ${items[0].candidateStatus}`
+    );
+  });
+
+  it("clean table with base produces candidateStatus=available", () => {
+    const values = [
+      ["Label1", 10, 20, 30],
+      ["Label2", 40, 50, 60],
+      ["Base", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1);
+    assert.strictEqual(items[0].candidateStatus, "available");
+  });
+
+  it("table with no explicit Base row is not presented as Run-ready — no canRunSignificance field", () => {
+    const values = [
+      ["Label1", 10, 20, 30],
+      ["Label2", 40, 50, 60],
+      ["Label3", 70, 80, 90],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    // Without a Base row the scanner may produce 0 or 1 items depending on metric detection.
+    // If an item exists, it must not carry canRunSignificance (the key safety property).
+    if (items.length > 0) {
+      assert.strictEqual(items[0].canRunSignificance, undefined, "canRunSignificance must not exist");
+      // "rejected" is acceptable — no Base means no complete metric blocks.
+      assert.ok(
+        ["available", "uncertain", "rejected"].includes(items[0].candidateStatus),
+        `candidateStatus must be a recognised value; got ${items[0].candidateStatus}`
+      );
+    }
+    // If items.length === 0, the scanner correctly found nothing to over-promise on.
+  });
+
+  it("candidate with preview warnings is surfaced as uncertain", () => {
+    // All-100 rows trigger a quality warning in the preview model.
+    const values = [
+      ["Label1", 100, 100, 100],
+      ["Label2", 100, 100, 100],
+      ["Base", 1000, 1000, 1000],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    // Warnings must be reflected in the candidate status.
+    if (item.warningsCount > 0) {
+      assert.strictEqual(
+        item.candidateStatus,
+        "uncertain",
+        "item with preview warnings must be uncertain, not available"
+      );
+    }
+  });
+
+  it("side-by-side tables in one row band appear as one candidate and expose no canRunSignificance", () => {
+    // Known limitation: scanner cannot split side-by-side tables within one band.
+    // This test documents the limitation and ensures no over-promising.
+    const values = [
+      ["", "Total", "Male", "", "Total", "Female"],
+      ["Metric A", 100, 60, "Metric B", 200, 120],
+      ["Metric A2", 150, 90, "Metric B2", 250, 150],
+      ["Base", 1000, 600, "Base", 2000, 1200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    // Entire band is treated as one candidate (known limitation).
+    assert.strictEqual(items.length, 1, "side-by-side tables are reported as one band (known limitation)");
+    assert.strictEqual(items[0].canRunSignificance, undefined, "canRunSignificance must not exist");
+    assert.ok(
+      ["available", "uncertain", "rejected"].includes(items[0].candidateStatus),
+      "candidateStatus must be a recognised value"
+    );
+  });
+
+  it("non-empty commentary row between two tables merges them — no split, no false confidence", () => {
+    // Tables separated by a non-empty row are merged into one band (known limitation).
+    // The merged candidate must not report canRunSignificance.
+    const values = [
+      ["Label1", 10, 20, 30],
+      ["Label2", 40, 50, 60],
+      ["Base", 100, 100, 100],
+      ["Note: preliminary data", null, null, null],  // non-empty, prevents band split
+      ["Label3", 70, 80, 90],
+      ["Label4", 10, 20, 30],
+      ["Base", 200, 200, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    // Should be 1 merged band, not 2.
+    assert.strictEqual(items.length, 1, "non-empty note row prevents band split — expect 1 merged candidate");
+    assert.strictEqual(items[0].canRunSignificance, undefined, "canRunSignificance must not exist");
+  });
+
+  it("title inferred two rows above band via empty separator gets medium confidence", () => {
+    // Row 0: section title. Row 1: empty separator. Rows 2-4: table band.
+    // twoRowsAbove inference should be medium confidence, not high.
+    const values = [
+      ["Section Title", null, null],
+      [null, null, null],
+      ["Label1", 10, 20],
+      ["Label2", 30, 40],
+      ["Base", 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    if (item.titleSource === "twoRowsAbove") {
+      assert.strictEqual(
+        item.titleConfidence,
+        "medium",
+        "twoRowsAbove title confidence must be medium (text may belong to a preceding section)"
+      );
+    }
+  });
+
+  it("item exposes candidateNotes not reasonsIfNotRunnable", () => {
+    const values = [
+      ["Label1", 10, 20],
+      ["Label2", 30, 40],
+      ["Base", 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1);
+    assert.ok(Array.isArray(items[0].candidateNotes), "candidateNotes must be an array");
+    assert.strictEqual(items[0].reasonsIfNotRunnable, undefined, "reasonsIfNotRunnable must not exist");
+  });
 });
