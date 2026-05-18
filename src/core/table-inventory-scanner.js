@@ -83,6 +83,24 @@ function isTextOnlyCell(cell) {
   return !isNumericCell(cell);
 }
 
+function isLikelyOrdinalScaleLabelCell(cell) {
+  if (typeof cell === "number") {
+    return Number.isInteger(cell) && cell >= 0 && cell <= 10;
+  }
+
+  if (typeof cell !== "string") {
+    return false;
+  }
+
+  const trimmed = cell.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return false;
+  }
+
+  const value = Number(trimmed);
+  return Number.isInteger(value) && value >= 0 && value <= 10;
+}
+
 function firstNonEmptyNonNumericText(row) {
   for (const cell of row) {
     if (isCellEmpty(cell)) continue;
@@ -177,6 +195,39 @@ function computeTextFraction(values, startCol, endCol, startRow, endRow) {
   return textCount / totalNonEmpty;
 }
 
+function isLikelyRatingScaleLabelColumn(values, colIndex, startRow, endRow) {
+  let totalNonEmpty = 0;
+  let textOnlyCount = 0;
+  let ordinalScaleCount = 0;
+
+  for (let row = startRow; row <= endRow; row++) {
+    const rowArr = values[row];
+    if (!rowArr) continue;
+
+    const cell = rowArr[colIndex];
+    if (isCellEmpty(cell)) continue;
+
+    totalNonEmpty++;
+
+    if (isTextOnlyCell(cell)) {
+      textOnlyCount++;
+      continue;
+    }
+
+    if (isLikelyOrdinalScaleLabelCell(cell)) {
+      ordinalScaleCount++;
+    }
+  }
+
+  if (totalNonEmpty === 0) {
+    return false;
+  }
+
+  const labelLikeFraction = (textOnlyCount + ordinalScaleCount) / totalNonEmpty;
+
+  return textOnlyCount >= 2 && ordinalScaleCount >= 3 && labelLikeFraction >= 0.8;
+}
+
 function splitLabelData(values, band) {
   const { localStartRow, localEndRow, localTrimmedFirstCol, localTrimmedLastCol } = band;
   const trimmedWidth = localTrimmedLastCol - localTrimmedFirstCol + 1;
@@ -201,7 +252,9 @@ function splitLabelData(values, band) {
       localStartRow,
       localEndRow
     );
-    const col0IsText = col0Fraction >= LABEL_TEXT_FRACTION_THRESHOLD;
+    const col0IsText =
+      col0Fraction >= LABEL_TEXT_FRACTION_THRESHOLD ||
+      isLikelyRatingScaleLabelColumn(values, localTrimmedFirstCol, localStartRow, localEndRow);
 
     if (!col0IsText) {
       // First column looks numeric — split is ambiguous.

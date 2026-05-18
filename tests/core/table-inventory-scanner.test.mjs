@@ -235,4 +235,57 @@ describe("scanWorksheetForTables", () => {
     assert.ok(Array.isArray(items[0].candidateNotes), "candidateNotes must be an array");
     assert.strictEqual(items[0].reasonsIfNotRunnable, undefined, "reasonsIfNotRunnable must not exist");
   });
+
+  it("rating/NPS scale labels in the first column keep the label split confident", () => {
+    const values = [
+      ["Score", "Total", "Male", "Female"],
+      ["1 - very unlikely", 5, 4, 6],
+      ["2", 6, 5, 7],
+      ["3", 7, 6, 8],
+      ["4", 8, 7, 9],
+      ["5", 9, 8, 10],
+      ["6", 10, 9, 11],
+      ["7", 11, 10, 12],
+      ["8", 12, 11, 13],
+      ["9", 13, 12, 14],
+      ["10 - very likely", 14, 13, 15],
+      ["Bottom-3", 18, 17, 19],
+      ["Mid-4", 32, 30, 34],
+      ["Top-3", 50, 53, 47],
+      ["Detractors", 20, 19, 18],
+      ["Neutral", 30, 29, 31],
+      ["Promoters", 50, 52, 51],
+      ["NPS", 30, 33, 33],
+      ["BASE", 1000, 500, 500],
+    ];
+
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+
+    const item = items[0];
+    assert.strictEqual(item.labelSplitConfidence, "confident");
+    assert.ok(
+      !item.candidateNotes.includes("Граница лейблов/данных не определена"),
+      "rating/NPS label column should not produce an uncertain label/data boundary note"
+    );
+  });
+
+  it("pure numeric first columns still stay uncertain when they look like data, not labels", () => {
+    const values = [
+      [1, 10, 20, 30],
+      [2, 40, 50, 60],
+      [3, 70, 80, 90],
+      [4, 100, 110, 120],
+    ];
+
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+
+    if (items.length > 0) {
+      assert.strictEqual(
+        items[0].labelSplitConfidence,
+        "uncertain",
+        "pure numeric first columns must not become confidently label-like"
+      );
+    }
+  });
 });
