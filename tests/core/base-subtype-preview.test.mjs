@@ -124,6 +124,48 @@ describe("base subtype selection — preview model metadata", () => {
     );
   });
 
+  it('"BASE weighted" suffix label → weighted fallback warning', () => {
+    const model = makeModel(
+      ["Agree", "Disagree", "BASE weighted"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]]
+    );
+    const block = findBlock(model, "proportion");
+    assert.ok(block, "expected a proportion block");
+    assert.strictEqual(block.baseSubtype, "weighted");
+    assert.ok(
+      warningCodes(model).includes("WEIGHTED_BASE_FALLBACK"),
+      `expected WEIGHTED_BASE_FALLBACK; got: ${JSON.stringify(warningCodes(model))}`
+    );
+  });
+
+  it('"Base unweighted" suffix label → unweighted selected, no warning', () => {
+    const model = makeModel(
+      ["Agree", "Disagree", "Base unweighted"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]]
+    );
+    const block = findBlock(model, "proportion");
+    assert.ok(block, "expected a proportion block");
+    assert.strictEqual(block.baseSubtype, "unweighted");
+    assert.ok(
+      !warningCodes(model).includes("WEIGHTED_BASE_FALLBACK"),
+      `unexpected WEIGHTED_BASE_FALLBACK; got: ${JSON.stringify(warningCodes(model))}`
+    );
+  });
+
+  it('"Base effective" suffix label → effective selected, no warning', () => {
+    const model = makeModel(
+      ["Agree", "Disagree", "Base effective"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]]
+    );
+    const block = findBlock(model, "proportion");
+    assert.ok(block, "expected a proportion block");
+    assert.strictEqual(block.baseSubtype, "effective");
+    assert.ok(
+      !warningCodes(model).includes("WEIGHTED_BASE_FALLBACK"),
+      `unexpected WEIGHTED_BASE_FALLBACK; got: ${JSON.stringify(warningCodes(model))}`
+    );
+  });
+
   it("ordinary BASE table → baseSubtype null, baseSelection populated, no warning", () => {
     const model = makeModel(
       ["Agree", "Disagree", "BASE"],
@@ -148,5 +190,59 @@ describe("base subtype selection — preview model metadata", () => {
     );
     // rowSubtype on row diagnostics is also null for plain base
     assert.strictEqual(model.rowDiagnostics[2].rowSubtype, null);
+  });
+});
+
+// ─── Vertically merged / sparse Base labels ───────────────────────────────────
+
+describe("vertically merged / sparse Base labels", () => {
+  it("basic merged Base: labeled row detected as base, empty rows below fall outside the block", () => {
+    // In Excel a merged Base cell spanning rows 3-5 exposes the label only
+    // on the first physical row; subsequent rows arrive as empty strings with
+    // no meaningful data.  Current behavior: the labeled row is detected as
+    // the base; the empty/null rows below form orphaned empty rows that are
+    // not included in any calculation block.
+    const model = makeModel(
+      ["Agree", "Disagree", "Base", "", ""],
+      [
+        [0.4, 0.6],
+        [0.6, 0.4],
+        [100, 200],
+        [null, null],
+        [null, null],
+      ]
+    );
+    const block = findBlock(model, "proportion");
+    assert.ok(block, "proportion block must be detected");
+    assert.deepStrictEqual(block.valueRowIndexes, [0, 1]);
+    assert.strictEqual(block.baseRowIndex, 2, "base must be the labeled row");
+  });
+
+  it("split-data merged Base: base data spread across multiple rows — NOT SUPPORTED (regression documentation)", () => {
+    // Edge case: if the data values for a merged Base cell are spread across
+    // its physical rows (different columns on different rows), only the data
+    // in the labeled row (index 2) is used as the base.  Subsequent rows
+    // (indexes 3-4) are misclassified as empty proportion rows and their
+    // data is ignored.
+    //
+    // This shape is NOT supported.  Documented here so any future fix has a
+    // baseline.  Do not change these assertions without a dedicated issue.
+    const model = makeModel(
+      ["Agree", "Disagree", "Base", "", ""],
+      [
+        [0.4, null, null],
+        [null, 0.6, null],
+        [100, null, null],
+        [null, 200, null],
+        [null, null, 150],
+      ]
+    );
+    const block = findBlock(model, "proportion");
+    // The preview model may or may not surface a block here (depends on
+    // numeric-evidence checks for the base row).  What must NOT happen is
+    // that rows 3 or 4 are selected as the base row.
+    if (block !== undefined) {
+      assert.strictEqual(block.baseRowIndex, 2, "if a block is detected, base must be the labeled row");
+    }
   });
 });
