@@ -1051,6 +1051,7 @@ async function runCheckTable() {
       leftLabelValues,
       bannerContext,
       settings: calculationSettings,
+      trailingBodyRows: normalized?.trailingBodyRows,
     };
 
     const model = buildTablePreviewModel(modelInput);
