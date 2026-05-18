@@ -39,6 +39,7 @@ import { normalizeSelectedRange } from "../core/range-normalizer";
 import {
   interpretSelectedRange,
   loadLabelValuesForSelectedRange,
+  detectLeadingEmptyColumns,
 } from "./selected-range-interpreter";
 
 const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
@@ -750,7 +751,21 @@ async function clearSignificanceFromSelection() {
 
     if (normalized.normalizationNeeded && normalized.normalizationApplied) {
       const bodyRowCount = normalized.valuesForCalculation.length;
-      const bodyColCount = normalized.valuesForCalculation[0].length;
+      let bodyColCount = normalized.valuesForCalculation[0].length;
+      let effectiveClearColOffset = normalized.dataColOffset;
+
+      // Mirror the tertiary strip in interpretSelectedRange State 2: the
+      // normalizer may leave leading all-blank helper columns (e.g. column B
+      // in a mean-only table) inside the normalized body.  Clear must exclude
+      // those same columns so it does not widen the clear target beyond the
+      // real data body.
+      const clearLeadingEmptyCols = detectLeadingEmptyColumns(
+        normalized.textForCalculation
+      );
+      if (clearLeadingEmptyCols > 0) {
+        bodyColCount -= clearLeadingEmptyCols;
+        effectiveClearColOffset += clearLeadingEmptyCols;
+      }
 
       if (bodyRowCount < 1 || bodyColCount < 1) {
         setStatusMessage("Нет данных в выделенном диапазоне.");
@@ -758,10 +773,26 @@ async function clearSignificanceFromSelection() {
       }
 
       clearTargetRange = selectedRange
-        .getCell(normalized.dataRowOffset, normalized.dataColOffset)
+        .getCell(normalized.dataRowOffset, effectiveClearColOffset)
         .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
     } else {
-      clearTargetRange = selectedRange;
+      // Pass-through: the selection is a clean numeric-only range.
+      // Detect leading all-blank helper columns and exclude them from the
+      // clear target so that Clear does not remove fill/formatting from helper
+      // cells.  Uses the same detectLeadingEmptyColumns function as Run's
+      // interpretSelectedRange passThrough path.
+      const leadingBlankColsForClear = detectLeadingEmptyColumns(selectedText);
+
+      if (leadingBlankColsForClear > 0) {
+        clearTargetRange = selectedRange
+          .getCell(0, leadingBlankColsForClear)
+          .getResizedRange(
+            selectedRange.rowCount - 1,
+            selectedRange.columnCount - leadingBlankColsForClear - 1
+          );
+      } else {
+        clearTargetRange = selectedRange;
+      }
     }
 
     clearTargetRange.load(["values", "numberFormat"]);

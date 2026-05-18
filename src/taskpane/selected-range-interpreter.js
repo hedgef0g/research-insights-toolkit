@@ -296,6 +296,49 @@ function detectEmbeddedLabelColumns(cleanedValues) {
   return embeddedLabelCols;
 }
 
+/**
+ * Counts consecutive all-blank columns at the start of selectedText.
+ *
+ * PURPOSE: Detects a leading empty/helper column that sits between the external
+ * row-label column and the first real data column (e.g. a visual spacer in a
+ * mean-only table).  detectEmbeddedLabelColumns only recognises columns with
+ * genuine text or known unit indicators; a column whose every cell displays as
+ * blank is left untouched and ends up in writeTargetRange, causing banner
+ * letters to be written into the helper cell.
+ *
+ * Uses selectedText (the displayed cell text) rather than cleanedValues so
+ * that cells which are visually empty but carry a non-empty underlying value
+ * — such as 0 formatted as ";;;" — are also detected correctly.  A real data
+ * column always displays something (e.g. "4.2", "150", "0%"); a helper column
+ * shows nothing.
+ *
+ * RULE: a column qualifies when every cell's displayed text is "", null, or
+ * undefined.  Always leaves at least one column as data (colCount >= 2 guard).
+ * Only called when detectEmbeddedLabelColumns returns 0.
+ */
+export function detectLeadingEmptyColumns(selectedText) {
+  if (!Array.isArray(selectedText) || !Array.isArray(selectedText[0])) return 0;
+  const colCount = selectedText[0].length;
+  if (colCount < 2) return 0;
+
+  let emptyCols = 0;
+
+  for (let col = 0; col < colCount - 1; col++) {
+    const isColBlank = selectedText.every((row) => {
+      const cell = row && row[col];
+      return cell === "" || cell === null || cell === undefined;
+    });
+
+    if (isColBlank) {
+      emptyCols++;
+    } else {
+      break;
+    }
+  }
+
+  return emptyCols;
+}
+
 // ─── Banner context adapter ────────────────────────────────────────────────────
 
 /**
@@ -669,6 +712,66 @@ export async function interpretSelectedRange(
       }
     }
 
+    // Tertiary check: strip leading all-visually-empty columns from the
+    // effective normalized body.  The normalizer's label-column detection
+    // recognises text-like leading columns (e.g. column A = "Среднее",
+    // "Variance", "BASE") and sets dataColOffset accordingly, but it does
+    // NOT strip helper/spacer columns that are all-blank (e.g. column B in a
+    // mean-only table where the user selected A:N and the normalizer sets
+    // dataColOffset=1 for column A, leaving column B as valuesForCalculation
+    // column 0 with all-"" entries).
+    //
+    // Uses textForCalculation (displayed text) rather than valuesForCalculation
+    // so that cells formatted as ";;;" (value hidden) are also treated as blank.
+    // A real data column always renders something ("4.2", "150", "0%"); a helper
+    // column renders nothing regardless of its underlying value.
+    //
+    // This strip MUST happen before dataBodyRange is built so that
+    // writeTargetRange, bannerContext.selectedColumnCount, and
+    // valuesForCalculation width are all aligned to real data columns.
+    const additionalLeadingEmptyCols = detectLeadingEmptyColumns(textForCalculation);
+    if (additionalLeadingEmptyCols > 0) {
+      valuesForCalculation = valuesForCalculation.map(
+        (row) => row.slice(additionalLeadingEmptyCols)
+      );
+      textForCalculation = textForCalculation.map(
+        (row) => row.slice(additionalLeadingEmptyCols)
+      );
+      effectiveDataColOffset += additionalLeadingEmptyCols;
+
+      // Keep effectiveBannerContext aligned to the new data width so
+      // buildRunBannerContext produces the correct selectedColumnCount.
+      // The scanRows shape is what the normalizer returns; the
+      // lowerBannerRow/upperScanRows shape is produced by
+      // buildRunBannerContext (should not appear here yet, but handled
+      // defensively).
+      if (effectiveBannerContext) {
+        if (Array.isArray(effectiveBannerContext.scanRows)) {
+          effectiveBannerContext = {
+            ...effectiveBannerContext,
+            scanRows: effectiveBannerContext.scanRows.map((row) =>
+              Array.isArray(row) ? row.slice(additionalLeadingEmptyCols) : row
+            ),
+            columnCount:
+              (effectiveBannerContext.columnCount || 0) - additionalLeadingEmptyCols,
+          };
+        } else if (Array.isArray(effectiveBannerContext.lowerBannerRow)) {
+          effectiveBannerContext = {
+            ...effectiveBannerContext,
+            lowerBannerRow: effectiveBannerContext.lowerBannerRow.slice(
+              additionalLeadingEmptyCols
+            ),
+            upperScanRows: (effectiveBannerContext.upperScanRows || []).map((row) =>
+              Array.isArray(row) ? row.slice(additionalLeadingEmptyCols) : row
+            ),
+            selectedColumnCount:
+              (effectiveBannerContext.selectedColumnCount || 0) -
+              additionalLeadingEmptyCols,
+          };
+        }
+      }
+    }
+
     const dataBodyRange = selectedRange
       .getCell(normalized.dataRowOffset, effectiveDataColOffset)
       .getResizedRange(
@@ -738,6 +841,16 @@ export async function interpretSelectedRange(
 
   // Check for embedded label/unit columns before loading external labels.
   const embeddedLabelCols = detectEmbeddedLabelColumns(cleanedValues);
+  // When there are no embedded text/unit label columns, check for a leading
+  // all-empty helper column (common in mean-only tables where a visual spacer
+  // sits between the external row-label column and the first data column).
+  // detectEmbeddedLabelColumns does not catch these because they contain no
+  // genuine text or unit indicators, so they would otherwise be included in
+  // writeTargetRange and receive a spurious banner letter.
+  const leadingEmptyCols = embeddedLabelCols === 0
+    ? detectLeadingEmptyColumns(selectedText)
+    : 0;
+
 
   let valuesForCalculation;
   let textForCalculation;
@@ -754,6 +867,24 @@ export async function interpretSelectedRange(
         selectedRange.rowCount - 1,
         selectedRange.columnCount - embeddedLabelCols - 1
       );
+  } else if (leadingEmptyCols > 0) {
+    // Strip leading empty helper columns from the write target and calculation
+    // range so that banner context, significance calculation, and banner-letter
+    // placement are all aligned to the real data columns.  Labels must still be
+    // loaded from the worksheet because the empty columns carry no label text.
+    valuesForCalculation = cleanedValues.map((row) => row.slice(leadingEmptyCols));
+    textForCalculation = selectedText.map((row) => row.slice(leadingEmptyCols));
+    writeTargetRange = selectedRange
+      .getCell(0, leadingEmptyCols)
+      .getResizedRange(
+        selectedRange.rowCount - 1,
+        selectedRange.columnCount - leadingEmptyCols - 1
+      );
+    leftLabelValues = await loadLabelValuesForSelectedRange(
+      context,
+      selectedRange,
+      calculationSettings
+    );
   } else {
     leftLabelValues = await loadLabelValuesForSelectedRange(
       context,
@@ -798,7 +929,7 @@ export async function interpretSelectedRange(
     bannerContext,
     writeTargetRange,
     dataRowOffset: 0,
-    dataColOffset: embeddedLabelCols,
+    dataColOffset: embeddedLabelCols > 0 ? embeddedLabelCols : leadingEmptyCols,
     dataRowCount: valuesForCalculation.length,
     dataColCount,
     normalizationStatusLines: [],
