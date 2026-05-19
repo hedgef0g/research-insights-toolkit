@@ -467,36 +467,3 @@ b {
 .confidence-settings-row .inline-checkbox-label span {
   white-space: normal;
 }
-
-.check-buttons-row {
-  width: 100%;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 4px 0 0 0;
-}
-
-.check-action-button {
-  padding: 5px 10px;
-  border: 1px solid var(--rs-color-primary);
-  border-radius: var(--rs-radius-sm);
-  background: #fff;
-  color: var(--rs-color-primary-dark);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.check-action-button:hover {
-  background: var(--rs-color-bg-tint);
-}
-
-.check-action-button:active {
-  background: #dcfce7;
-}
-
-.check-panel {
-  margin-top: 8px;
-  border-color: #bbf7d0;
-  background: var(--rs-color-bg-tint);
-}
