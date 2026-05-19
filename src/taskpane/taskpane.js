@@ -53,6 +53,20 @@ const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
 ]);
 
 const SCAN_CELL_LIMIT = 250000;
+const INVENTORY_CONTENT_SHEET_NAME = "Content";
+const INVENTORY_CONTENT_COLUMNS = [
+  "#",
+  "Sheet",
+  "Title",
+  "Range",
+  "Rows",
+  "Columns",
+  "Status",
+  "Summary",
+  "Notes",
+  "Warnings",
+  "Critical",
+];
 
 function formatBannerUserMessages(bannerStructure) {
   if (!bannerStructure || !bannerStructure.messages) {
@@ -1268,10 +1282,10 @@ function getInventoryCandidateStatusLabel(candidateStatus) {
   }
 
   if (candidateStatus === "uncertain") {
-    return "Кандидат (неопределён) — требует «Проверить таблицу»";
+    return "Кандидат неопределён — требуется «Проверить таблицу»";
   }
 
-  return "Не опознан как таблица RIT";
+  return "Не опознан как таблица ResearchSignal";
 }
 
 function formatInventoryItemLines(item, index) {
@@ -1308,6 +1322,8 @@ function formatWorkbookInventoryMessage({ scannedSheets, sheetResults, skippedSh
     `Листов с кандидатами: ${sheetResults.length}.`,
     `Просканировано листов: ${scannedSheets}.`,
   ];
+
+  lines.push(`Лист ${INVENTORY_CONTENT_SHEET_NAME} обновлён.`);
 
   if (totalCandidates === 0) {
     lines.push("");
@@ -1350,68 +1366,314 @@ function formatWorkbookInventoryMessage({ scannedSheets, sheetResults, skippedSh
   return lines.join("\n").trimEnd();
 }
 
-async function runTableInventory() {
-  await Excel.run(async (context) => {
-    const worksheets = context.workbook.worksheets;
-    worksheets.load("items/name");
+async function collectWorkbookInventoryResults(context) {
+  const worksheets = context.workbook.worksheets;
+  worksheets.load("items/name");
 
-    await context.sync();
+  await context.sync();
 
-    const worksheetEntries = worksheets.items.map((worksheet) => {
+  const worksheetEntries = worksheets.items
+    .filter((worksheet) => worksheet.name !== INVENTORY_CONTENT_SHEET_NAME)
+    .map((worksheet) => {
       const usedRange = worksheet.getUsedRangeOrNullObject();
       usedRange.load(["isNullObject", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
       return { worksheet, usedRange };
     });
 
-    await context.sync();
+  await context.sync();
 
-    const scannedEntries = [];
-    const skippedSheets = [];
+  const scannedEntries = [];
+  const skippedSheets = [];
 
-    for (const entry of worksheetEntries) {
-      const { worksheet, usedRange } = entry;
+  for (const entry of worksheetEntries) {
+    const { worksheet, usedRange } = entry;
 
-      if (usedRange.isNullObject) {
-        skippedSheets.push({ sheetName: worksheet.name, reason: "empty" });
-        continue;
-      }
-
-      const cellCount = usedRange.rowCount * usedRange.columnCount;
-      if (cellCount > SCAN_CELL_LIMIT) {
-        skippedSheets.push({
-          sheetName: worksheet.name,
-          reason: "tooLarge",
-          rowCount: usedRange.rowCount,
-          columnCount: usedRange.columnCount,
-          cellCount,
-        });
-        continue;
-      }
-
-      usedRange.load("values");
-      scannedEntries.push(entry);
+    if (usedRange.isNullObject) {
+      skippedSheets.push({ sheetName: worksheet.name, reason: "empty" });
+      continue;
     }
 
-    await context.sync();
-
-    const sheetResults = scannedEntries
-      .map(({ worksheet, usedRange }) => ({
+    const cellCount = usedRange.rowCount * usedRange.columnCount;
+    if (cellCount > SCAN_CELL_LIMIT) {
+      skippedSheets.push({
         sheetName: worksheet.name,
-        items: scanWorksheetForTables({
-          values: usedRange.values,
-          usedRangeRowOffset: usedRange.rowIndex,
-          usedRangeColOffset: usedRange.columnIndex,
-          sheetName: worksheet.name,
-        }),
-      }))
-      .filter((sheetResult) => sheetResult.items.length > 0);
+        reason: "tooLarge",
+        rowCount: usedRange.rowCount,
+        columnCount: usedRange.columnCount,
+        cellCount,
+      });
+      continue;
+    }
+
+    usedRange.load("values");
+    scannedEntries.push(entry);
+  }
+
+  await context.sync();
+
+  const sheetResults = scannedEntries
+    .map(({ worksheet, usedRange }) => ({
+      sheetName: worksheet.name,
+      items: scanWorksheetForTables({
+        values: usedRange.values,
+        usedRangeRowOffset: usedRange.rowIndex,
+        usedRangeColOffset: usedRange.columnIndex,
+        sheetName: worksheet.name,
+      }),
+    }))
+    .filter((sheetResult) => sheetResult.items.length > 0);
+
+  return {
+    scannedSheets: scannedEntries.length,
+    sheetResults,
+    skippedSheets,
+  };
+}
+
+function buildInventoryContentCandidateRows(sheetResults) {
+  const rows = [];
+  let candidateIndex = 1;
+
+  for (const sheetResult of sheetResults) {
+    for (const item of sheetResult.items) {
+      rows.push([
+        candidateIndex,
+        sheetResult.sheetName,
+        item.title || "",
+        item.rangeAddress || "",
+        item.rowCount ?? "",
+        item.columnCount ?? "",
+        getInventoryCandidateStatusLabel(item.candidateStatus),
+        item.previewSummary || "",
+        item.candidateNotes && item.candidateNotes.length > 0 ? item.candidateNotes.join("; ") : "",
+        item.warningsCount ?? 0,
+        item.criticalCount ?? 0,
+      ]);
+      candidateIndex += 1;
+    }
+  }
+
+  if (rows.length === 0) {
+    rows.push([
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "Нет кандидатов",
+      "RIT не обнаружил в книге блоков данных, похожих на таблицы для проверки.",
+      "",
+      "",
+      "",
+    ]);
+  }
+
+  return rows;
+}
+
+function toSafeExcelCellValue(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => toSafeExcelCellValue(item)).join(", ");
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch (error) {
+      return String(value);
+    }
+  }
+
+  return String(value);
+}
+
+function normalizeRowsToColumnCount(rows, columnCount) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return [];
+  }
+
+  return rows.map((row) => {
+    const sourceRow = Array.isArray(row) ? row : [row];
+    const normalizedRow = [];
+
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+      normalizedRow.push(toSafeExcelCellValue(sourceRow[columnIndex]));
+    }
+
+    return normalizedRow;
+  });
+}
+
+function buildInventoryContentSkippedRows(skippedSheets) {
+  if (!skippedSheets || skippedSheets.length === 0) {
+    return [];
+  }
+
+  return skippedSheets.map((sheet) => {
+    if (sheet.reason === "empty") {
+      return [sheet.sheetName, "Skipped", "Пустой лист", "", ""];
+    }
+
+    return [
+      sheet.sheetName,
+      "Skipped",
+      "Слишком большой для сканирования",
+      `${sheet.rowCount} строк, ${sheet.columnCount} колонок`,
+      `${sheet.cellCount} ячеек; лимит ${SCAN_CELL_LIMIT}`,
+    ];
+  });
+}
+
+async function ensureInventoryContentWorksheet(context) {
+  const worksheets = context.workbook.worksheets;
+  const worksheet = worksheets.getItemOrNullObject(INVENTORY_CONTENT_SHEET_NAME);
+  worksheet.load("isNullObject");
+
+  await context.sync();
+
+  if (!worksheet.isNullObject) {
+    return worksheet;
+  }
+
+  return worksheets.add(INVENTORY_CONTENT_SHEET_NAME);
+}
+
+async function writeInventoryContentSheet(context, inventoryResults) {
+  const worksheet = await ensureInventoryContentWorksheet(context);
+  const existingUsedRange = worksheet.getUsedRangeOrNullObject();
+  existingUsedRange.load("isNullObject");
+
+  await context.sync();
+
+  if (!existingUsedRange.isNullObject) {
+    existingUsedRange.unmerge();
+    existingUsedRange.clear();
+  }
+
+  const candidateRows = normalizeRowsToColumnCount(
+    buildInventoryContentCandidateRows(inventoryResults.sheetResults),
+    INVENTORY_CONTENT_COLUMNS.length
+  );
+  const skippedRows = normalizeRowsToColumnCount(
+    buildInventoryContentSkippedRows(inventoryResults.skippedSheets),
+    5
+  );
+  const totalCandidates = inventoryResults.sheetResults.reduce(
+    (sum, sheetResult) => sum + sheetResult.items.length,
+    0
+  );
+
+  const titleRange = worksheet.getRange("A1:K1");
+  titleRange.values = normalizeRowsToColumnCount([["Table Inventory Content"]], 11);
+  titleRange.merge();
+  titleRange.format.font.bold = true;
+  titleRange.format.font.size = 14;
+
+  const metadataRows = normalizeRowsToColumnCount(
+    [
+    ["Generated sheet", INVENTORY_CONTENT_SHEET_NAME],
+    ["Scanned sheets", inventoryResults.scannedSheets],
+    ["Candidate sheets", inventoryResults.sheetResults.length],
+    ["Detected candidates", totalCandidates],
+    ["Reminder", "Inventory is a candidate finder only. Use «Проверить таблицу» for interpretation."],
+    ],
+    2
+  );
+
+  const metadataRange = worksheet.getRangeByIndexes(1, 0, metadataRows.length, 2);
+  metadataRange.values = metadataRows;
+  metadataRange.format.font.bold = false;
+  worksheet.getRange("A2:A6").format.font.bold = true;
+
+  const headerRowIndex = 7;
+  const headerRange = worksheet.getRangeByIndexes(
+    headerRowIndex - 1,
+    0,
+    1,
+    INVENTORY_CONTENT_COLUMNS.length
+  );
+  headerRange.values = normalizeRowsToColumnCount([INVENTORY_CONTENT_COLUMNS], INVENTORY_CONTENT_COLUMNS.length);
+  headerRange.format.font.bold = true;
+
+  const candidateRange = worksheet.getRangeByIndexes(
+    headerRowIndex,
+    0,
+    candidateRows.length,
+    INVENTORY_CONTENT_COLUMNS.length
+  );
+  candidateRange.values = candidateRows;
+  candidateRange.format.wrapText = true;
+
+  const tableRange = worksheet.getRangeByIndexes(
+    headerRowIndex - 1,
+    0,
+    candidateRows.length + 1,
+    INVENTORY_CONTENT_COLUMNS.length
+  );
+  tableRange.format.borders.getItem("EdgeBottom").style = "Continuous";
+  tableRange.format.borders.getItem("EdgeTop").style = "Continuous";
+  tableRange.format.borders.getItem("EdgeLeft").style = "Continuous";
+  tableRange.format.borders.getItem("EdgeRight").style = "Continuous";
+  tableRange.format.borders.getItem("InsideHorizontal").style = "Continuous";
+  tableRange.format.borders.getItem("InsideVertical").style = "Continuous";
+
+  if (skippedRows.length > 0) {
+    const skippedSectionStartRowIndex = headerRowIndex + candidateRows.length + 2;
+    const skippedTitleRange = worksheet.getRangeByIndexes(skippedSectionStartRowIndex - 1, 0, 1, 5);
+    skippedTitleRange.values = normalizeRowsToColumnCount([["Skipped sheets"]], 5);
+    skippedTitleRange.merge();
+    skippedTitleRange.format.font.bold = true;
+
+    const skippedHeaderRange = worksheet.getRangeByIndexes(skippedSectionStartRowIndex, 0, 1, 5);
+    skippedHeaderRange.values = normalizeRowsToColumnCount(
+      [["Sheet", "Status", "Summary", "Notes", "Warnings"]],
+      5
+    );
+    skippedHeaderRange.format.font.bold = true;
+
+    const skippedDataRange = worksheet.getRangeByIndexes(
+      skippedSectionStartRowIndex + 1,
+      0,
+      skippedRows.length,
+      5
+    );
+    skippedDataRange.values = skippedRows;
+    skippedDataRange.format.wrapText = true;
+  }
+
+  const columnWidths = [42, 120, 220, 92, 52, 70, 260, 190, 240, 72, 72];
+  columnWidths.forEach((width, index) => {
+    worksheet.getRangeByIndexes(0, index, 1, 1).format.columnWidth = width;
+  });
+
+  worksheet.getRange("A:K").format.verticalAlignment = "Top";
+  await context.sync();
+}
+
+async function runTableInventory() {
+  await Excel.run(async (context) => {
+    const inventoryResults = await collectWorkbookInventoryResults(context);
+    await writeInventoryContentSheet(context, inventoryResults);
 
     setInventoryMessage(
       formatWorkbookInventoryMessage({
-        scannedSheets: scannedEntries.length,
-        sheetResults,
-        skippedSheets,
+        scannedSheets: inventoryResults.scannedSheets,
+        sheetResults: inventoryResults.sheetResults,
+        skippedSheets: inventoryResults.skippedSheets,
       })
     );
   });
