@@ -21,9 +21,12 @@
     "signin": "office-addin-dev-settings m365-account login",
     "signout": "office-addin-dev-settings m365-account logout",
     "start": "office-addin-debugging start manifest.xml",
+    "start:local": "office-addin-debugging start manifest.local.xml",
     "stop": "office-addin-debugging stop manifest.xml",
+    "stop:local": "office-addin-debugging stop manifest.local.xml",
     "test": "node --no-warnings --loader ./tests/core/loader.mjs --test tests/core/*.test.mjs",
     "validate": "office-addin-manifest validate manifest.xml",
+    "validate:local": "office-addin-manifest validate manifest.local.xml",
     "watch": "webpack --mode development --watch"
   },
   "dependencies": {
