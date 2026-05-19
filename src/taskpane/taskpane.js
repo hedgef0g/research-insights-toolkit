@@ -1473,6 +1473,51 @@ function buildInventoryContentCandidateRows(sheetResults) {
   return rows;
 }
 
+function toSafeExcelCellValue(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => toSafeExcelCellValue(item)).join(", ");
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch (error) {
+      return String(value);
+    }
+  }
+
+  return String(value);
+}
+
+function normalizeRowsToColumnCount(rows, columnCount) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return [];
+  }
+
+  return rows.map((row) => {
+    const sourceRow = Array.isArray(row) ? row : [row];
+    const normalizedRow = [];
+
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+      normalizedRow.push(toSafeExcelCellValue(sourceRow[columnIndex]));
+    }
+
+    return normalizedRow;
+  });
+}
+
 function buildInventoryContentSkippedRows(skippedSheets) {
   if (!skippedSheets || skippedSheets.length === 0) {
     return [];
@@ -1519,26 +1564,35 @@ async function writeInventoryContentSheet(context, inventoryResults) {
     existingUsedRange.clear();
   }
 
-  const candidateRows = buildInventoryContentCandidateRows(inventoryResults.sheetResults);
-  const skippedRows = buildInventoryContentSkippedRows(inventoryResults.skippedSheets);
+  const candidateRows = normalizeRowsToColumnCount(
+    buildInventoryContentCandidateRows(inventoryResults.sheetResults),
+    INVENTORY_CONTENT_COLUMNS.length
+  );
+  const skippedRows = normalizeRowsToColumnCount(
+    buildInventoryContentSkippedRows(inventoryResults.skippedSheets),
+    5
+  );
   const totalCandidates = inventoryResults.sheetResults.reduce(
     (sum, sheetResult) => sum + sheetResult.items.length,
     0
   );
 
   const titleRange = worksheet.getRange("A1:K1");
+  titleRange.values = normalizeRowsToColumnCount([["Table Inventory Content"]], 11);
   titleRange.merge();
-  titleRange.values = [["Table Inventory Content"]];
   titleRange.format.font.bold = true;
   titleRange.format.font.size = 14;
 
-  const metadataRows = [
+  const metadataRows = normalizeRowsToColumnCount(
+    [
     ["Generated sheet", INVENTORY_CONTENT_SHEET_NAME],
     ["Scanned sheets", inventoryResults.scannedSheets],
     ["Candidate sheets", inventoryResults.sheetResults.length],
     ["Detected candidates", totalCandidates],
     ["Reminder", "Inventory is a candidate finder only. Use «Проверить таблицу» for interpretation."],
-  ];
+    ],
+    2
+  );
 
   const metadataRange = worksheet.getRangeByIndexes(1, 0, metadataRows.length, 2);
   metadataRange.values = metadataRows;
@@ -1552,7 +1606,7 @@ async function writeInventoryContentSheet(context, inventoryResults) {
     1,
     INVENTORY_CONTENT_COLUMNS.length
   );
-  headerRange.values = [INVENTORY_CONTENT_COLUMNS];
+  headerRange.values = normalizeRowsToColumnCount([INVENTORY_CONTENT_COLUMNS], INVENTORY_CONTENT_COLUMNS.length);
   headerRange.format.font.bold = true;
 
   const candidateRange = worksheet.getRangeByIndexes(
@@ -1580,12 +1634,15 @@ async function writeInventoryContentSheet(context, inventoryResults) {
   if (skippedRows.length > 0) {
     const skippedSectionStartRowIndex = headerRowIndex + candidateRows.length + 2;
     const skippedTitleRange = worksheet.getRangeByIndexes(skippedSectionStartRowIndex - 1, 0, 1, 5);
+    skippedTitleRange.values = normalizeRowsToColumnCount([["Skipped sheets"]], 5);
     skippedTitleRange.merge();
-    skippedTitleRange.values = [["Skipped sheets"]];
     skippedTitleRange.format.font.bold = true;
 
     const skippedHeaderRange = worksheet.getRangeByIndexes(skippedSectionStartRowIndex, 0, 1, 5);
-    skippedHeaderRange.values = [["Sheet", "Status", "Summary", "Notes", "Warnings"]];
+    skippedHeaderRange.values = normalizeRowsToColumnCount(
+      [["Sheet", "Status", "Summary", "Notes", "Warnings"]],
+      5
+    );
     skippedHeaderRange.format.font.bold = true;
 
     const skippedDataRange = worksheet.getRangeByIndexes(
