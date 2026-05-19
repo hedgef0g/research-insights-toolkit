@@ -1603,63 +1603,103 @@ function adjustRangeRows(rangeAddress, { startOffset = 0, endOffset = 0 } = {}) 
  *   "will-insert"   — no backlink detected; one will be inserted above
  *   "cannot-insert" — table starts at sheet row 0; cannot insert above
  *
- * resolvedRangeAddress always points to the actual table body (post-insertion).
+ * resolvedRangeAddress points to the actual table body after all insertions on
+ * the sheet are accounted for. Items are sorted top-to-bottom per sheet so that
+ * each will-insert item contributes +1 to the cumulative shift of all items below
+ * it, matching the bottom-to-top insertion order used by ensureBacklinkRows.
  *
- * backlinksEnabled controls whether will-insert shifts the end row:
- *   true  → will-insert: start +1, end +1  (row will be inserted)
- *   false → will-insert: start +0, end +0  (no insertion; only fix in-range stale addresses)
+ * backlinksEnabled:
+ *   true  → will-insert items predict a +1 row insertion and increment insertionsAbove.
+ *   false → no insertions predicted; only in-range stale start-rows are corrected.
  */
 function normalizeBacklinkItems(sheetResults, backlinksEnabled) {
   for (const sheetResult of sheetResults) {
     const { usedRangeRowOffset, usedRangeColOffset, usedRangeValues } = sheetResult;
 
-    for (const item of sheetResult.items) {
-      const parsed = parseRangeStartCell(item.rangeAddress);
+    const cellAt = (r, c) => {
+      if (r < 0 || r >= usedRangeValues.length) return null;
+      const rowArr = usedRangeValues[r];
+      if (!rowArr || c < 0 || c >= rowArr.length) return null;
+      return rowArr[c];
+    };
 
+    // Pass 1: classify backlinkState using original scanned values.
+    // Collect parsed positions for sorting.
+    const parsedItems = sheetResult.items.map((item) => {
+      const parsed = parseRangeStartCell(item.rangeAddress);
       if (!parsed) {
-        item.resolvedRangeAddress = item.rangeAddress;
         item.backlinkState = "cannot-insert";
-        continue;
+        return { item, rowIndex: -1 };
       }
 
       const localRow = parsed.rowIndex - usedRangeRowOffset;
       const localCol = parsed.colIndex - usedRangeColOffset;
 
-      const cellAt = (r, c) => {
-        if (r < 0 || r >= usedRangeValues.length) return null;
-        const row = usedRangeValues[r];
-        if (!row || c < 0 || c >= row.length) return null;
-        return row[c];
-      };
-
       if (isGeneratedBacklinkRow(cellAt(localRow, localCol))) {
-        // The first row of the detected range is the generated backlink row.
-        // Shift only the start by +1; end row is unchanged because no new row is inserted.
         item.backlinkState = "in-range";
-        item.resolvedRangeAddress = adjustRangeRows(item.rangeAddress, { startOffset: 1, endOffset: 0 });
-        continue;
-      }
-
-      if (isGeneratedBacklinkRow(cellAt(localRow - 1, localCol))) {
-        // The row immediately above the detected range is the generated backlink row.
+      } else if (isGeneratedBacklinkRow(cellAt(localRow - 1, localCol))) {
         item.backlinkState = "above-range";
-        item.resolvedRangeAddress = item.rangeAddress;
-        continue;
-      }
-
-      if (parsed.rowIndex === 0) {
+      } else if (parsed.rowIndex === 0) {
         item.backlinkState = "cannot-insert";
-        item.resolvedRangeAddress = item.rangeAddress;
-        continue;
+      } else {
+        item.backlinkState = "will-insert";
       }
 
-      // No backlink present. When backlinks are enabled a new row will be inserted above,
-      // shifting the whole table down by one. Shift both start and end rows by +1.
-      // When backlinks are disabled no insertion happens, so keep the range unchanged.
-      item.backlinkState = "will-insert";
-      item.resolvedRangeAddress = backlinksEnabled
-        ? adjustRangeRows(item.rangeAddress, { startOffset: 1, endOffset: 1 })
-        : item.rangeAddress;
+      return { item, rowIndex: parsed.rowIndex };
+    });
+
+    // Pass 2: compute resolvedRangeAddress with cumulative insertion accounting.
+    // Sort top-to-bottom so insertionsAbove accumulates as items are processed.
+    const sorted = parsedItems.slice().sort((a, b) => a.rowIndex - b.rowIndex);
+    let insertionsAbove = 0;
+
+    for (const { item } of sorted) {
+      const base = insertionsAbove;
+
+      switch (item.backlinkState) {
+        case "in-range":
+          // Existing backlink IS the first detected row — strip it (start +1).
+          // No new insertion, so end shifts only by prior insertions above.
+          item.resolvedRangeAddress = adjustRangeRows(item.rangeAddress, {
+            startOffset: 1 + base,
+            endOffset: base,
+          });
+          break;
+
+        case "above-range":
+          // Existing backlink above — no new insertion.
+          // Both endpoints shift only by prior insertions above.
+          item.resolvedRangeAddress = adjustRangeRows(item.rangeAddress, {
+            startOffset: base,
+            endOffset: base,
+          });
+          break;
+
+        case "will-insert":
+          if (backlinksEnabled) {
+            // New backlink row inserted above the table: entire table shifts +1,
+            // plus any prior insertions above on this sheet.
+            item.resolvedRangeAddress = adjustRangeRows(item.rangeAddress, {
+              startOffset: 1 + base,
+              endOffset: 1 + base,
+            });
+            insertionsAbove++;
+          } else {
+            // Backlinks OFF: no insertion planned. Apply only prior baseShift.
+            item.resolvedRangeAddress = adjustRangeRows(item.rangeAddress, {
+              startOffset: base,
+              endOffset: base,
+            });
+          }
+          break;
+
+        default: // cannot-insert
+          item.resolvedRangeAddress = adjustRangeRows(item.rangeAddress, {
+            startOffset: base,
+            endOffset: base,
+          });
+          break;
+      }
     }
   }
 }
