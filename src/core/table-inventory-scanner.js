@@ -357,7 +357,7 @@ function splitLabelData(values, band) {
     dataCols.push(dataRow);
   }
 
-  return { labelCols, dataCols, labelSplitConfidence };
+  return { labelCols, dataCols, labelSplitConfidence, labelColCount };
 }
 
 // ─── Title inference ──────────────────────────────────────────────────────────
@@ -451,8 +451,8 @@ function deriveCandidateStatus({ isLikelyTable, hasBlockingIssues, warningCount,
   return "available";
 }
 
-function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetName, labelSplitConfidence }) {
-  const { summary, qualitySummary, calculationBlocks } = model;
+function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetName, labelSplitConfidence, labelColCount }) {
+  const { summary, qualitySummary, calculationBlocks, dataQualityIssues } = model;
   const tableId = sheetName + "!" + rangeAddress;
 
   const isLikelyTable = summary.detectedMetricRows > 0;
@@ -498,6 +498,12 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
 
   const columnCount = band.localTrimmedLastCol - band.localTrimmedFirstCol + 1;
 
+  // Flat list of issue codes for diagnostic inspection.
+  // Each entry: { code: string, severity: "warning"|"critical" }.
+  const qualityIssueCodes = isLikelyTable
+    ? (dataQualityIssues || []).map((i) => ({ code: i.code, severity: i.severity }))
+    : [];
+
   return {
     tableId,
     sheetName,
@@ -513,8 +519,10 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     candidateStatus,
     candidateNotes,
     labelSplitConfidence,
+    labelColCount: labelColCount ?? null,
     warningsCount: isLikelyTable ? qualitySummary.warningCount : 0,
     criticalCount: isLikelyTable ? qualitySummary.criticalCount : 0,
+    qualityIssueCodes,
   };
 }
 
@@ -558,7 +566,7 @@ export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeCo
     // Pre-filter and label/data split operate on the body only.
     if (!hasNumericCell(values, bodyBand)) continue;
 
-    const { labelCols, dataCols, labelSplitConfidence } = splitLabelData(values, bodyBand);
+    const { labelCols, dataCols, labelSplitConfidence, labelColCount } = splitLabelData(values, bodyBand);
 
     if (!dataCols.length || !dataCols[0] || dataCols[0].length < 1) continue;
 
@@ -581,6 +589,7 @@ export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeCo
       rangeAddress,
       sheetName,
       labelSplitConfidence,
+      labelColCount,
     });
     items.push(item);
   }

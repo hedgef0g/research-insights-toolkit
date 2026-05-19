@@ -236,6 +236,29 @@ describe("scanWorksheetForTables", () => {
     assert.strictEqual(items[0].reasonsIfNotRunnable, undefined, "reasonsIfNotRunnable must not exist");
   });
 
+  it("item exposes labelColCount and qualityIssueCodes for diagnostics", () => {
+    // labelColCount must match the number of left label columns detected.
+    // qualityIssueCodes must be an array of {code, severity} objects — no raw issue objects.
+    const values = [
+      ["Label1", 10, 20, 30],
+      ["Label2", 40, 50, 60],
+      ["Base", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(typeof item.labelColCount, "number", "labelColCount must be a number");
+    assert.ok(item.labelColCount >= 0, "labelColCount must be non-negative");
+    assert.ok(Array.isArray(item.qualityIssueCodes), "qualityIssueCodes must be an array");
+    for (const entry of item.qualityIssueCodes) {
+      assert.ok(typeof entry.code === "string", "each qualityIssueCodes entry must have a string code");
+      assert.ok(
+        entry.severity === "warning" || entry.severity === "critical",
+        `each qualityIssueCodes entry must have severity warning or critical; got ${entry.severity}`
+      );
+    }
+  });
+
   it("rating/NPS scale labels in the first column keep the label split confident", () => {
     const values = [
       ["Score", "Total", "Male", "Female"],
