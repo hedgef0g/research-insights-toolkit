@@ -1545,6 +1545,166 @@ function readContentOutputModeFromPanel() {
   return select ? select.value : "minimal-check";
 }
 
+function readBacklinkSettingFromPanel() {
+  return getCheckboxValue("content-add-backlinks");
+}
+
+/**
+ * Parses the first cell reference from a range address like "B3:F15" or "A1".
+ * Returns { rowIndex, colIndex } as 0-based sheet indexes, or null on failure.
+ */
+function parseRangeStartCell(rangeAddress) {
+  if (!rangeAddress) return null;
+  const match = rangeAddress.match(/^([A-Z]+)(\d+)/i);
+  if (!match) return null;
+  const colLetters = match[1].toUpperCase();
+  const rowNum = parseInt(match[2], 10);
+  if (!rowNum || rowNum < 1) return null;
+  let colIndex = 0;
+  for (let i = 0; i < colLetters.length; i++) {
+    colIndex = colIndex * 26 + (colLetters.charCodeAt(i) - 64);
+  }
+  return { rowIndex: rowNum - 1, colIndex: colIndex - 1 };
+}
+
+/**
+ * Builds a map from candidate key → 1-based row number on the Content sheet.
+ * Key format: "<sheetName>::<rangeAddress>"
+ */
+function buildContentRowMap(sheetResults, mode) {
+  const map = new Map();
+  const firstDataRow = mode === "client" ? 3 : 8;
+  let index = 0;
+  for (const sheetResult of sheetResults) {
+    for (const item of sheetResult.items) {
+      const key = `${sheetResult.sheetName}::${item.rangeAddress}`;
+      map.set(key, firstDataRow + index);
+      index++;
+    }
+  }
+  return map;
+}
+
+/**
+ * Builds a hyperlink documentReference pointing to the given 1-based row
+ * in the Content sheet (column A).
+ */
+function getContentRowReference(contentSheetName, contentRow) {
+  if (!contentSheetName || !contentRow) return null;
+  const escaped = contentSheetName.replace(/'/g, "''");
+  const needsQuotes = /[^A-Za-z0-9_]/.test(escaped);
+  const quotedSheet = needsQuotes ? `'${escaped}'` : escaped;
+  return `${quotedSheet}!A${contentRow}`;
+}
+
+const BACKLINK_MARKER = "← Оглавление";
+
+/**
+ * Returns true if the cell value is a generated backlink marker.
+ */
+function isGeneratedBacklinkRow(cellValue) {
+  if (cellValue === null || cellValue === undefined) return false;
+  return String(cellValue).trim() === BACKLINK_MARKER;
+}
+
+/**
+ * Writes or updates a single backlink row immediately above the candidate table.
+ *
+ * If the row above already contains the backlink marker, reuses it.
+ * Otherwise inserts one row above the table and writes the backlink there.
+ */
+async function writeOrUpdateBacklink(context, worksheet, tableRowIndex, tableColIndex, contentRow) {
+  if (tableRowIndex === 0) {
+    return;
+  }
+
+  const aboveRowIndex = tableRowIndex - 1;
+  const aboveCell = worksheet.getRangeByIndexes(aboveRowIndex, tableColIndex, 1, 1);
+  aboveCell.load("values");
+
+  await context.sync();
+
+  const aboveValue = aboveCell.values[0][0];
+  const contentRef = getContentRowReference(INVENTORY_CONTENT_SHEET_NAME, contentRow);
+
+  if (isGeneratedBacklinkRow(aboveValue)) {
+    aboveCell.values = [[BACKLINK_MARKER]];
+    if (contentRef) {
+      try {
+        aboveCell.hyperlink = {
+          documentReference: contentRef,
+          screenTip: `Оглавление, строка ${contentRow}`,
+        };
+      } catch (_) {
+        // Non-fatal: hyperlink update failed; plain text remains.
+      }
+    }
+  } else {
+    worksheet.getRangeByIndexes(tableRowIndex, 0, 1, 1).getEntireRow().insert(Excel.InsertShiftDirection.down);
+
+    await context.sync();
+
+    const backlinkCell = worksheet.getRangeByIndexes(tableRowIndex, tableColIndex, 1, 1);
+    backlinkCell.values = [[BACKLINK_MARKER]];
+    if (contentRef) {
+      try {
+        backlinkCell.hyperlink = {
+          documentReference: contentRef,
+          screenTip: `Оглавление, строка ${contentRow}`,
+        };
+      } catch (_) {
+        // Non-fatal: leave plain text.
+      }
+    }
+  }
+
+  await context.sync();
+}
+
+/**
+ * Ensures backlink rows exist above every detected candidate table.
+ *
+ * Candidates within each sheet are processed bottom-to-top so that row
+ * insertions do not shift the positions of candidates above.
+ */
+async function ensureBacklinkRows(context, sheetResults, contentRowMap) {
+  const worksheetCandidates = new Map();
+
+  for (const sheetResult of sheetResults) {
+    const candidates = [];
+    for (const item of sheetResult.items) {
+      const parsed = parseRangeStartCell(item.rangeAddress);
+      if (!parsed) continue;
+      const key = `${sheetResult.sheetName}::${item.rangeAddress}`;
+      const contentRow = contentRowMap.get(key);
+      if (contentRow == null) continue;
+      candidates.push({
+        rowIndex: parsed.rowIndex,
+        colIndex: parsed.colIndex,
+        contentRow,
+      });
+    }
+    if (candidates.length > 0) {
+      worksheetCandidates.set(sheetResult.sheetName, candidates);
+    }
+  }
+
+  for (const [sheetName, candidates] of worksheetCandidates) {
+    const sorted = candidates.slice().sort((a, b) => b.rowIndex - a.rowIndex);
+    const worksheet = context.workbook.worksheets.getItem(sheetName);
+
+    for (const candidate of sorted) {
+      await writeOrUpdateBacklink(
+        context,
+        worksheet,
+        candidate.rowIndex,
+        candidate.colIndex,
+        candidate.contentRow
+      );
+    }
+  }
+}
+
 function getContentTableHyperlinkTarget(sheetName, rangeAddress) {
   if (!sheetName || !rangeAddress) return null;
   const escaped = sheetName.replace(/'/g, "''");
@@ -1786,7 +1946,17 @@ async function writeInventoryContentSheet(context, inventoryResults) {
 async function runTableInventory() {
   await Excel.run(async (context) => {
     const inventoryResults = await collectWorkbookInventoryResults(context);
+    const addBacklinks = readBacklinkSettingFromPanel();
+    const contentMode = readContentOutputModeFromPanel();
+    const contentRowMap = addBacklinks
+      ? buildContentRowMap(inventoryResults.sheetResults, contentMode)
+      : null;
+
     await writeInventoryContentSheet(context, inventoryResults);
+
+    if (addBacklinks && contentRowMap) {
+      await ensureBacklinkRows(context, inventoryResults.sheetResults, contentRowMap);
+    }
 
     setInventoryMessage(
       formatWorkbookInventoryMessage({
