@@ -68,6 +68,8 @@ const INVENTORY_CONTENT_COLUMNS = [
   "Critical",
 ];
 
+const INVENTORY_CLIENT_COLUMNS = ["#", "Название таблицы", "Подзаголовок", "Лист", "Ссылка"];
+
 function formatBannerUserMessages(bannerStructure) {
   if (!bannerStructure || !bannerStructure.messages) {
     return "";
@@ -1538,6 +1540,34 @@ function buildInventoryContentSkippedRows(skippedSheets) {
   });
 }
 
+function readContentOutputModeFromPanel() {
+  const select = document.getElementById("content-output-mode");
+  return select ? select.value : "minimal-check";
+}
+
+function getContentTableHyperlinkTarget(sheetName, rangeAddress) {
+  if (!sheetName || !rangeAddress) return null;
+  const escaped = sheetName.replace(/'/g, "''");
+  const needsQuotes = /[^A-Za-z0-9_]/.test(escaped);
+  const quotedSheet = needsQuotes ? `'${escaped}'` : escaped;
+  return `${quotedSheet}!${rangeAddress}`;
+}
+
+function buildClientContentRows(sheetResults) {
+  const rows = [];
+  let index = 1;
+  for (const sheetResult of sheetResults) {
+    for (const item of sheetResult.items) {
+      rows.push([index, item.title || "", "", item.sheetName || sheetResult.sheetName, item.rangeAddress || ""]);
+      index++;
+    }
+  }
+  if (rows.length === 0) {
+    rows.push(["", "Кандидаты не обнаружены", "", "", ""]);
+  }
+  return rows;
+}
+
 async function ensureInventoryContentWorksheet(context) {
   const worksheets = context.workbook.worksheets;
   const worksheet = worksheets.getItemOrNullObject(INVENTORY_CONTENT_SHEET_NAME);
@@ -1552,16 +1582,12 @@ async function ensureInventoryContentWorksheet(context) {
   return worksheets.add(INVENTORY_CONTENT_SHEET_NAME);
 }
 
-async function writeInventoryContentSheet(context, inventoryResults) {
-  const worksheet = await ensureInventoryContentWorksheet(context);
-  const existingUsedRange = worksheet.getUsedRangeOrNullObject();
-  existingUsedRange.load("isNullObject");
-
-  await context.sync();
-
-  if (!existingUsedRange.isNullObject) {
-    existingUsedRange.unmerge();
-    existingUsedRange.clear();
+function writeMinimalCheckContent(worksheet, inventoryResults) {
+  const allItems = [];
+  for (const sheetResult of inventoryResults.sheetResults) {
+    for (const item of sheetResult.items) {
+      allItems.push(item);
+    }
   }
 
   const candidateRows = normalizeRowsToColumnCount(
@@ -1585,11 +1611,11 @@ async function writeInventoryContentSheet(context, inventoryResults) {
 
   const metadataRows = normalizeRowsToColumnCount(
     [
-    ["Generated sheet", INVENTORY_CONTENT_SHEET_NAME],
-    ["Scanned sheets", inventoryResults.scannedSheets],
-    ["Candidate sheets", inventoryResults.sheetResults.length],
-    ["Detected candidates", totalCandidates],
-    ["Reminder", "Inventory is a candidate finder only. Use «Проверить таблицу» for interpretation."],
+      ["Generated sheet", INVENTORY_CONTENT_SHEET_NAME],
+      ["Scanned sheets", inventoryResults.scannedSheets],
+      ["Candidate sheets", inventoryResults.sheetResults.length],
+      ["Detected candidates", totalCandidates],
+      ["Reminder", "Inventory is a candidate finder only. Use «Проверить таблицу» for interpretation."],
     ],
     2
   );
@@ -1661,6 +1687,99 @@ async function writeInventoryContentSheet(context, inventoryResults) {
   });
 
   worksheet.getRange("A:K").format.verticalAlignment = "Top";
+
+  const RANGE_COL_INDEX = 3;
+  for (let i = 0; i < allItems.length; i++) {
+    const item = allItems[i];
+    const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, item.rangeAddress);
+    if (hyperlinkTarget) {
+      const cell = worksheet.getRangeByIndexes(headerRowIndex + i, RANGE_COL_INDEX, 1, 1);
+      cell.hyperlink = {
+        documentReference: hyperlinkTarget,
+        screenTip: `${item.sheetName}!${item.rangeAddress}`,
+      };
+    }
+  }
+}
+
+function writeClientFacingContent(worksheet, inventoryResults) {
+  const allItems = [];
+  for (const sheetResult of inventoryResults.sheetResults) {
+    for (const item of sheetResult.items) {
+      allItems.push(item);
+    }
+  }
+
+  const clientRows = buildClientContentRows(inventoryResults.sheetResults);
+  const colCount = INVENTORY_CLIENT_COLUMNS.length;
+
+  const titleRange = worksheet.getRangeByIndexes(0, 0, 1, colCount);
+  titleRange.values = normalizeRowsToColumnCount([["Инвентарь таблиц"]], colCount);
+  titleRange.merge();
+  titleRange.format.font.bold = true;
+  titleRange.format.font.size = 14;
+
+  const headerRowIndex = 2;
+  const headerRange = worksheet.getRangeByIndexes(headerRowIndex - 1, 0, 1, colCount);
+  headerRange.values = normalizeRowsToColumnCount([INVENTORY_CLIENT_COLUMNS], colCount);
+  headerRange.format.font.bold = true;
+
+  const dataRows = normalizeRowsToColumnCount(clientRows, colCount);
+  const dataRange = worksheet.getRangeByIndexes(headerRowIndex, 0, dataRows.length, colCount);
+  dataRange.values = dataRows;
+  dataRange.format.wrapText = false;
+
+  const tableRange = worksheet.getRangeByIndexes(headerRowIndex - 1, 0, dataRows.length + 1, colCount);
+  tableRange.format.borders.getItem("EdgeBottom").style = "Continuous";
+  tableRange.format.borders.getItem("EdgeTop").style = "Continuous";
+  tableRange.format.borders.getItem("EdgeLeft").style = "Continuous";
+  tableRange.format.borders.getItem("EdgeRight").style = "Continuous";
+  tableRange.format.borders.getItem("InsideHorizontal").style = "Continuous";
+  tableRange.format.borders.getItem("InsideVertical").style = "Continuous";
+
+  const columnWidths = [42, 260, 180, 120, 100];
+  columnWidths.forEach((width, index) => {
+    worksheet.getRangeByIndexes(0, index, 1, 1).format.columnWidth = width;
+  });
+
+  worksheet.getRangeByIndexes(0, 0, dataRows.length + headerRowIndex, colCount).format.verticalAlignment = "Top";
+
+  const LINK_COL_INDEX = 4;
+  for (let i = 0; i < allItems.length; i++) {
+    const item = allItems[i];
+    const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, item.rangeAddress);
+    if (hyperlinkTarget) {
+      const cell = worksheet.getRangeByIndexes(headerRowIndex + i, LINK_COL_INDEX, 1, 1);
+      cell.hyperlink = {
+        documentReference: hyperlinkTarget,
+        screenTip: `${item.sheetName}!${item.rangeAddress}`,
+      };
+    }
+  }
+}
+
+async function writeInventoryContentSheet(context, inventoryResults) {
+  const worksheet = await ensureInventoryContentWorksheet(context);
+  const existingUsedRange = worksheet.getUsedRangeOrNullObject();
+  existingUsedRange.load("isNullObject");
+
+  await context.sync();
+
+  if (!existingUsedRange.isNullObject) {
+    existingUsedRange.unmerge();
+    existingUsedRange.clear();
+  }
+
+  const mode = readContentOutputModeFromPanel();
+
+  if (mode === "client") {
+    writeClientFacingContent(worksheet, inventoryResults);
+  } else {
+    writeMinimalCheckContent(worksheet, inventoryResults);
+  }
+
+  worksheet.position = 0;
+
   await context.sync();
 }
 
