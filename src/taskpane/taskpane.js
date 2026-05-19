@@ -1445,7 +1445,7 @@ function buildInventoryContentCandidateRows(sheetResults) {
       rows.push([
         candidateIndex,
         sheetResult.sheetName,
-        isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""),
+        item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || "")),
         item.resolvedRangeAddress || item.rangeAddress || "",
         item.rowCount ?? "",
         item.columnCount ?? "",
@@ -1637,8 +1637,16 @@ function normalizeBacklinkItems(sheetResults, backlinksEnabled) {
 
       if (isGeneratedBacklinkRow(cellAt(localRow, localCol))) {
         item.backlinkState = "in-range";
+        // Backlink is row localRow; try the row after it first (title shifted into
+        // the band when backlink was inserted above a firstRowOfBand title), then
+        // the row before it (title was above the original band, rowAbove case).
+        item.resolvedTitle =
+          resolveTitleLikeText(usedRangeValues[localRow + 1]) ||
+          resolveTitleLikeText(usedRangeValues[localRow - 1]);
       } else if (isGeneratedBacklinkRow(cellAt(localRow - 1, localCol))) {
         item.backlinkState = "above-range";
+        // Backlink is at localRow-1; original title was the row above the backlink.
+        item.resolvedTitle = resolveTitleLikeText(usedRangeValues[localRow - 2]);
       } else if (parsed.rowIndex === 0) {
         item.backlinkState = "cannot-insert";
       } else {
@@ -1742,6 +1750,31 @@ const BACKLINK_MARKER = "← Оглавление";
 function isGeneratedBacklinkRow(cellValue) {
   if (cellValue === null || cellValue === undefined) return false;
   return String(cellValue).trim() === BACKLINK_MARKER;
+}
+
+/**
+ * Returns the first title-like text from a row, or "" if the row is not
+ * title-like.  A row qualifies as title-like when it has at most maxNonEmpty
+ * non-empty cells (sparse, like a merged heading), contains no numeric cells,
+ * and does not consist solely of the backlink marker.
+ * Mirrors the sparsity logic of the scanner's detectFirstRowTitle.
+ */
+function resolveTitleLikeText(rowValues, maxNonEmpty = 3) {
+  if (!rowValues) return "";
+  let nonEmpty = 0;
+  let title = "";
+  for (const cell of rowValues) {
+    if (cell === null || cell === undefined || cell === "") continue;
+    const s = String(cell).trim();
+    if (!s) continue;
+    nonEmpty++;
+    if (nonEmpty > maxNonEmpty) return "";
+    if (typeof cell === "number") return "";
+    if (/^-?[\d.,]+%?$/.test(s)) return "";
+    if (isGeneratedBacklinkRow(s)) return "";
+    if (!title) title = s;
+  }
+  return title;
 }
 
 /**
@@ -1868,7 +1901,7 @@ function buildClientContentRows(sheetResults) {
   let index = 1;
   for (const sheetResult of sheetResults) {
     for (const item of sheetResult.items) {
-      rows.push([index, isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""), "", item.sheetName || sheetResult.sheetName]);
+      rows.push([index, item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || "")), "", item.sheetName || sheetResult.sheetName]);
       index++;
     }
   }
@@ -2062,7 +2095,7 @@ function writeClientFacingContent(worksheet, inventoryResults) {
     const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, effectiveRange);
     if (hyperlinkTarget) {
       const cell = worksheet.getRangeByIndexes(headerRowIndex + i, TITLE_COL_INDEX, 1, 1);
-      const displayTitle = isGeneratedBacklinkRow(item.title) ? "" : (item.title || "");
+      const displayTitle = item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""));
       cell.hyperlink = {
         documentReference: hyperlinkTarget,
         textToDisplay: displayTitle || `Таблица ${i + 1}`,
