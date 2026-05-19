@@ -5,7 +5,7 @@
   <ProviderName>Ilia Kulikov</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="ResearchSignal Table"/>
-  <Description DefaultValue="Excel add-in for significance testing in market research tables."/>
+  <Description DefaultValue="Research table intelligence for statistical significance in Excel."/>
   <IconUrl DefaultValue="https://hedgef0g.github.io/research-insights-toolkit/assets/rit-icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="https://hedgef0g.github.io/research-insights-toolkit/assets/rit-icon-64.png"/>
   <SupportUrl DefaultValue="https://github.com/hedgef0g/research-insights-toolkit/blob/main/README.md"/>
