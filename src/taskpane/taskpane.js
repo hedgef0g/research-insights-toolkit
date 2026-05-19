@@ -32,6 +32,11 @@ import { writeCellResultsToSelectedRange, resolveNumericOutput } from "../core/e
 
 import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core/banner-detector";
 
+import { normalizeSelectedRange } from "../core/range-normalizer";
+
+import { interpretSelectedRange, detectLeadingEmptyColumns } from "./selected-range-interpreter";
+
+
 const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
   "GLOBAL_TOTAL_USED",
   "BANNER_AUTO_PREVIOUS_COLUMN_APPLIED",
@@ -574,16 +579,9 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    selectedRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    selectedRange.load(["address", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
     await context.sync();
-
-    if (calculationSettings.writeBannerLetters && selectedRange.rowIndex === 0) {
-      outputElement.textContent =
-        "Данные расположены в первой строке. Добавьте строку над выделенным массивом и запустите расчёт повторно.";
-
-      return;
-    }
 
     if (
       calculationSettings.compareWithPreviousColumn &&
@@ -597,9 +595,6 @@ async function runSignificanceFromSelection() {
 
     selectedRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
-    selectedRange.format.horizontalAlignment = "Center";
-    selectedRange.format.verticalAlignment = "Center";
-
     await context.sync();
 
     const selectedValues = selectedRange.values;
@@ -610,25 +605,70 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
-    const selectedRangeGuardrailWarnings = detectSelectedRangeGuardrails(selectedText, cleanedValues);
+    const interpretation = await interpretSelectedRange(
+      context,
+      selectedRange,
+      selectedValues,
+      selectedText,
+      calculationSettings
+    );
 
-    selectedRange.values = cleanedValues;
+    if (interpretation.state === "blocked") {
+      const codes =
+        interpretation.blockingReasons && interpretation.blockingReasons.length > 0
+          ? ` [${interpretation.blockingReasons.join(", ")}]`
+          : "";
+      setStatusMessage(`${interpretation.blockingMessage}${codes}`);
+      return;
+    }
 
-    selectedRange.format.font.bold = false;
-    selectedRange.format.fill.clear();
-    selectedRange.format.horizontalAlignment = "Center";
-    selectedRange.format.verticalAlignment = "Center";
+    const {
+      valuesForCalculation,
+      textForCalculation,
+      leftLabelValues,
+      normalizationStatusLines,
+      bannerContext: interpretedBannerContext,
+    } = interpretation;
+
+    const selectedRangeGuardrailWarnings = interpretation.selectedRangeGuardrailWarnings;
+    let { writeTargetRange } = interpretation;
+
+    if (
+      !valuesForCalculation ||
+      valuesForCalculation.length < 2 ||
+      !valuesForCalculation[0] ||
+      valuesForCalculation[0].length < 2
+    ) {
+      setStatusMessage("Please select at least 2 columns and 2 rows.");
+      return;
+    }
+
+    writeTargetRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
     await context.sync();
 
-    const leftLabelValues = await loadLabelValuesForSelectedRange(
-      context,
-      selectedRange,
-      calculationSettings
-    ); // Labels located 1-2 columns to the left of the selected data.
+    const targetStartRowIndex = writeTargetRange.rowIndex;
 
-    const detectionResult = detectMetricRowsFromLeftLabels(cleanedValues, leftLabelValues); // Row type diagnostics based on left-side labels.
+    if (calculationSettings.writeBannerLetters && targetStartRowIndex === 0) {
+      outputElement.textContent =
+        "Данные расположены в первой строке. Добавьте строку над выделенным массивом и запустите расчёт повторно.";
+
+      return;
+    }
+
+    writeTargetRange.values = valuesForCalculation;
+
+    writeTargetRange.format.font.bold = false;
+    writeTargetRange.format.fill.clear();
+    writeTargetRange.format.horizontalAlignment = "Center";
+    writeTargetRange.format.verticalAlignment = "Center";
+
+    await context.sync();
+
+    const detectionResult = detectMetricRowsFromLeftLabels(
+      valuesForCalculation,
+      leftLabelValues
+    ); // Row type diagnostics based on left-side labels.
 
     const calculationBlocks = buildCalculationBlocks(detectionResult); // List of metric blocks to calculate.
 
@@ -645,34 +685,26 @@ async function runSignificanceFromSelection() {
     let bannerStructure = null;
 
     if (calculationSettings.respectBannerStructure) {
-      const bannerContext = await loadBannerContextForSelectedRange(
-        context,
-        selectedRange,
-        calculationSettings
-      );
+      // interpretedBannerContext is already sanitized by selected-range-interpreter
+      // (all RIT markers stripped from banner rows) so detection is idempotent
+      // across repeated Runs and Checks.
+      const bannerContext = interpretedBannerContext;
 
       bannerStructure = detectBannerStructure(bannerContext, calculationSettings);
 
       if (bannerContext.messages && bannerContext.messages.length > 0) {
         bannerStructure.messages = [...bannerContext.messages, ...(bannerStructure.messages || [])];
       }
-
-      /** 
-      bannerSpanDiagnostics = await loadBannerSpanDiagnosticsForSelectedRange(
-        context,
-        selectedRange
-      );
-      */
     }
 
     const fullCellResultMatrix = createEmptyCellResultMatrix(
-      cleanedValues.length,
-      cleanedValues[0].length
-    ); // Full-size marker storage matching the selected range.
+      valuesForCalculation.length,
+      valuesForCalculation[0].length
+    ); // Full-size marker storage matching the data body being calculated.
 
     for (const calculationBlock of calculationBlocks) {
       const smallBaseResult = applySmallBaseRulesForCalculationBlock(
-        cleanedValues,
+        valuesForCalculation,
         calculationBlock,
         fullCellResultMatrix,
         calculationSettings
@@ -695,7 +727,7 @@ async function runSignificanceFromSelection() {
       };
 
       const blockResults = calculateBlockResults(
-        cleanedValues,
+        valuesForCalculation,
         calculationBlock,
         blockCalculationSettings
       );
@@ -738,29 +770,49 @@ async function runSignificanceFromSelection() {
     keepMarkersOnlyInAllowedRows(fullCellResultMatrix, allowedMarkerRows);
 
     writeCellResultsToSelectedRange(
-      selectedRange,
-      selectedText,
+      writeTargetRange,
+      textForCalculation,
       fullCellResultMatrix,
       detectionResult,
       calculationSettings
     );
 
     if (calculationSettings.writeBannerLetters) {
+      // Remove any stale RIT markers that a previous run may have written at
+      // label-column positions (left of writeTargetRange).  These linger when
+      // the user re-runs without clearing first after the dataColOffset fix.
+      await clearStaleBannerMarkersLeftOfWriteRange(
+        context,
+        writeTargetRange.worksheet,
+        selectedRange.columnIndex,
+        writeTargetRange.rowIndex,
+        writeTargetRange.columnIndex
+      );
+
       if (calculationSettings.respectBannerStructure && bannerStructure) {
         await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
           context,
-          selectedRange,
+          writeTargetRange,
           bannerStructure,
           calculationSettings
         );
       } else {
-        await writeBannerMarkersAboveSelectedRange(context, selectedRange, calculationSettings);
+        await writeBannerMarkersAboveSelectedRange(
+          context,
+          writeTargetRange,
+          calculationSettings
+        );
       }
     }
 
     await context.sync();
 
     const statusMessages = [`Расчёт выполнен. Обработано блоков: ${calculationBlocks.length}.`];
+
+    if (normalizationStatusLines.length > 0) {
+      statusMessages.push("");
+      statusMessages.push(...normalizationStatusLines);
+    }
 
     const bannerUserMessages = formatBannerUserMessages(bannerStructure);
 
@@ -770,10 +822,13 @@ async function runSignificanceFromSelection() {
     }
 
     setStatusMessage(
-      appendSelectedRangeGuardrailMessages(statusMessages, selectedRangeGuardrailWarnings).join("\n")
+      appendSelectedRangeGuardrailMessages(statusMessages, selectedRangeGuardrailWarnings).join(
+        "\n"
+      )
     );
   });
 }
+
 
 /**
  * Calculates one detected metric block.
@@ -838,26 +893,111 @@ async function clearSignificanceFromSelection() {
   await Excel.run(async (context) => {
     const selectedRange = context.workbook.getSelectedRange();
 
-    selectedRange.load(["values", "numberFormat"]);
+    // Read-only load: needed to decide whether to operate on the whole
+    // selection (strict numeric case) or only on the detected data body
+    // (forgiving full-table case). No writes happen before the target is known.
+    selectedRange.load(["values", "text"]);
 
     await context.sync();
 
     const selectedValues = selectedRange.values;
-    const selectedNumberFormats = selectedRange.numberFormat;
+    const selectedText = selectedRange.text;
+
+    if (
+      !selectedValues ||
+      selectedValues.length < 1 ||
+      !selectedValues[0] ||
+      selectedValues[0].length < 1
+    ) {
+      setStatusMessage("Нет данных в выделенном диапазоне.");
+      return;
+    }
+
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
+    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
+
+    // State 3: broad/full-table-like selection but decomposition failed.
+    // Block and return without mutating anything.
+    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+      const codes =
+        normalized.blockingReasons && normalized.blockingReasons.length > 0
+          ? ` [${normalized.blockingReasons.join(", ")}]`
+          : "";
+      setStatusMessage(`${normalized.blockingMessage}${codes}`);
+      return;
+    }
+
+    // Resolve the clear target:
+    //   - State 1 (pass-through): the original selection is numeric-only.
+    //   - State 2 (normalized):   only the detected data body subrange.
+    let clearTargetRange;
+
+    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
+      const bodyRowCount = normalized.valuesForCalculation.length;
+      let bodyColCount = normalized.valuesForCalculation[0].length;
+      let effectiveClearColOffset = normalized.dataColOffset;
+
+      // Mirror the tertiary strip in interpretSelectedRange State 2: the
+      // normalizer may leave leading all-blank helper columns (e.g. column B
+      // in a mean-only table) inside the normalized body.  Clear must exclude
+      // those same columns so it does not widen the clear target beyond the
+      // real data body.
+      const clearLeadingEmptyCols = detectLeadingEmptyColumns(
+        normalized.textForCalculation
+      );
+      if (clearLeadingEmptyCols > 0) {
+        bodyColCount -= clearLeadingEmptyCols;
+        effectiveClearColOffset += clearLeadingEmptyCols;
+      }
+
+      if (bodyRowCount < 1 || bodyColCount < 1) {
+        setStatusMessage("Нет данных в выделенном диапазоне.");
+        return;
+      }
+
+      clearTargetRange = selectedRange
+        .getCell(normalized.dataRowOffset, effectiveClearColOffset)
+        .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
+    } else {
+      // Pass-through: the selection is a clean numeric-only range.
+      // Detect leading all-blank helper columns and exclude them from the
+      // clear target so that Clear does not remove fill/formatting from helper
+      // cells.  Uses the same detectLeadingEmptyColumns function as Run's
+      // interpretSelectedRange passThrough path.
+      const leadingBlankColsForClear = detectLeadingEmptyColumns(selectedText);
+
+      if (leadingBlankColsForClear > 0) {
+        clearTargetRange = selectedRange
+          .getCell(0, leadingBlankColsForClear)
+          .getResizedRange(
+            selectedRange.rowCount - 1,
+            selectedRange.columnCount - leadingBlankColsForClear - 1
+          );
+      } else {
+        clearTargetRange = selectedRange;
+      }
+    }
+
+    clearTargetRange.load(["values", "numberFormat"]);
+
+    await context.sync();
+
+    const targetValues = clearTargetRange.values;
+    const targetNumberFormats = clearTargetRange.numberFormat;
 
     const nextValues = [];
     const nextNumberFormats = [];
 
-    for (let rowIndex = 0; rowIndex < selectedValues.length; rowIndex++) {
+    for (let rowIndex = 0; rowIndex < targetValues.length; rowIndex++) {
       const valueRow = [];
       const formatRow = [];
 
-      for (let columnIndex = 0; columnIndex < selectedValues[rowIndex].length; columnIndex++) {
-        const rawValue = selectedValues[rowIndex][columnIndex];
+      for (let columnIndex = 0; columnIndex < targetValues[rowIndex].length; columnIndex++) {
+        const rawValue = targetValues[rowIndex][columnIndex];
 
         if (typeof rawValue === "number") {
           valueRow.push(rawValue);
-          formatRow.push(selectedNumberFormats[rowIndex][columnIndex]);
+          formatRow.push(targetNumberFormats[rowIndex][columnIndex]);
           continue;
         }
 
@@ -877,16 +1017,106 @@ async function clearSignificanceFromSelection() {
       nextNumberFormats.push(formatRow);
     }
 
-    selectedRange.numberFormat = nextNumberFormats;
-    selectedRange.values = nextValues;
+    clearTargetRange.numberFormat = nextNumberFormats;
+    clearTargetRange.values = nextValues;
 
-    selectedRange.format.font.bold = false;
-    selectedRange.format.fill.clear();
+    clearTargetRange.format.font.bold = false;
+    clearTargetRange.format.fill.clear();
 
     await context.sync();
 
+    await clearBannerMarkersAboveRange(context, clearTargetRange);
+
     setStatusMessage("Significance markers removed.");
   });
+}
+
+/**
+ * Removes RIT-generated trailing banner significance markers from the visible
+ * banner/header cells above the data body that was just cleared.
+ *
+ * PURPOSE:
+ * Mirrors the Run "mark letters in banner" placement so Clear undoes the same
+ * cells Run wrote into, including sparse / vertically merged banner layouts
+ * where the nearest non-empty cell above receives the marker.
+ *
+ * RULES:
+ * - Scans the row immediately above the data body plus up to
+ *   BANNER_UPPER_SCAN_LIMIT additional rows above, matching Run.
+ * - Removes only trailing markers recognized by getTrailingBannerMarker,
+ *   which restricts matches to single-character significance labels.
+ *   Ordinary parenthesized header text such as "Wave (quarter)",
+ *   "Brand (new)", or "Волна (квартал)" is preserved.
+ * - Never writes to the data body or to the label column.
+ */
+async function clearBannerMarkersAboveRange(context, targetRange) {
+  const BANNER_UPPER_SCAN_LIMIT = 5;
+
+  targetRange.load(["rowIndex", "columnIndex", "columnCount"]);
+
+  await context.sync();
+
+  const targetStartRowIndex = targetRange.rowIndex;
+  const targetStartColumnIndex = targetRange.columnIndex;
+  const targetColumnCount = targetRange.columnCount;
+
+  if (targetStartRowIndex === 0 || targetColumnCount < 1) {
+    return;
+  }
+
+  const totalScanRowCount = Math.min(BANNER_UPPER_SCAN_LIMIT + 1, targetStartRowIndex);
+
+  if (totalScanRowCount < 1) {
+    return;
+  }
+
+  const bannerScanRange = targetRange.worksheet.getRangeByIndexes(
+    targetStartRowIndex - totalScanRowCount,
+    targetStartColumnIndex,
+    totalScanRowCount,
+    targetColumnCount
+  );
+
+  bannerScanRange.load("text");
+
+  await context.sync();
+
+  const bannerTexts = bannerScanRange.text;
+  const cellWriteQueue = [];
+
+  for (let rowOffset = 0; rowOffset < totalScanRowCount; rowOffset++) {
+    const rowTexts = bannerTexts[rowOffset] || [];
+
+    for (let columnIndex = 0; columnIndex < targetColumnCount; columnIndex++) {
+      const currentText = rowTexts[columnIndex];
+
+      if (currentText === null || currentText === undefined || currentText === "") {
+        continue;
+      }
+
+      if (!getTrailingBannerMarker(currentText)) {
+        continue;
+      }
+
+      cellWriteQueue.push({
+        rowIndex: targetStartRowIndex - totalScanRowCount + rowOffset,
+        colIndex: targetStartColumnIndex + columnIndex,
+        text: removeTrailingBannerMarker(currentText),
+      });
+    }
+  }
+
+  if (cellWriteQueue.length === 0) {
+    return;
+  }
+
+  for (const { rowIndex, colIndex, text } of cellWriteQueue) {
+    const cell = targetRange.worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1);
+
+    cell.values = [[text]];
+  }
+
+  await context.sync();
 }
 
 /**
@@ -1688,6 +1918,12 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
     return;
   }
 
+  const BANNER_UPPER_SCAN_LIMIT = 5;
+
+  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
+
+  await context.sync();
+
   const selectedStartRowIndex = selectedRange.rowIndex;
   const selectedStartColumnIndex = selectedRange.columnIndex;
   const selectedColumnCount = selectedRange.columnCount;
@@ -1705,15 +1941,18 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
     selectedColumnCount
   );
 
-  bannerRange.load("values");
+  bannerRange.load("text");
 
   await context.sync();
 
-  const bannerValues = bannerRange.values[0];
+  const bannerTexts = bannerRange.text[0] || [];
+  const markerByColumnIndex = new Map();
+  const clearMarkerColumnIndexes = new Set();
 
-  const updatedBannerValues = bannerValues.map((currentValue, columnIndex) => {
+  const updatedBannerTexts = bannerTexts.map((currentText, columnIndex) => {
     if (calculationSettings.firstColumnIsTotal && columnIndex === 0) {
-      return removeBannerCellMarker(currentValue);
+      clearMarkerColumnIndexes.add(columnIndex);
+      return removeTrailingBannerMarker(currentText);
     }
 
     const markerIndex = calculationSettings.firstColumnIsTotal ? columnIndex - 1 : columnIndex;
@@ -1721,28 +1960,104 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
     const marker = significanceLabels[markerIndex];
 
     if (!marker) {
-      return currentValue;
+      return currentText;
     }
 
-    return updateBannerCellMarker(currentValue, marker);
+    markerByColumnIndex.set(columnIndex, marker);
+
+    return appendOrReplaceTrailingBannerMarker(currentText, marker);
   });
 
-  /**
-   * Removes significance marker from the end of a banner cell.
-   *
-   * PURPOSE:
-   * In firstColumnIsTotal mode, the Total banner cell must not have
-   * a significance marker.
-   */
-  function removeBannerCellMarker(rawValue) {
-    const textValue = rawValue === null || rawValue === undefined ? "" : String(rawValue);
+  const upperScanRowCount = Math.min(BANNER_UPPER_SCAN_LIMIT, selectedStartRowIndex - 1);
+  const needsUpperScan =
+    upperScanRowCount > 0 &&
+    bannerTexts.some(
+      (text, columnIndex) =>
+        (text || "") === "" &&
+        (markerByColumnIndex.has(columnIndex) || clearMarkerColumnIndexes.has(columnIndex))
+    );
 
-    const markerSuffixPattern = /\s*\([^()]+\)$/;
+  let upperScanTexts = [];
 
-    return textValue.replace(markerSuffixPattern, "").trim();
+  if (needsUpperScan) {
+    const upperScanRange = selectedRange.worksheet.getRangeByIndexes(
+      selectedStartRowIndex - 1 - upperScanRowCount,
+      selectedStartColumnIndex,
+      upperScanRowCount,
+      selectedColumnCount
+    );
+
+    upperScanRange.load("text");
+
+    await context.sync();
+
+    upperScanTexts = upperScanRange.text.slice().reverse();
   }
 
-  bannerRange.values = [updatedBannerValues];
+  const cellWriteQueue = [];
+
+  for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
+    const currentText = bannerTexts[columnIndex] || "";
+    const nextText = updatedBannerTexts[columnIndex] || "";
+    const marker = markerByColumnIndex.get(columnIndex);
+    const shouldClearMarker = clearMarkerColumnIndexes.has(columnIndex);
+
+    if (currentText === "" && (marker || shouldClearMarker)) {
+      let queued = false;
+
+      for (let rowOffset = 0; rowOffset < upperScanTexts.length; rowOffset++) {
+        const upperCellText =
+          (upperScanTexts[rowOffset] && upperScanTexts[rowOffset][columnIndex]) || "";
+
+        if (upperCellText !== "") {
+          const updatedUpperCellText = marker
+            ? appendOrReplaceTrailingBannerMarker(upperCellText, marker)
+            : getTrailingBannerMarker(upperCellText)
+              ? removeTrailingBannerMarker(upperCellText)
+              : upperCellText;
+
+          if (updatedUpperCellText === upperCellText) {
+            queued = true;
+            break;
+          }
+
+          cellWriteQueue.push({
+            rowIndex: selectedStartRowIndex - 2 - rowOffset,
+            colIndex: selectedStartColumnIndex + columnIndex,
+            text: updatedUpperCellText,
+          });
+          queued = true;
+          break;
+        }
+      }
+
+      if (queued) {
+        continue;
+      }
+    }
+
+    if (nextText === "" && currentText === "") {
+      continue;
+    }
+
+    if (nextText === currentText) {
+      continue;
+    }
+
+    cellWriteQueue.push({
+      rowIndex: selectedStartRowIndex - 1,
+      colIndex: selectedStartColumnIndex + columnIndex,
+      text: nextText,
+    });
+  }
+
+  for (const { rowIndex, colIndex, text } of cellWriteQueue) {
+    const cell = selectedRange.worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1);
+
+    cell.values = [[text]];
+  }
+
+  await context.sync();
 }
 
 /**
@@ -1895,33 +2210,6 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
   }
 
   await context.sync();
-}
-
-/**
- * Adds or replaces significance marker at the end of a banner cell.
- *
- * PURPOSE:
- * Banner cells may already contain an old marker like "Segment A (/b/)".
- * We replace old marker with the current marker for this column.
- */
-function updateBannerCellMarker(rawValue, marker) {
-  const textValue = rawValue === null || rawValue === undefined ? "" : String(rawValue);
-
-  const expectedMarkerSuffix = `(${marker})`;
-
-  if (textValue.trim().endsWith(expectedMarkerSuffix)) {
-    return textValue;
-  }
-
-  const markerSuffixPattern = /\s*\([^()]+\)$/;
-
-  const textWithoutOldMarker = textValue.replace(markerSuffixPattern, "").trim();
-
-  if (!textWithoutOldMarker) {
-    return expectedMarkerSuffix;
-  }
-
-  return `${textWithoutOldMarker} ${expectedMarkerSuffix}`;
 }
 
 /**
@@ -2329,13 +2617,89 @@ function appendOrReplaceTrailingBannerMarker(rawText, label) {
   const text = rawText === null || rawText === undefined ? "" : String(rawText).trim();
 
   const marker = `(${label})`;
-  const markerPattern = /\s*\([^)]+\)\s*$/;
+  const currentMarker = getTrailingBannerMarker(text);
 
-  if (markerPattern.test(text)) {
-    return text.replace(markerPattern, ` ${marker}`);
+  if (currentMarker) {
+    return `${text.slice(0, currentMarker.start).trim()} ${marker}`.trim();
   }
 
   return `${text} ${marker}`.trim();
+}
+
+/**
+ * Clears RIT-generated banner markers from banner cells that are within the
+ * full selected range but LEFT of writeTargetRange (i.e., label-column
+ * positions that were stripped by detectEmbeddedLabelColumns).
+ *
+ * This removes stale markers written by pre-fix runs so they do not appear
+ * alongside the correctly-placed new markers after an in-place Run without
+ * an explicit Clear between runs.
+ *
+ * Only acts when writeTargetRange is narrower than the original selection
+ * (i.e., at least one label column was stripped on the left).
+ *
+ * @param {Excel.RequestContext} context
+ * @param {Excel.Worksheet} worksheet
+ * @param {number} selectedRangeColIndex  - column index of the original selectedRange
+ * @param {number} writeTargetRowIndex    - rowIndex of writeTargetRange (first data row)
+ * @param {number} writeTargetColIndex    - columnIndex of writeTargetRange (first data col)
+ */
+async function clearStaleBannerMarkersLeftOfWriteRange(
+  context,
+  worksheet,
+  selectedRangeColIndex,
+  writeTargetRowIndex,
+  writeTargetColIndex
+) {
+  const leftColumnCount = writeTargetColIndex - selectedRangeColIndex;
+
+  // Nothing to clean: write target starts at the selection boundary, or data
+  // starts in row 0 (no banner rows above it).
+  if (leftColumnCount <= 0 || writeTargetRowIndex === 0) {
+    return;
+  }
+
+  const BANNER_SCAN_LIMIT = 6;
+  const totalScanRows = Math.min(BANNER_SCAN_LIMIT, writeTargetRowIndex);
+
+  const bannerScanRange = worksheet.getRangeByIndexes(
+    writeTargetRowIndex - totalScanRows,
+    selectedRangeColIndex,
+    totalScanRows,
+    leftColumnCount
+  );
+  bannerScanRange.load("text");
+  await context.sync();
+
+  const writeQueue = [];
+
+  for (let rowOffset = 0; rowOffset < totalScanRows; rowOffset++) {
+    const rowTexts = bannerScanRange.text[rowOffset] || [];
+
+    for (let colOffset = 0; colOffset < leftColumnCount; colOffset++) {
+      const cellText = rowTexts[colOffset] || "";
+
+      if (!getTrailingBannerMarker(cellText)) {
+        continue;
+      }
+
+      writeQueue.push({
+        rowIndex: writeTargetRowIndex - totalScanRows + rowOffset,
+        colIndex: selectedRangeColIndex + colOffset,
+        text: removeTrailingBannerMarker(cellText),
+      });
+    }
+  }
+
+  if (writeQueue.length === 0) {
+    return;
+  }
+
+  for (const { rowIndex, colIndex, text } of writeQueue) {
+    worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1).values = [[text]];
+  }
+
+  await context.sync();
 }
 
 /**
@@ -2349,7 +2713,38 @@ function removeTrailingBannerMarker(rawText) {
     return "";
   }
 
-  return String(rawText)
-    .replace(/\s*\([^)]+\)\s*$/, "")
-    .trim();
+  const text = String(rawText);
+  const currentMarker = getTrailingBannerMarker(text);
+
+  if (!currentMarker) {
+    return text.trim();
+  }
+
+  return text.slice(0, currentMarker.start).trim();
+}
+
+function getTrailingBannerMarker(rawText) {
+  const text = rawText === null || rawText === undefined ? "" : String(rawText);
+
+  // Require the marker token to be preceded by whitespace or appear at the
+  // very start of the cell.  This prevents parenthesised fragments inside
+  // words — e.g. "сам(а)" — from being mistaken for RIT significance markers
+  // even when the single letter inside happens to be a valid label (Cyrillic
+  // "а" is the first Cyrillic entry in generateSignificanceLabels()).
+  const markerMatch = text.match(/(^|\s)\(([^()]*)\)\s*$/);
+
+  if (!markerMatch) {
+    return null;
+  }
+
+  const markerLabel = markerMatch[2]; // group 2: label inside parens
+
+  if (!generateSignificanceLabels().includes(markerLabel)) {
+    return null;
+  }
+
+  return {
+    label: markerLabel,
+    start: markerMatch.index,
+  };
 }
