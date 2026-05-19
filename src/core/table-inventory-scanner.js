@@ -224,8 +224,30 @@ function isLikelyRatingScaleLabelColumn(values, colIndex, startRow, endRow) {
   }
 
   const labelLikeFraction = (textOnlyCount + ordinalScaleCount) / totalNonEmpty;
+  // Allow a single text marker (e.g. "Base") alongside ordinal scale values when every
+  // non-empty cell is label-like (no out-of-range numeric data cells).
+  const allCellsAreLabelLike = textOnlyCount + ordinalScaleCount === totalNonEmpty;
+  const minText = allCellsAreLabelLike ? 1 : 2;
 
-  return textOnlyCount >= 2 && ordinalScaleCount >= 3 && labelLikeFraction >= 0.8;
+  return textOnlyCount >= minText && ordinalScaleCount >= 3 && labelLikeFraction >= 0.8;
+}
+
+/**
+ * Returns true when every body row has an empty gutter cell, where "body row" means
+ * a row whose col0 (labelCol0Index) is non-empty.  Banner/header rows above the body
+ * have an empty col0 and are intentionally ignored — they may carry numeric values
+ * (sample sizes, years, percentages) in the gutter column that must not disqualify it.
+ * Returns false if no body rows are found (conservative: do not promote to gutter).
+ */
+function isGutterColumnForBodyRows(values, gutterColIndex, labelCol0Index, startRow, endRow) {
+  let bodyRowSeen = false;
+  for (let row = startRow; row <= endRow; row++) {
+    const labelCell = (values[row] || [])[labelCol0Index];
+    if (isCellEmpty(labelCell)) continue;
+    bodyRowSeen = true;
+    if (!isCellEmpty((values[row] || [])[gutterColIndex])) return false;
+  }
+  return bodyRowSeen;
 }
 
 function splitLabelData(values, band) {
@@ -234,10 +256,14 @@ function splitLabelData(values, band) {
 
   // Determine label column count by inspecting the character of the leftmost columns.
   // Rules:
-  //   col0 text + col1 text  → 2 label columns, confident
-  //   col0 text + col1 numeric → 1 label column, confident (never consume a numeric column as label)
-  //   col0 not clearly text  → 1 label column, uncertain
-  //   trimmedWidth < 2       → 0 label columns, uncertain
+  //   col0 text + col1 text                       → 2 label columns, confident
+  //   col0 text + col1 empty gutter (body rows)   → 2 label columns, twoColumn (skip the gutter)
+  //   col0 text + col1 numeric                    → 1 label column, confident
+  //   col0 not text + col1 text                   → 2 label columns, twoColumn (col0 is code/gutter)
+  //   col0 not text + col1 not text               → 1 label column, uncertain
+  //   trimmedWidth < 2                            → 0 label columns, uncertain
+  // "Empty gutter in body rows" means col1 is null in every row where col0 is non-empty.
+  // Banner/header rows above the body may have numeric values in col1 and are ignored.
   let labelColCount;
   let labelSplitConfidence;
 
@@ -257,15 +283,33 @@ function splitLabelData(values, band) {
       isLikelyRatingScaleLabelColumn(values, localTrimmedFirstCol, localStartRow, localEndRow);
 
     if (!col0IsText) {
-      // First column looks numeric — split is ambiguous.
-      labelColCount = 1;
-      labelSplitConfidence = "uncertain";
+      // col0 does not look like a text label column.  Check col1: if it is strongly text
+      // then col0 is a code/numeric identifier and col1 carries the real row labels.
+      if (trimmedWidth >= 3) {
+        const col1Fraction = computeTextFraction(
+          values,
+          localTrimmedFirstCol + 1,
+          localTrimmedFirstCol + 1,
+          localStartRow,
+          localEndRow
+        );
+        if (col1Fraction >= LABEL_TEXT_FRACTION_THRESHOLD) {
+          labelColCount = 2;
+          labelSplitConfidence = "twoColumn";
+        } else {
+          labelColCount = 1;
+          labelSplitConfidence = "uncertain";
+        }
+      } else {
+        labelColCount = 1;
+        labelSplitConfidence = "uncertain";
+      }
     } else if (trimmedWidth < 3) {
       // Only 2 columns and col0 is text — use 1 label column.
       labelColCount = 1;
       labelSplitConfidence = "confident";
     } else {
-      // 3+ columns: inspect col1 to decide between 1 and 2 label columns.
+      // 3+ columns, col0 is text: inspect col1.
       const col1Fraction = computeTextFraction(
         values,
         localTrimmedFirstCol + 1,
@@ -276,11 +320,18 @@ function splitLabelData(values, band) {
       const col1IsText = col1Fraction >= LABEL_TEXT_FRACTION_THRESHOLD;
 
       if (col1IsText) {
-        // Both col0 and col1 are text — use 2 label columns.
+        // Both col0 and col1 are text — 2 label columns.
         labelColCount = 2;
         labelSplitConfidence = "confident";
+      } else if (isGutterColumnForBodyRows(values, localTrimmedFirstCol + 1, localTrimmedFirstCol, localStartRow, localEndRow)) {
+        // col0 is text labels and col1 is an empty visual gutter in body rows — skip the
+        // gutter so it does not land in the data matrix and trigger spurious quality warnings.
+        // Banner rows above the body may have non-empty values in col1 (sample sizes, years,
+        // percents) — isGutterColumnForBodyRows ignores those rows.
+        labelColCount = 2;
+        labelSplitConfidence = "twoColumn";
       } else {
-        // col0 text, col1 numeric — 1 label column only.
+        // col0 text, col1 has numeric / mixed content — 1 label column.
         labelColCount = 1;
         labelSplitConfidence = "confident";
       }
@@ -306,7 +357,32 @@ function splitLabelData(values, band) {
     dataCols.push(dataRow);
   }
 
-  return { labelCols, dataCols, labelSplitConfidence };
+  // Trim trailing data columns that are empty in all body rows.
+  // Body rows are rows where labelCols[row][0] is non-empty (the primary label is present).
+  // Banner/header rows (labelCols[row][0] empty) may add extra columns — e.g. a subgroup
+  // header that has no matching data in mean/variance/base — and those trailing all-empty-
+  // in-body-rows columns would otherwise produce spurious BASE_BLANK_VALUES quality warnings.
+  if (labelColCount > 0 && dataCols.length > 0 && dataCols[0] && dataCols[0].length > 1) {
+    const bodyRowIndexes = [];
+    for (let i = 0; i < labelCols.length; i++) {
+      if (!isCellEmpty(labelCols[i][0])) bodyRowIndexes.push(i);
+    }
+    if (bodyRowIndexes.length > 0) {
+      let trimmedWidth = dataCols[0].length;
+      while (trimmedWidth > 1) {
+        const colIdx = trimmedWidth - 1;
+        if (!bodyRowIndexes.every((ri) => isCellEmpty((dataCols[ri] || [])[colIdx]))) break;
+        trimmedWidth--;
+      }
+      if (trimmedWidth < dataCols[0].length) {
+        for (let i = 0; i < dataCols.length; i++) {
+          dataCols[i] = dataCols[i].slice(0, trimmedWidth);
+        }
+      }
+    }
+  }
+
+  return { labelCols, dataCols, labelSplitConfidence, labelColCount };
 }
 
 // ─── Title inference ──────────────────────────────────────────────────────────
@@ -384,6 +460,8 @@ function inferTitle(values, band) {
  *
  * "available"  — looks like a recognisable table with no blocking issues or
  *                uncertain boundaries; worth checking via Check Table.
+ *                Also returned when labelSplitConfidence is "twoColumn" (two-column
+ *                row labels with ordinal code + text answer are valid structures).
  * "uncertain"  — table-like but has blocking issues, quality warnings, or an
  *                ambiguous label/data boundary; Check Table may still work but
  *                results should be verified.
@@ -398,8 +476,8 @@ function deriveCandidateStatus({ isLikelyTable, hasBlockingIssues, warningCount,
   return "available";
 }
 
-function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetName, labelSplitConfidence }) {
-  const { summary, qualitySummary, calculationBlocks } = model;
+function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetName, labelSplitConfidence, labelColCount }) {
+  const { summary, qualitySummary, calculationBlocks, dataQualityIssues } = model;
   const tableId = sheetName + "!" + rangeAddress;
 
   const isLikelyTable = summary.detectedMetricRows > 0;
@@ -418,6 +496,9 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
   }
   if (labelSplitConfidence === "uncertain") {
     candidateNotes.push("Граница лейблов/данных не определена");
+  }
+  if (labelSplitConfidence === "twoColumn") {
+    candidateNotes.push("Двухколоночные метки строк");
   }
   if (isLikelyTable && qualitySummary.warningCount > 0) {
     candidateNotes.push(`Предупреждений в превью: ${qualitySummary.warningCount}`);
@@ -442,6 +523,12 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
 
   const columnCount = band.localTrimmedLastCol - band.localTrimmedFirstCol + 1;
 
+  // Flat list of issue codes for diagnostic inspection.
+  // Each entry: { code: string, severity: "warning"|"critical" }.
+  const qualityIssueCodes = isLikelyTable
+    ? (dataQualityIssues || []).map((i) => ({ code: i.code, severity: i.severity }))
+    : [];
+
   return {
     tableId,
     sheetName,
@@ -457,8 +544,10 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     candidateStatus,
     candidateNotes,
     labelSplitConfidence,
+    labelColCount: labelColCount ?? null,
     warningsCount: isLikelyTable ? qualitySummary.warningCount : 0,
     criticalCount: isLikelyTable ? qualitySummary.criticalCount : 0,
+    qualityIssueCodes,
   };
 }
 
@@ -502,7 +591,7 @@ export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeCo
     // Pre-filter and label/data split operate on the body only.
     if (!hasNumericCell(values, bodyBand)) continue;
 
-    const { labelCols, dataCols, labelSplitConfidence } = splitLabelData(values, bodyBand);
+    const { labelCols, dataCols, labelSplitConfidence, labelColCount } = splitLabelData(values, bodyBand);
 
     if (!dataCols.length || !dataCols[0] || dataCols[0].length < 1) continue;
 
@@ -525,6 +614,7 @@ export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeCo
       rangeAddress,
       sheetName,
       labelSplitConfidence,
+      labelColCount,
     });
     items.push(item);
   }

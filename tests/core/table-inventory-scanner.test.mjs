@@ -236,6 +236,29 @@ describe("scanWorksheetForTables", () => {
     assert.strictEqual(items[0].reasonsIfNotRunnable, undefined, "reasonsIfNotRunnable must not exist");
   });
 
+  it("item exposes labelColCount and qualityIssueCodes for diagnostics", () => {
+    // labelColCount must match the number of left label columns detected.
+    // qualityIssueCodes must be an array of {code, severity} objects — no raw issue objects.
+    const values = [
+      ["Label1", 10, 20, 30],
+      ["Label2", 40, 50, 60],
+      ["Base", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(typeof item.labelColCount, "number", "labelColCount must be a number");
+    assert.ok(item.labelColCount >= 0, "labelColCount must be non-negative");
+    assert.ok(Array.isArray(item.qualityIssueCodes), "qualityIssueCodes must be an array");
+    for (const entry of item.qualityIssueCodes) {
+      assert.ok(typeof entry.code === "string", "each qualityIssueCodes entry must have a string code");
+      assert.ok(
+        entry.severity === "warning" || entry.severity === "critical",
+        `each qualityIssueCodes entry must have severity warning or critical; got ${entry.severity}`
+      );
+    }
+  });
+
   it("rating/NPS scale labels in the first column keep the label split confident", () => {
     const values = [
       ["Score", "Total", "Male", "Female"],
@@ -287,5 +310,313 @@ describe("scanWorksheetForTables", () => {
         "pure numeric first columns must not become confidently label-like"
       );
     }
+  });
+
+  // ─── Issue #153: two-column row label tables ──────────────────────────────
+
+  it("non-NPS table with pure ordinal col0 + text answer col1 is available, not uncertain", () => {
+    // Pattern: [scale code] [answer label] [data...]
+    // col0 is integers 1-5 (ordinal scale codes, not text), col1 is text answer labels.
+    const values = [
+      [1, "Strongly agree", 40, 35, 42],
+      [2, "Agree", 30, 32, 28],
+      [3, "Neither agree nor disagree", 15, 17, 13],
+      [4, "Disagree", 10, 12, 10],
+      [5, "Strongly disagree", 5, 4, 7],
+      ["Base", "", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    // "twoColumn" when col0 fails the text test but is ordinal;
+    // "confident" when isLikelyRatingScaleLabelColumn already accepts the mixed col0.
+    assert.ok(
+      item.labelSplitConfidence === "twoColumn" || item.labelSplitConfidence === "confident",
+      `expected twoColumn or confident split; got ${item.labelSplitConfidence}`
+    );
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `valid two-column label table must not be uncertain; got ${item.candidateStatus}`
+    );
+  });
+
+  it("non-NPS table with ordinal string col0 (\"1\"..\"5\") + text col1 is available", () => {
+    // Same pattern but col0 values are strings "1".."5" rather than integers.
+    const values = [
+      ["1", "Very satisfied", 44, 41, 45],
+      ["2", "Satisfied", 30, 32, 28],
+      ["3", "Neither", 15, 17, 13],
+      ["4", "Dissatisfied", 8, 7, 10],
+      ["5", "Very dissatisfied", 3, 3, 4],
+      ["Base", "", 500, 450, 550],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.ok(
+      item.labelSplitConfidence === "twoColumn" || item.labelSplitConfidence === "confident",
+      `expected twoColumn or confident split; got ${item.labelSplitConfidence}`
+    );
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `two-column label table must not be uncertain; got ${item.candidateStatus}`
+    );
+  });
+
+  it("pure ordinal col0 with no text cell at all triggers twoColumn path when col1 is text", () => {
+    // col0 has only integers 1-5 (no "Base" or any text cell).
+    // isLikelyRatingScaleLabelColumn requires textOnlyCount >= 1, so it returns false here.
+    // The new isMostlyOrdinalLabelColumn + col1 text check should set twoColumn.
+    // A Base row is provided so the preview model can build a complete metric block.
+    // col0 of the Base row is null so col0 stays purely ordinal (no text cells).
+    const values = [
+      [1, "Strongly agree", 40, 35, 42],
+      [2, "Agree", 30, 32, 28],
+      [3, "Neither", 15, 17, 13],
+      [4, "Disagree", 10, 12, 10],
+      [5, "Strongly disagree", 5, 4, 7],
+      [null, "BASE", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(
+      item.labelSplitConfidence,
+      "twoColumn",
+      `pure-ordinal col0 with text col1 should yield twoColumn; got ${item.labelSplitConfidence}`
+    );
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `twoColumn split must not make the candidate uncertain; got ${item.candidateStatus}`
+    );
+    assert.ok(
+      item.candidateNotes.some((n) => n.includes("Двухколоночные метки")),
+      "candidateNotes must explain two-column labels for twoColumn split"
+    );
+  });
+
+  it("ordinal col0 + numeric col1 stays uncertain (col1 data, not a second label)", () => {
+    // col0 is ordinal 1-5 but col1 is numeric data — should not be classified as
+    // a two-column label table.
+    const values = [
+      [1, 40, 35, 42],
+      [2, 30, 32, 28],
+      [3, 15, 17, 13],
+      [4, 10, 12, 10],
+      [5, 5, 4, 7],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    if (items.length > 0) {
+      assert.notStrictEqual(
+        items[0].labelSplitConfidence,
+        "twoColumn",
+        "ordinal col0 with numeric col1 must not be classified as two-column label"
+      );
+    }
+  });
+
+  it("ordinal col0 + single Base text cell yields confident split (isLikelyRatingScaleLabelColumn fix)", () => {
+    // col0 has ordinal values 1-5 + one text cell "Base".
+    // isLikelyRatingScaleLabelColumn should now accept textOnlyCount=1 when all cells are label-like.
+    const values = [
+      ["1", "Very likely", 50, 48, 52],
+      ["2", "Likely", 25, 26, 24],
+      ["3", "Unlikely", 15, 16, 14],
+      ["4", "Very unlikely", 10, 10, 10],
+      ["Base", "", 1000, 950, 1050],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    // With only 4 ordinal values in col0, isLikelyRatingScaleLabelColumn needs
+    // ordinalScaleCount >= 3 — should pass (4 ordinal + 1 text, all label-like).
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `table with two-column labels and Base row must not be uncertain; got ${item.candidateStatus}`
+    );
+  });
+
+  it("mean/variance/base table with empty gutter column is available, not uncertain", () => {
+    // Smoke-failing case from PR #154 review: metric labels in col0, col1 is an empty
+    // visual gutter, col2+ is numeric data.  The gutter must not land in the data matrix
+    // and cause quality warnings that flip the candidate to uncertain.
+    const values = [
+      ["Сколько (примерно) потратили?", null, null, null, null],  // title row
+      ["Среднее", null, 5000, 4500, 5500],
+      ["variance", null, 2500, 2300, 2700],
+      ["BASE", null, 500, 450, 550],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `mean/variance/base with gutter column must not be uncertain; got ${item.candidateStatus}`
+    );
+    assert.strictEqual(item.isLikelyTable, true);
+  });
+
+  it("mean/variance/base with non-ordinal code col0 + text metric col1 is available", () => {
+    // Variant: col0 carries a non-ordinal code (e.g. year/wave number > 10) that fails
+    // the text test, col1 has the metric labels.  The generalised twoColumn path must
+    // still classify this as available.
+    const values = [
+      [2025, "Среднее", 5000, 4500, 5500],
+      [2025, "variance", 2500, 2300, 2700],
+      [2025, "BASE", 500, 450, 550],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(
+      item.labelSplitConfidence,
+      "twoColumn",
+      `non-ordinal code col0 + text metric col1 must yield twoColumn; got ${item.labelSplitConfidence}`
+    );
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `non-ordinal code col0 + text metric col1 must not be uncertain; got ${item.candidateStatus}`
+    );
+  });
+
+  it("metric table with text+sample banner rows in col1 and null gutter in body rows is available", () => {
+    // Real-world structure: title row, two banner rows (col0=null, col1=segment labels/sample sizes),
+    // then body rows with col0=metric label, col1=null gutter, col2+=data.
+    // col1 banner rows carry text values ("Total", "(n=500)") but col1 is null for all body rows.
+    // isGutterColumnForBodyRows must recognise col1 as a gutter (ignoring banner rows).
+    const values = [
+      ["Сколько (примерно) потратили?", null, null, null, null],
+      [null, "Total", "Male", "Female", "Other"],
+      [null, "(n=500)", "(n=250)", "(n=250)", "(n=100)"],
+      ["Среднее", null, 5000, 4500, 4800],
+      ["variance", null, 2500, 2300, 2400],
+      ["BASE", null, 500, 450, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected item");
+    const item = items[0];
+    assert.strictEqual(item.candidateStatus, "available",
+      `${item.candidateStatus} split=${item.labelSplitConfidence} warn=${item.warningsCount} notes=${JSON.stringify(item.candidateNotes)}`);
+  });
+
+  it("metric table with numeric year in banner col1 and null gutter in body rows is available", () => {
+    // col1 banner row carries a numeric year (2025) which is not a text value.
+    // isGutterColumnForBodyRows must ignore the banner row (col0=null) and only
+    // test body rows where col0 has content — those have col1=null → gutter detected.
+    const values = [
+      ["Сколько (примерно) потратили?", null, null, null, null],
+      [null, 2025, "Male", "Female", "Other"],
+      ["Среднее", null, 5000, 4500, 4800],
+      ["variance", null, 2500, 2300, 2700],
+      ["BASE", null, 500, 450, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected item");
+    const item = items[0];
+    assert.strictEqual(item.candidateStatus, "available",
+      `${item.candidateStatus} split=${item.labelSplitConfidence} warn=${item.warningsCount} notes=${JSON.stringify(item.candidateNotes)}`);
+  });
+
+  it("metric table with percent values in banner col1 and null gutter in body rows is available", () => {
+    // col1 banner row carries percent strings ("44%", "41%", "39%") — numeric-like but text.
+    // isGutterColumnForBodyRows must ignore that row and detect col1 as a gutter via body rows only.
+    const values = [
+      ["Сколько (примерно) потратили?", null, null, null],
+      [null, "44%", "41%", "39%"],
+      ["Среднее", null, 5000, 4500],
+      ["variance", null, 2500, 2300],
+      ["BASE", null, 500, 450],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected item");
+    const item = items[0];
+    assert.strictEqual(item.candidateStatus, "available",
+      `${item.candidateStatus} split=${item.labelSplitConfidence} warn=${item.warningsCount} notes=${JSON.stringify(item.candidateNotes)}`);
+  });
+
+  it("metric table with two banner rows (text then numeric) in col1 and null gutter in body is available", () => {
+    // Two banner rows: first has text ("Total"/"Male"/...), second has numeric sample sizes (1000/500/...).
+    // Both have col0=null so isGutterColumnForBodyRows skips them.
+    // Body rows (col0 non-empty) have col1=null → gutter correctly detected → no BASE_BLANK_VALUES warning.
+    const values = [
+      ["Сколько (примерно) потратили?", null, null, null, null],
+      [null, "Total", "Male", "Female", "Other"],
+      [null, 1000, 500, 450, 50],
+      ["Среднее", null, 5000, 4500, 4800],
+      ["variance", null, 2500, 2300, 2400],
+      ["BASE", null, 500, 450, 50],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected item");
+    const item = items[0];
+    assert.strictEqual(item.candidateStatus, "available",
+      `${item.candidateStatus} split=${item.labelSplitConfidence} warn=${item.warningsCount} notes=${JSON.stringify(item.candidateNotes)}`);
+  });
+
+  it("banner header rows wider than body data rows do not cause spurious BASE_BLANK_VALUES", () => {
+    // banner row spans 4 data columns (C-F), but mean/variance/base only have
+    // values in 3 data columns (C-E). Col F is present only in the banner header.
+    // Trailing empty data column must be trimmed before quality checks so that
+    // the base row does not get a spurious BASE_BLANK_VALUES warning.
+    const values = [
+      //  A               B      C         D           E           F (banner-only)
+      ["Title",       null,  null,     null,       null,       null],   // title row
+      ["Question?",   null,  null,     null,       null,       null],   // question title (unknownText)
+      [null,          null,  "Total",  "Group A",  "Group B",  "Extra"],// banner — F has header
+      [null,          null,  "Sub 1",  "Sub 2",    null,       null],   // banner row 2
+      ["Mean",        null,  50,       45,         55,         null],   // F is empty
+      ["Variance",    null,  100,      80,         120,        null],   // F is empty
+      ["Base",        null,  500,      200,        300,        null],   // F is empty → BASE_BLANK_VALUES
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    const hasBbv = item.qualityIssueCodes.some((e) => e.code === "BASE_BLANK_VALUES");
+    assert.strictEqual(hasBbv, false,
+      `should not produce BASE_BLANK_VALUES for a banner-extension trailing column; got codes=${JSON.stringify(item.qualityIssueCodes)}`);
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `expected available; got ${item.candidateStatus} split=${item.labelSplitConfidence} warn=${item.warningsCount} codes=${JSON.stringify(item.qualityIssueCodes)}`
+    );
+  });
+
+  it("extended NPS inventory behavior is preserved with two-column layout", () => {
+    // Extended NPS: col0 has scale values 0-10 + text bucket rows + NPS + Base.
+    // This previously worked; confirm it still does after the #153 changes.
+    const values = [
+      ["Score", "Total", "Male", "Female"],
+      ["1 - very unlikely", 5, 4, 6],
+      ["2", 6, 5, 7],
+      ["3", 7, 6, 8],
+      ["4", 8, 7, 9],
+      ["5", 9, 8, 10],
+      ["6", 10, 9, 11],
+      ["7", 11, 10, 12],
+      ["8", 12, 11, 13],
+      ["9", 13, 12, 14],
+      ["10 - very likely", 14, 13, 15],
+      ["Bottom-3", 18, 17, 19],
+      ["Top-3", 50, 53, 47],
+      ["Detractors", 20, 19, 18],
+      ["Promoters", 50, 52, 51],
+      ["NPS", 30, 33, 33],
+      ["BASE", 1000, 500, 500],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(item.labelSplitConfidence, "confident");
+    assert.strictEqual(item.candidateStatus, "available");
+    assert.ok(
+      !item.candidateNotes.includes("Граница лейблов/данных не определена"),
+      "extended NPS must not produce uncertain label/data boundary note"
+    );
   });
 });
