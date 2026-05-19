@@ -357,6 +357,31 @@ function splitLabelData(values, band) {
     dataCols.push(dataRow);
   }
 
+  // Trim trailing data columns that are empty in all body rows.
+  // Body rows are rows where labelCols[row][0] is non-empty (the primary label is present).
+  // Banner/header rows (labelCols[row][0] empty) may add extra columns — e.g. a subgroup
+  // header that has no matching data in mean/variance/base — and those trailing all-empty-
+  // in-body-rows columns would otherwise produce spurious BASE_BLANK_VALUES quality warnings.
+  if (labelColCount > 0 && dataCols.length > 0 && dataCols[0] && dataCols[0].length > 1) {
+    const bodyRowIndexes = [];
+    for (let i = 0; i < labelCols.length; i++) {
+      if (!isCellEmpty(labelCols[i][0])) bodyRowIndexes.push(i);
+    }
+    if (bodyRowIndexes.length > 0) {
+      let trimmedWidth = dataCols[0].length;
+      while (trimmedWidth > 1) {
+        const colIdx = trimmedWidth - 1;
+        if (!bodyRowIndexes.every((ri) => isCellEmpty((dataCols[ri] || [])[colIdx]))) break;
+        trimmedWidth--;
+      }
+      if (trimmedWidth < dataCols[0].length) {
+        for (let i = 0; i < dataCols.length; i++) {
+          dataCols[i] = dataCols[i].slice(0, trimmedWidth);
+        }
+      }
+    }
+  }
+
   return { labelCols, dataCols, labelSplitConfidence, labelColCount };
 }
 

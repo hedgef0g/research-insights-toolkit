@@ -559,6 +559,34 @@ describe("scanWorksheetForTables", () => {
       `${item.candidateStatus} split=${item.labelSplitConfidence} warn=${item.warningsCount} notes=${JSON.stringify(item.candidateNotes)}`);
   });
 
+  it("banner header rows wider than body data rows do not cause spurious BASE_BLANK_VALUES", () => {
+    // banner row spans 4 data columns (C-F), but mean/variance/base only have
+    // values in 3 data columns (C-E). Col F is present only in the banner header.
+    // Trailing empty data column must be trimmed before quality checks so that
+    // the base row does not get a spurious BASE_BLANK_VALUES warning.
+    const values = [
+      //  A               B      C         D           E           F (banner-only)
+      ["Title",       null,  null,     null,       null,       null],   // title row
+      ["Question?",   null,  null,     null,       null,       null],   // question title (unknownText)
+      [null,          null,  "Total",  "Group A",  "Group B",  "Extra"],// banner — F has header
+      [null,          null,  "Sub 1",  "Sub 2",    null,       null],   // banner row 2
+      ["Mean",        null,  50,       45,         55,         null],   // F is empty
+      ["Variance",    null,  100,      80,         120,        null],   // F is empty
+      ["Base",        null,  500,      200,        300,        null],   // F is empty → BASE_BLANK_VALUES
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    const hasBbv = item.qualityIssueCodes.some((e) => e.code === "BASE_BLANK_VALUES");
+    assert.strictEqual(hasBbv, false,
+      `should not produce BASE_BLANK_VALUES for a banner-extension trailing column; got codes=${JSON.stringify(item.qualityIssueCodes)}`);
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `expected available; got ${item.candidateStatus} split=${item.labelSplitConfidence} warn=${item.warningsCount} codes=${JSON.stringify(item.qualityIssueCodes)}`
+    );
+  });
+
   it("extended NPS inventory behavior is preserved with two-column layout", () => {
     // Extended NPS: col0 has scale values 0-10 + text bucket rows + NPS + Base.
     // This previously worked; confirm it still does after the #153 changes.
