@@ -4,7 +4,7 @@
   <Version>0.4</Version>
   <ProviderName>Ilia Kulikov</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
-  <DisplayName DefaultValue="Research Insights Toolkit"/>
+  <DisplayName DefaultValue="ResearchSignal Table"/>
   <Description DefaultValue="Excel add-in for significance testing in market research tables."/>
   <IconUrl DefaultValue="https://hedgef0g.github.io/research-insights-toolkit/assets/rit-icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="https://hedgef0g.github.io/research-insights-toolkit/assets/rit-icon-64.png"/>
