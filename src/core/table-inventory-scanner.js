@@ -224,8 +224,43 @@ function isLikelyRatingScaleLabelColumn(values, colIndex, startRow, endRow) {
   }
 
   const labelLikeFraction = (textOnlyCount + ordinalScaleCount) / totalNonEmpty;
+  // Allow a single text marker (e.g. "Base") alongside ordinal scale values when every
+  // non-empty cell is label-like (no out-of-range numeric data cells).
+  const allCellsAreLabelLike = textOnlyCount + ordinalScaleCount === totalNonEmpty;
+  const minText = allCellsAreLabelLike ? 1 : 2;
 
-  return textOnlyCount >= 2 && ordinalScaleCount >= 3 && labelLikeFraction >= 0.8;
+  return textOnlyCount >= minText && ordinalScaleCount >= 3 && labelLikeFraction >= 0.8;
+}
+
+/**
+ * Returns true when a column consists entirely of ordinal scale values (integers 0–10,
+ * as numbers or short digit strings) plus optional text cells — and has no out-of-range
+ * numeric cells.  Used to recognise question-code / scale-code label columns where the
+ * text fraction alone is too low to satisfy the main text-fraction threshold.
+ *
+ * Requires at least 3 ordinal values to avoid false positives on short numeric runs.
+ */
+function isMostlyOrdinalLabelColumn(values, colIndex, startRow, endRow) {
+  let totalNonEmpty = 0;
+  let ordinalCount = 0;
+  let textCount = 0;
+
+  for (let row = startRow; row <= endRow; row++) {
+    const cell = (values[row] || [])[colIndex];
+    if (isCellEmpty(cell)) continue;
+    totalNonEmpty++;
+    if (isLikelyOrdinalScaleLabelCell(cell)) {
+      ordinalCount++;
+    } else if (isTextOnlyCell(cell)) {
+      textCount++;
+    }
+    // any other cell (out-of-range numeric) disqualifies the column immediately
+    else {
+      return false;
+    }
+  }
+
+  return totalNonEmpty > 0 && ordinalCount >= 3;
 }
 
 function splitLabelData(values, band) {
@@ -257,9 +292,32 @@ function splitLabelData(values, band) {
       isLikelyRatingScaleLabelColumn(values, localTrimmedFirstCol, localStartRow, localEndRow);
 
     if (!col0IsText) {
-      // First column looks numeric — split is ambiguous.
-      labelColCount = 1;
-      labelSplitConfidence = "uncertain";
+      // First column looks numeric — check for ordinal-scale code + text-answer pattern
+      // before falling back to the generic uncertain case.
+      if (
+        trimmedWidth >= 3 &&
+        isMostlyOrdinalLabelColumn(values, localTrimmedFirstCol, localStartRow, localEndRow)
+      ) {
+        const col1Fraction = computeTextFraction(
+          values,
+          localTrimmedFirstCol + 1,
+          localTrimmedFirstCol + 1,
+          localStartRow,
+          localEndRow
+        );
+        if (col1Fraction >= LABEL_TEXT_FRACTION_THRESHOLD) {
+          // Both columns are row-label material: ordinal code + text answer label.
+          labelColCount = 2;
+          labelSplitConfidence = "twoColumn";
+        } else {
+          labelColCount = 1;
+          labelSplitConfidence = "uncertain";
+        }
+      } else {
+        // First column looks numeric — split is ambiguous.
+        labelColCount = 1;
+        labelSplitConfidence = "uncertain";
+      }
     } else if (trimmedWidth < 3) {
       // Only 2 columns and col0 is text — use 1 label column.
       labelColCount = 1;
@@ -384,6 +442,8 @@ function inferTitle(values, band) {
  *
  * "available"  — looks like a recognisable table with no blocking issues or
  *                uncertain boundaries; worth checking via Check Table.
+ *                Also returned when labelSplitConfidence is "twoColumn" (two-column
+ *                row labels with ordinal code + text answer are valid structures).
  * "uncertain"  — table-like but has blocking issues, quality warnings, or an
  *                ambiguous label/data boundary; Check Table may still work but
  *                results should be verified.
@@ -418,6 +478,9 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
   }
   if (labelSplitConfidence === "uncertain") {
     candidateNotes.push("Граница лейблов/данных не определена");
+  }
+  if (labelSplitConfidence === "twoColumn") {
+    candidateNotes.push("Двухколоночные метки строк: порядковый код + текстовый ответ");
   }
   if (isLikelyTable && qualitySummary.warningCount > 0) {
     candidateNotes.push(`Предупреждений в превью: ${qualitySummary.warningCount}`);

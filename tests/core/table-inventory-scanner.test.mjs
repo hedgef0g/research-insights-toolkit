@@ -288,4 +288,165 @@ describe("scanWorksheetForTables", () => {
       );
     }
   });
+
+  // ─── Issue #153: two-column row label tables ──────────────────────────────
+
+  it("non-NPS table with pure ordinal col0 + text answer col1 is available, not uncertain", () => {
+    // Pattern: [scale code] [answer label] [data...]
+    // col0 is integers 1-5 (ordinal scale codes, not text), col1 is text answer labels.
+    const values = [
+      [1, "Strongly agree", 40, 35, 42],
+      [2, "Agree", 30, 32, 28],
+      [3, "Neither agree nor disagree", 15, 17, 13],
+      [4, "Disagree", 10, 12, 10],
+      [5, "Strongly disagree", 5, 4, 7],
+      ["Base", "", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    // "twoColumn" when col0 fails the text test but is ordinal;
+    // "confident" when isLikelyRatingScaleLabelColumn already accepts the mixed col0.
+    assert.ok(
+      item.labelSplitConfidence === "twoColumn" || item.labelSplitConfidence === "confident",
+      `expected twoColumn or confident split; got ${item.labelSplitConfidence}`
+    );
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `valid two-column label table must not be uncertain; got ${item.candidateStatus}`
+    );
+  });
+
+  it("non-NPS table with ordinal string col0 (\"1\"..\"5\") + text col1 is available", () => {
+    // Same pattern but col0 values are strings "1".."5" rather than integers.
+    const values = [
+      ["1", "Very satisfied", 44, 41, 45],
+      ["2", "Satisfied", 30, 32, 28],
+      ["3", "Neither", 15, 17, 13],
+      ["4", "Dissatisfied", 8, 7, 10],
+      ["5", "Very dissatisfied", 3, 3, 4],
+      ["Base", "", 500, 450, 550],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.ok(
+      item.labelSplitConfidence === "twoColumn" || item.labelSplitConfidence === "confident",
+      `expected twoColumn or confident split; got ${item.labelSplitConfidence}`
+    );
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `two-column label table must not be uncertain; got ${item.candidateStatus}`
+    );
+  });
+
+  it("pure ordinal col0 with no text cell at all triggers twoColumn path when col1 is text", () => {
+    // col0 has only integers 1-5 (no "Base" or any text cell).
+    // isLikelyRatingScaleLabelColumn requires textOnlyCount >= 1, so it returns false here.
+    // The new isMostlyOrdinalLabelColumn + col1 text check should set twoColumn.
+    // A Base row is provided so the preview model can build a complete metric block.
+    // col0 of the Base row is null so col0 stays purely ordinal (no text cells).
+    const values = [
+      [1, "Strongly agree", 40, 35, 42],
+      [2, "Agree", 30, 32, 28],
+      [3, "Neither", 15, 17, 13],
+      [4, "Disagree", 10, 12, 10],
+      [5, "Strongly disagree", 5, 4, 7],
+      [null, "BASE", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(
+      item.labelSplitConfidence,
+      "twoColumn",
+      `pure-ordinal col0 with text col1 should yield twoColumn; got ${item.labelSplitConfidence}`
+    );
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `twoColumn split must not make the candidate uncertain; got ${item.candidateStatus}`
+    );
+    assert.ok(
+      item.candidateNotes.some((n) => n.includes("Двухколоночные метки")),
+      "candidateNotes must explain two-column labels for twoColumn split"
+    );
+  });
+
+  it("ordinal col0 + numeric col1 stays uncertain (col1 data, not a second label)", () => {
+    // col0 is ordinal 1-5 but col1 is numeric data — should not be classified as
+    // a two-column label table.
+    const values = [
+      [1, 40, 35, 42],
+      [2, 30, 32, 28],
+      [3, 15, 17, 13],
+      [4, 10, 12, 10],
+      [5, 5, 4, 7],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    if (items.length > 0) {
+      assert.notStrictEqual(
+        items[0].labelSplitConfidence,
+        "twoColumn",
+        "ordinal col0 with numeric col1 must not be classified as two-column label"
+      );
+    }
+  });
+
+  it("ordinal col0 + single Base text cell yields confident split (isLikelyRatingScaleLabelColumn fix)", () => {
+    // col0 has ordinal values 1-5 + one text cell "Base".
+    // isLikelyRatingScaleLabelColumn should now accept textOnlyCount=1 when all cells are label-like.
+    const values = [
+      ["1", "Very likely", 50, 48, 52],
+      ["2", "Likely", 25, 26, 24],
+      ["3", "Unlikely", 15, 16, 14],
+      ["4", "Very unlikely", 10, 10, 10],
+      ["Base", "", 1000, 950, 1050],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    // With only 4 ordinal values in col0, isLikelyRatingScaleLabelColumn needs
+    // ordinalScaleCount >= 3 — should pass (4 ordinal + 1 text, all label-like).
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `table with two-column labels and Base row must not be uncertain; got ${item.candidateStatus}`
+    );
+  });
+
+  it("extended NPS inventory behavior is preserved with two-column layout", () => {
+    // Extended NPS: col0 has scale values 0-10 + text bucket rows + NPS + Base.
+    // This previously worked; confirm it still does after the #153 changes.
+    const values = [
+      ["Score", "Total", "Male", "Female"],
+      ["1 - very unlikely", 5, 4, 6],
+      ["2", 6, 5, 7],
+      ["3", 7, 6, 8],
+      ["4", 8, 7, 9],
+      ["5", 9, 8, 10],
+      ["6", 10, 9, 11],
+      ["7", 11, 10, 12],
+      ["8", 12, 11, 13],
+      ["9", 13, 12, 14],
+      ["10 - very likely", 14, 13, 15],
+      ["Bottom-3", 18, 17, 19],
+      ["Top-3", 50, 53, 47],
+      ["Detractors", 20, 19, 18],
+      ["Promoters", 50, 52, 51],
+      ["NPS", 30, 33, 33],
+      ["BASE", 1000, 500, 500],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(item.labelSplitConfidence, "confident");
+    assert.strictEqual(item.candidateStatus, "available");
+    assert.ok(
+      !item.candidateNotes.includes("Граница лейблов/данных не определена"),
+      "extended NPS must not produce uncertain label/data boundary note"
+    );
+  });
 });
