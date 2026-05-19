@@ -2151,6 +2151,7 @@ function getInputValue(elementId, fallbackValue) {
  */
 function initializeSettingsPanel() {
   initializeSettingsTooltips();
+  initializePreviousColumnTotalWarningPlacement();
 
   bindMutuallyExclusiveCheckboxes("compare-only-with-total", "exclude-total-from-comparisons");
 
@@ -2172,6 +2173,17 @@ function initializeSettingsPanel() {
       );
     });
   }
+}
+
+function initializePreviousColumnTotalWarningPlacement() {
+  const warningElement = document.getElementById("previous-column-total-warning");
+  const totalInEachBannerCheckbox = document.getElementById("total-in-each-banner");
+
+  if (!warningElement || !totalInEachBannerCheckbox || !totalInEachBannerCheckbox.parentElement) {
+    return;
+  }
+
+  totalInEachBannerCheckbox.parentElement.insertAdjacentElement("afterend", warningElement);
 }
 
 /**
@@ -2647,6 +2659,7 @@ function refreshPreviousColumnComparisonState() {
   const compareOnlyWithTotalCheckbox = document.getElementById("compare-only-with-total");
   const excludeTotalCheckbox = document.getElementById("exclude-total-from-comparisons");
   const firstColumnIsTotalCheckbox = document.getElementById("first-column-is-total");
+  const totalInEachBannerCheckbox = document.getElementById("total-in-each-banner");
   const respectBannerStructureCheckbox = document.getElementById("respect-banner-structure");
 
   const fillOnlyTotalComparisonsCheckbox = document.getElementById("fill-only-total-comparisons");
@@ -2661,12 +2674,14 @@ function refreshPreviousColumnComparisonState() {
   const firstColumnIsTotal = firstColumnIsTotalCheckbox
     ? firstColumnIsTotalCheckbox.checked
     : false;
+  const totalInEachBanner = totalInEachBannerCheckbox ? totalInEachBannerCheckbox.checked : false;
 
   const respectBannerStructure = respectBannerStructureCheckbox
     ? respectBannerStructureCheckbox.checked
     : false;
 
-  const hasValidTotalSource = firstColumnIsTotal || respectBannerStructure;
+  const hasManualTotalPlacement = firstColumnIsTotal || totalInEachBanner;
+  const hasValidTotalSource = hasManualTotalPlacement || respectBannerStructure;
 
   if (previousColumnFillWrapper) {
     previousColumnFillWrapper.style.display = isPreviousColumnMode ? "block" : "none";
@@ -2715,7 +2730,7 @@ function refreshPreviousColumnComparisonState() {
   if (warningElement) {
     const shouldShowWarning =
       isPreviousColumnMode &&
-      firstColumnIsTotal &&
+      hasManualTotalPlacement &&
       !respectBannerStructure &&
       excludeTotalCheckbox &&
       !excludeTotalCheckbox.checked;
