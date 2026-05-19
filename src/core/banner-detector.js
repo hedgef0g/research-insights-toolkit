@@ -24,6 +24,15 @@ import { normalizeLookupText, normalizeDisplayText } from "./string-utils";
 
 const TOTAL_LABEL_KEYWORDS = BANNER_DICTIONARY.totalLabels;
 const WAVE_GROUP_LABEL_KEYWORDS = BANNER_DICTIONARY.waveGroupLabels;
+const TECHNICAL_WAVE_DESCRIPTOR_KEYWORDS = [
+  ...WAVE_GROUP_LABEL_KEYWORDS,
+  "quarter",
+  "quarters",
+  "квартал",
+  "кварталы",
+];
+
+const TECHNICAL_WAVE_LABEL_DOMINANCE_THRESHOLD = 0.7;
 
 const DEFAULT_GROUP_KEY = "group:default";
 const DEFAULT_GROUP_LABEL = "Default";
@@ -109,7 +118,23 @@ export function detectBannerStructure(bannerContext, settings = {}) {
 
   markGlobalTotalColumn(columnDescriptors, globalTotalColumnIndex);
 
-  const groups = buildGroupsFromColumnDescriptors(columnDescriptors, settings);
+  const nestedWaveGroupKeys =
+    settings && settings.autoDetectWaveBanners
+      ? detectGroupKeysWithNestedWaveDimension({
+          columnDescriptors,
+          lowerBannerRow: normalizedLowerBannerRow,
+          upperScanRows,
+          groupLevelRowOffset: groupLevelResult.groupLevel
+            ? groupLevelResult.groupLevel.rowOffset
+            : null,
+        })
+      : new Set();
+
+  const groups = buildGroupsFromColumnDescriptors(
+    columnDescriptors,
+    settings,
+    nestedWaveGroupKeys
+  );
 
   const waveGroups = groups.filter(
     (group) => group.recommendedComparisonMode === RECOMMENDED_COMPARISON_MODE.PREVIOUS_COLUMN
@@ -292,7 +317,11 @@ function buildColumnDescriptors({ selectedColumnCount, lowerBannerRow, groupLeve
 /**
  * Builds group objects from descriptors.
  */
-function buildGroupsFromColumnDescriptors(columnDescriptors, calculationSettings = {}) {
+function buildGroupsFromColumnDescriptors(
+  columnDescriptors,
+  calculationSettings = {},
+  nestedWaveGroupKeys = new Set()
+) {
   const groupsByKey = new Map();
 
   for (const descriptor of columnDescriptors) {
@@ -301,7 +330,9 @@ function buildGroupsFromColumnDescriptors(columnDescriptors, calculationSettings
         calculationSettings && calculationSettings.autoDetectWaveBanners;
 
       const isWaveGroup =
-        shouldAutoDetectWaveBanners && isWaveGroupLabel(descriptor.comparisonGroupLabel);
+        shouldAutoDetectWaveBanners &&
+        (isWaveGroupLabel(descriptor.comparisonGroupLabel) ||
+          nestedWaveGroupKeys.has(descriptor.comparisonGroupKey));
 
       groupsByKey.set(descriptor.comparisonGroupKey, {
         groupKey: descriptor.comparisonGroupKey,
@@ -357,6 +388,8 @@ function detectMeaningfulGroupLevel(upperScanRows, lowerBannerRow, selectedColum
     };
   }
 
+  const candidates = [];
+
   for (let rowIndex = 0; rowIndex < upperScanRows.length; rowIndex++) {
     const row = normalizeBannerRowLength(upperScanRows[rowIndex], selectedColumnCount);
 
@@ -368,7 +401,8 @@ function detectMeaningfulGroupLevel(upperScanRows, lowerBannerRow, selectedColum
     );
 
     if (reconstructedSpanResult.groupLevel) {
-      return reconstructedSpanResult;
+      candidates.push(reconstructedSpanResult);
+      continue;
     }
 
     const repeatedLabelResult = detectRepeatedLabelGroupLevelInRow(
@@ -378,8 +412,12 @@ function detectMeaningfulGroupLevel(upperScanRows, lowerBannerRow, selectedColum
     );
 
     if (repeatedLabelResult.groupLevel) {
-      return repeatedLabelResult;
+      candidates.push(repeatedLabelResult);
     }
+  }
+
+  if (candidates.length > 0) {
+    return selectBestGroupLevelCandidate(candidates);
   }
 
   return {
@@ -423,7 +461,8 @@ function detectReconstructedSpanGroupLevel(
   const hasMergedDownSingleColumnSpan = spans.some(
     (span) =>
       span.columnIndexes.length === 1 &&
-      !normalizeRawBannerCellValue(lowerBannerRow[span.startColumnIndex])
+      !normalizeRawBannerCellValue(lowerBannerRow[span.startColumnIndex]) &&
+      !isTechnicalWaveOrValueLabel(span.label)
   );
 
   if (hasMergedDownSingleColumnSpan) {
@@ -857,6 +896,117 @@ function markGlobalTotalColumn(columnDescriptors, globalTotalColumnIndex) {
   descriptor.isLocalTotal = false;
 }
 
+function selectBestGroupLevelCandidate(candidates) {
+  const firstCandidate = candidates[0];
+
+  if (!isTechnicalWaveDescriptorGroupLevel(firstCandidate.groupLevel)) {
+    return firstCandidate;
+  }
+
+  const semanticCandidate = candidates.find(
+    (candidate) => !isTechnicalWaveDescriptorGroupLevel(candidate.groupLevel)
+  );
+
+  return semanticCandidate || firstCandidate;
+}
+
+function detectGroupKeysWithNestedWaveDimension({
+  columnDescriptors,
+  lowerBannerRow,
+  upperScanRows,
+  groupLevelRowOffset,
+}) {
+  const groupColumnsByKey = new Map();
+
+  for (const descriptor of columnDescriptors) {
+    if (!groupColumnsByKey.has(descriptor.comparisonGroupKey)) {
+      groupColumnsByKey.set(descriptor.comparisonGroupKey, []);
+    }
+
+    groupColumnsByKey.get(descriptor.comparisonGroupKey).push(descriptor.columnIndex);
+  }
+
+  const groupLevelRowIndex =
+    typeof groupLevelRowOffset === "number" ? -groupLevelRowOffset - 1 : null;
+
+  const waveGroupKeys = new Set();
+
+  for (const [groupKey, columnIndexes] of groupColumnsByKey) {
+    if (columnIndexes.length < 2) {
+      continue;
+    }
+
+    if (countWaveValueLabelsInColumns(columnIndexes, lowerBannerRow) >= 2) {
+      waveGroupKeys.add(groupKey);
+      continue;
+    }
+
+    if (
+      hasWaveDescriptorInIntermediateUpperRow(columnIndexes, upperScanRows, groupLevelRowIndex)
+    ) {
+      waveGroupKeys.add(groupKey);
+    }
+  }
+
+  return waveGroupKeys;
+}
+
+function countWaveValueLabelsInColumns(columnIndexes, row) {
+  if (!row) {
+    return 0;
+  }
+
+  let count = 0;
+
+  for (const columnIndex of columnIndexes) {
+    const cellText = normalizeRawBannerCellValue(row[columnIndex]);
+
+    if (cellText && isTechnicalWaveValueLabel(cellText)) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
+function hasWaveDescriptorInIntermediateUpperRow(
+  columnIndexes,
+  upperScanRows,
+  groupLevelRowIndex
+) {
+  if (!Array.isArray(upperScanRows) || upperScanRows.length === 0) {
+    return false;
+  }
+
+  for (let rowIndex = 0; rowIndex < upperScanRows.length; rowIndex++) {
+    if (rowIndex === groupLevelRowIndex) {
+      continue;
+    }
+
+    const row = upperScanRows[rowIndex];
+
+    if (!row) {
+      continue;
+    }
+
+    let descriptorCount = 0;
+
+    for (const columnIndex of columnIndexes) {
+      const cellText = normalizeRawBannerCellValue(row[columnIndex]);
+
+      if (cellText && isTechnicalWaveDescriptorLabel(cellText)) {
+        descriptorCount++;
+      }
+    }
+
+    if (descriptorCount >= 2) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Returns true if group label looks like a wave / period / measurement group.
  *
@@ -877,5 +1027,66 @@ function isWaveGroupLabel(rawLabel) {
 
   return WAVE_GROUP_LABEL_KEYWORDS.some(
     (keyword) => normalizedLabel === keyword || tokens.includes(keyword)
+  );
+}
+
+function isTechnicalWaveDescriptorGroupLevel(groupLevel) {
+  if (!groupLevel || !groupLevel.spans || groupLevel.spans.length === 0) {
+    return false;
+  }
+
+  const labeledSpans = groupLevel.spans.filter((span) => span.label);
+
+  if (labeledSpans.length === 0) {
+    return false;
+  }
+
+  const technicalWaveSpanCount = labeledSpans.filter((span) =>
+    isTechnicalWaveOrValueLabel(span.label)
+  ).length;
+
+  return technicalWaveSpanCount / labeledSpans.length >= TECHNICAL_WAVE_LABEL_DOMINANCE_THRESHOLD;
+}
+
+function isTechnicalWaveOrValueLabel(rawLabel) {
+  return isTechnicalWaveDescriptorLabel(rawLabel) || isTechnicalWaveValueLabel(rawLabel);
+}
+
+function isTechnicalWaveDescriptorLabel(rawLabel) {
+  const normalizedLabel = normalizeBannerLabel(rawLabel);
+
+  if (!normalizedLabel) {
+    return false;
+  }
+
+  const tokens = normalizedLabel.split(" ").filter(Boolean);
+
+  return TECHNICAL_WAVE_DESCRIPTOR_KEYWORDS.some((keyword) => {
+    const normalizedKeyword = normalizeBannerLabel(keyword);
+
+    return (
+      normalizedLabel === normalizedKeyword ||
+      tokens.includes(normalizedKeyword) ||
+      normalizedLabel.includes(normalizedKeyword)
+    );
+  });
+}
+
+function isTechnicalWaveValueLabel(rawLabel) {
+  const normalizedLabel = normalizeBannerLabel(rawLabel);
+
+  if (!normalizedLabel) {
+    return false;
+  }
+
+  const compactLabel = normalizedLabel.replace(/\s+/g, "");
+
+  return (
+    /^\d{4}q[1-4]$/.test(compactLabel) ||
+    /^q[1-4]\d{4}$/.test(compactLabel) ||
+    /^\d{4}кв[1-4]$/.test(compactLabel) ||
+    /^кв[1-4]\d{4}$/.test(compactLabel) ||
+    /^\d{4}квартал[1-4]$/.test(compactLabel) ||
+    /^квартал[1-4]\d{4}$/.test(compactLabel)
   );
 }
