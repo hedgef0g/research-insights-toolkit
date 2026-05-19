@@ -2151,6 +2151,7 @@ function getInputValue(elementId, fallbackValue) {
  */
 function initializeSettingsPanel() {
   initializeSettingsTooltips();
+  initializePreviousColumnTotalWarningPlacement();
 
   bindMutuallyExclusiveCheckboxes("compare-only-with-total", "exclude-total-from-comparisons");
 
@@ -2172,6 +2173,17 @@ function initializeSettingsPanel() {
       );
     });
   }
+}
+
+function initializePreviousColumnTotalWarningPlacement() {
+  const warningElement = document.getElementById("previous-column-total-warning");
+  const totalInEachBannerCheckbox = document.getElementById("total-in-each-banner");
+
+  if (!warningElement || !totalInEachBannerCheckbox || !totalInEachBannerCheckbox.parentElement) {
+    return;
+  }
+
+  totalInEachBannerCheckbox.parentElement.insertAdjacentElement("afterend", warningElement);
 }
 
 /**
