@@ -73,14 +73,14 @@
         <bt:Url id="Taskpane.Url" DefaultValue="https://hedgef0g.github.io/research-insights-toolkit/taskpane.html"/>
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="GetStarted.Title" DefaultValue="RIT is ready"/>
-        <bt:String id="CommandsGroup.Label" DefaultValue="Research Tools"/>
-        <bt:String id="TaskpaneButton.Label" DefaultValue="Open RIT"/>
-        <bt:String id="CustomTab.Label" DefaultValue="Research Insights"/>
+        <bt:String id="GetStarted.Title" DefaultValue="ResearchSignal Table is ready"/>
+        <bt:String id="CommandsGroup.Label" DefaultValue="Table Tools"/>
+        <bt:String id="TaskpaneButton.Label" DefaultValue="Open Table"/>
+        <bt:String id="CustomTab.Label" DefaultValue="ResearchSignal"/>
       </bt:ShortStrings>
       <bt:LongStrings>
-        <bt:String id="GetStarted.Description" DefaultValue="Open the Home tab, click the toolkit button, and start analyzing your tables."/>
-        <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Click to Open RIT"/>
+        <bt:String id="GetStarted.Description" DefaultValue="Open the ResearchSignal tab, choose Open Table, and start analyzing your tables."/>
+        <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Open ResearchSignal Table"/>
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>
