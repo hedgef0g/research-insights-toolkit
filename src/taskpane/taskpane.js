@@ -68,7 +68,7 @@ const INVENTORY_CONTENT_COLUMNS = [
   "Critical",
 ];
 
-const INVENTORY_CLIENT_COLUMNS = ["#", "Название таблицы", "Подзаголовок", "Лист", "Ссылка"];
+const INVENTORY_CLIENT_COLUMNS = ["#", "Название таблицы", "Подзаголовок", "Лист"];
 
 function formatBannerUserMessages(bannerStructure) {
   if (!bannerStructure || !bannerStructure.messages) {
@@ -1445,7 +1445,7 @@ function buildInventoryContentCandidateRows(sheetResults) {
       rows.push([
         candidateIndex,
         sheetResult.sheetName,
-        item.title || "",
+        isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""),
         item.resolvedRangeAddress || item.rangeAddress || "",
         item.rowCount ?? "",
         item.columnCount ?? "",
@@ -1768,12 +1768,15 @@ async function writeOrUpdateBacklink(context, worksheet, detectedRowIndex, detec
       try {
         cell.hyperlink = {
           documentReference: contentRef,
+          textToDisplay: BACKLINK_MARKER,
           screenTip: `Оглавление, строка ${contentRow}`,
         };
       } catch (_) {
         // Non-fatal: leave plain text.
       }
     }
+    cell.format.fill.clear();
+    cell.format.font.bold = false;
   };
 
   if (backlinkState === "in-range") {
@@ -1865,12 +1868,12 @@ function buildClientContentRows(sheetResults) {
   let index = 1;
   for (const sheetResult of sheetResults) {
     for (const item of sheetResult.items) {
-      rows.push([index, item.title || "", "", item.sheetName || sheetResult.sheetName, item.resolvedRangeAddress || item.rangeAddress || ""]);
+      rows.push([index, isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""), "", item.sheetName || sheetResult.sheetName]);
       index++;
     }
   }
   if (rows.length === 0) {
-    rows.push(["", "Кандидаты не обнаружены", "", "", ""]);
+    rows.push(["", "Кандидаты не обнаружены", "", ""]);
   }
   return rows;
 }
@@ -2045,22 +2048,24 @@ function writeClientFacingContent(worksheet, inventoryResults) {
   tableRange.format.borders.getItem("InsideHorizontal").style = "Continuous";
   tableRange.format.borders.getItem("InsideVertical").style = "Continuous";
 
-  const columnWidths = [42, 260, 180, 120, 100];
+  const columnWidths = [42, 260, 180, 120];
   columnWidths.forEach((width, index) => {
     worksheet.getRangeByIndexes(0, index, 1, 1).format.columnWidth = width;
   });
 
   worksheet.getRangeByIndexes(0, 0, dataRows.length + headerRowIndex, colCount).format.verticalAlignment = "Top";
 
-  const LINK_COL_INDEX = 4;
+  const TITLE_COL_INDEX = 1;
   for (let i = 0; i < allItems.length; i++) {
     const item = allItems[i];
     const effectiveRange = item.resolvedRangeAddress || item.rangeAddress;
     const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, effectiveRange);
     if (hyperlinkTarget) {
-      const cell = worksheet.getRangeByIndexes(headerRowIndex + i, LINK_COL_INDEX, 1, 1);
+      const cell = worksheet.getRangeByIndexes(headerRowIndex + i, TITLE_COL_INDEX, 1, 1);
+      const displayTitle = isGeneratedBacklinkRow(item.title) ? "" : (item.title || "");
       cell.hyperlink = {
         documentReference: hyperlinkTarget,
+        textToDisplay: displayTitle || `Таблица ${i + 1}`,
         screenTip: `${item.sheetName}!${effectiveRange}`,
       };
     }
