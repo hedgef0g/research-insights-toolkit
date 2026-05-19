@@ -519,3 +519,9 @@ b {
   border-color: #bbf7d0;
   background: var(--rs-color-bg-tint);
 }
+
+.inventory-backlink-row {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--rs-color-muted);
+}

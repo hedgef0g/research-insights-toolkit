@@ -68,7 +68,7 @@ const INVENTORY_CONTENT_COLUMNS = [
   "Critical",
 ];
 
-const INVENTORY_CLIENT_COLUMNS = ["#", "Название таблицы", "Подзаголовок", "Лист", "Ссылка"];
+const INVENTORY_CLIENT_COLUMNS = ["#", "Название таблицы", "Подзаголовок", "Лист"];
 
 function formatBannerUserMessages(bannerStructure) {
   if (!bannerStructure || !bannerStructure.messages) {
@@ -1417,6 +1417,9 @@ async function collectWorkbookInventoryResults(context) {
   const sheetResults = scannedEntries
     .map(({ worksheet, usedRange }) => ({
       sheetName: worksheet.name,
+      usedRangeRowOffset: usedRange.rowIndex,
+      usedRangeColOffset: usedRange.columnIndex,
+      usedRangeValues: usedRange.values,
       items: scanWorksheetForTables({
         values: usedRange.values,
         usedRangeRowOffset: usedRange.rowIndex,
@@ -1442,8 +1445,8 @@ function buildInventoryContentCandidateRows(sheetResults) {
       rows.push([
         candidateIndex,
         sheetResult.sheetName,
-        item.title || "",
-        item.rangeAddress || "",
+        item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || "")),
+        item.resolvedRangeAddress || item.rangeAddress || "",
         item.rowCount ?? "",
         item.columnCount ?? "",
         getInventoryCandidateStatusLabel(item.candidateStatus),
@@ -1545,6 +1548,346 @@ function readContentOutputModeFromPanel() {
   return select ? select.value : "minimal-check";
 }
 
+function readBacklinkSettingFromPanel() {
+  return getCheckboxValue("content-add-backlinks");
+}
+
+/**
+ * Parses the first cell reference from a range address like "B3:F15" or "A1".
+ * Returns { rowIndex, colIndex } as 0-based sheet indexes, or null on failure.
+ */
+function parseRangeStartCell(rangeAddress) {
+  if (!rangeAddress) return null;
+  const match = rangeAddress.match(/^([A-Z]+)(\d+)/i);
+  if (!match) return null;
+  const colLetters = match[1].toUpperCase();
+  const rowNum = parseInt(match[2], 10);
+  if (!rowNum || rowNum < 1) return null;
+  let colIndex = 0;
+  for (let i = 0; i < colLetters.length; i++) {
+    colIndex = colIndex * 26 + (colLetters.charCodeAt(i) - 64);
+  }
+  return { rowIndex: rowNum - 1, colIndex: colIndex - 1 };
+}
+
+/**
+ * Shifts the start row and/or end row of an A1-notation range address independently.
+ *
+ * Examples:
+ *   adjustRangeRows("A3:F15", { startOffset: 1, endOffset: 1 }) → "A4:F16"
+ *   adjustRangeRows("A3:F15", { startOffset: 1, endOffset: 0 }) → "A4:F15"
+ *   adjustRangeRows("A3:F15", { startOffset: 0, endOffset: 0 }) → "A3:F15"
+ */
+function adjustRangeRows(rangeAddress, { startOffset = 0, endOffset = 0 } = {}) {
+  if (!rangeAddress) return rangeAddress;
+  let result = rangeAddress;
+  if (startOffset !== 0) {
+    result = result.replace(/^([A-Z]+)(\d+)/i, (_, col, row) => col.toUpperCase() + (parseInt(row, 10) + startOffset));
+  }
+  if (endOffset !== 0 && result.includes(":")) {
+    result = result.replace(/:([A-Z]+)(\d+)/i, (_, col, row) => ":" + col.toUpperCase() + (parseInt(row, 10) + endOffset));
+  }
+  return result;
+}
+
+/**
+ * Annotates each inventory item with backlinkState and resolvedRangeAddress.
+ *
+ * Uses the already-loaded usedRangeValues on each sheetResult to detect
+ * whether the first cell of the item's range (or the row immediately above it)
+ * is an existing "← Оглавление" row, so no extra Office.js round trips are needed.
+ *
+ * backlinkState values:
+ *   "in-range"      — first row of detected range IS a backlink row (scanner included it)
+ *   "above-range"   — row immediately above detected range is a backlink row
+ *   "will-insert"   — no backlink detected; one will be inserted above
+ *   "cannot-insert" — table starts at sheet row 0; cannot insert above
+ *
+ * resolvedRangeAddress points to the actual table body after all insertions on
+ * the sheet are accounted for. Items are sorted top-to-bottom per sheet so that
+ * each will-insert item contributes +1 to the cumulative shift of all items below
+ * it, matching the bottom-to-top insertion order used by ensureBacklinkRows.
+ *
+ * backlinksEnabled:
+ *   true  → will-insert items predict a +1 row insertion and increment insertionsAbove.
+ *   false → no insertions predicted; only in-range stale start-rows are corrected.
+ */
+function normalizeBacklinkItems(sheetResults, backlinksEnabled) {
+  for (const sheetResult of sheetResults) {
+    const { usedRangeRowOffset, usedRangeColOffset, usedRangeValues } = sheetResult;
+
+    const cellAt = (r, c) => {
+      if (r < 0 || r >= usedRangeValues.length) return null;
+      const rowArr = usedRangeValues[r];
+      if (!rowArr || c < 0 || c >= rowArr.length) return null;
+      return rowArr[c];
+    };
+
+    // Pass 1: classify backlinkState using original scanned values.
+    // Collect parsed positions for sorting.
+    const parsedItems = sheetResult.items.map((item) => {
+      const parsed = parseRangeStartCell(item.rangeAddress);
+      if (!parsed) {
+        item.backlinkState = "cannot-insert";
+        return { item, rowIndex: -1 };
+      }
+
+      const localRow = parsed.rowIndex - usedRangeRowOffset;
+      const localCol = parsed.colIndex - usedRangeColOffset;
+
+      if (isGeneratedBacklinkRow(cellAt(localRow, localCol))) {
+        item.backlinkState = "in-range";
+        // Backlink is row localRow; try the row after it first (title shifted into
+        // the band when backlink was inserted above a firstRowOfBand title), then
+        // the row before it (title was above the original band, rowAbove case).
+        item.resolvedTitle =
+          resolveTitleLikeText(usedRangeValues[localRow + 1]) ||
+          resolveTitleLikeText(usedRangeValues[localRow - 1]);
+      } else if (isGeneratedBacklinkRow(cellAt(localRow - 1, localCol))) {
+        item.backlinkState = "above-range";
+        // Backlink is at localRow-1; original title was the row above the backlink.
+        item.resolvedTitle = resolveTitleLikeText(usedRangeValues[localRow - 2]);
+      } else if (parsed.rowIndex === 0) {
+        item.backlinkState = "cannot-insert";
+      } else {
+        item.backlinkState = "will-insert";
+      }
+
+      return { item, rowIndex: parsed.rowIndex };
+    });
+
+    // Pass 2: compute resolvedRangeAddress with cumulative insertion accounting.
+    // Sort top-to-bottom so insertionsAbove accumulates as items are processed.
+    const sorted = parsedItems.slice().sort((a, b) => a.rowIndex - b.rowIndex);
+    let insertionsAbove = 0;
+
+    for (const { item } of sorted) {
+      const base = insertionsAbove;
+
+      switch (item.backlinkState) {
+        case "in-range":
+          // Existing backlink IS the first detected row — strip it (start +1).
+          // No new insertion, so end shifts only by prior insertions above.
+          item.resolvedRangeAddress = adjustRangeRows(item.rangeAddress, {
+            startOffset: 1 + base,
+            endOffset: base,
+          });
+          break;
+
+        case "above-range":
+          // Existing backlink above — no new insertion.
+          // Both endpoints shift only by prior insertions above.
+          item.resolvedRangeAddress = adjustRangeRows(item.rangeAddress, {
+            startOffset: base,
+            endOffset: base,
+          });
+          break;
+
+        case "will-insert":
+          if (backlinksEnabled) {
+            // New backlink row inserted above the table: entire table shifts +1,
+            // plus any prior insertions above on this sheet.
+            item.resolvedRangeAddress = adjustRangeRows(item.rangeAddress, {
+              startOffset: 1 + base,
+              endOffset: 1 + base,
+            });
+            insertionsAbove++;
+          } else {
+            // Backlinks OFF: no insertion planned. Apply only prior baseShift.
+            item.resolvedRangeAddress = adjustRangeRows(item.rangeAddress, {
+              startOffset: base,
+              endOffset: base,
+            });
+          }
+          break;
+
+        default: // cannot-insert
+          item.resolvedRangeAddress = adjustRangeRows(item.rangeAddress, {
+            startOffset: base,
+            endOffset: base,
+          });
+          break;
+      }
+    }
+  }
+}
+
+/**
+ * Builds a map from candidate key → 1-based row number on the Content sheet.
+ * Key format: "<sheetName>::<rangeAddress>"
+ */
+function buildContentRowMap(sheetResults, mode) {
+  const map = new Map();
+  const firstDataRow = mode === "client" ? 3 : 8;
+  let index = 0;
+  for (const sheetResult of sheetResults) {
+    for (const item of sheetResult.items) {
+      const key = `${sheetResult.sheetName}::${item.rangeAddress}`;
+      map.set(key, firstDataRow + index);
+      index++;
+    }
+  }
+  return map;
+}
+
+/**
+ * Builds a hyperlink documentReference pointing to the given 1-based row
+ * in the Content sheet (column A).
+ */
+function getContentRowReference(contentSheetName, contentRow) {
+  if (!contentSheetName || !contentRow) return null;
+  const escaped = contentSheetName.replace(/'/g, "''");
+  const needsQuotes = /[^A-Za-z0-9_]/.test(escaped);
+  const quotedSheet = needsQuotes ? `'${escaped}'` : escaped;
+  return `${quotedSheet}!A${contentRow}`;
+}
+
+const BACKLINK_MARKER = "← Оглавление";
+
+/**
+ * Returns true if the cell value is a generated backlink marker.
+ */
+function isGeneratedBacklinkRow(cellValue) {
+  if (cellValue === null || cellValue === undefined) return false;
+  return String(cellValue).trim() === BACKLINK_MARKER;
+}
+
+/**
+ * Returns the first title-like text from a row, or "" if the row is not
+ * title-like.  A row qualifies as title-like when it has at most maxNonEmpty
+ * non-empty cells (sparse, like a merged heading), contains no numeric cells,
+ * and does not consist solely of the backlink marker.
+ * Mirrors the sparsity logic of the scanner's detectFirstRowTitle.
+ */
+function resolveTitleLikeText(rowValues, maxNonEmpty = 3) {
+  if (!rowValues) return "";
+  let nonEmpty = 0;
+  let title = "";
+  for (const cell of rowValues) {
+    if (cell === null || cell === undefined || cell === "") continue;
+    const s = String(cell).trim();
+    if (!s) continue;
+    nonEmpty++;
+    if (nonEmpty > maxNonEmpty) return "";
+    if (typeof cell === "number") return "";
+    if (/^-?[\d.,]+%?$/.test(s)) return "";
+    if (isGeneratedBacklinkRow(s)) return "";
+    if (!title) title = s;
+  }
+  return title;
+}
+
+/**
+ * Writes or updates a single backlink row for one candidate table.
+ *
+ * backlinkState drives the exact action:
+ *   "in-range"      — backlink is already at detectedRowIndex; update in place.
+ *   "above-range"   — backlink is at detectedRowIndex-1; update in place.
+ *   "will-insert"   — insert a new row at detectedRowIndex, write backlink there.
+ *   "cannot-insert" — table starts at sheet row 0; skip.
+ *
+ * detectedRowIndex is always the 0-based row index of the START of the
+ * scanner-detected range (i.e., item.rangeAddress start), NOT the resolved
+ * table body. This lets the function locate the correct row to write into
+ * without depending on resolvedRangeAddress.
+ */
+async function writeOrUpdateBacklink(context, worksheet, detectedRowIndex, detectedColIndex, contentRow, backlinkState) {
+  const contentRef = getContentRowReference(INVENTORY_CONTENT_SHEET_NAME, contentRow);
+
+  const writeBacklinkToCell = (rowIndex, colIndex) => {
+    const cell = worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1);
+    cell.values = [[BACKLINK_MARKER]];
+    if (contentRef) {
+      try {
+        cell.hyperlink = {
+          documentReference: contentRef,
+          textToDisplay: BACKLINK_MARKER,
+          screenTip: `Оглавление, строка ${contentRow}`,
+        };
+      } catch (_) {
+        // Non-fatal: leave plain text.
+      }
+    }
+    cell.format.fill.clear();
+    cell.format.font.bold = false;
+  };
+
+  if (backlinkState === "in-range") {
+    // Backlink row IS the first row of the detected range — update it in place.
+    writeBacklinkToCell(detectedRowIndex, detectedColIndex);
+    await context.sync();
+    return;
+  }
+
+  if (backlinkState === "above-range") {
+    // Backlink row is immediately above the detected range — update it in place.
+    writeBacklinkToCell(detectedRowIndex - 1, detectedColIndex);
+    await context.sync();
+    return;
+  }
+
+  if (backlinkState === "cannot-insert") {
+    return;
+  }
+
+  // "will-insert": insert a blank row at detectedRowIndex, then write the backlink.
+  worksheet.getRangeByIndexes(detectedRowIndex, 0, 1, 1).getEntireRow().insert(Excel.InsertShiftDirection.down);
+  await context.sync();
+
+  writeBacklinkToCell(detectedRowIndex, detectedColIndex);
+  await context.sync();
+}
+
+/**
+ * Ensures backlink rows exist above every detected candidate table.
+ *
+ * Uses item.backlinkState (set by normalizeBacklinkItems) to decide whether
+ * to insert a new row or update an existing one.
+ *
+ * Candidates within each sheet are sorted bottom-to-top (by detected range
+ * start) so that row insertions for lower tables do not shift the 0-based row
+ * indexes of candidates higher up on the same sheet.
+ */
+async function ensureBacklinkRows(context, sheetResults, contentRowMap) {
+  const worksheetCandidates = new Map();
+
+  for (const sheetResult of sheetResults) {
+    const candidates = [];
+    for (const item of sheetResult.items) {
+      const parsed = parseRangeStartCell(item.rangeAddress);
+      if (!parsed) continue;
+      const key = `${sheetResult.sheetName}::${item.rangeAddress}`;
+      const contentRow = contentRowMap.get(key);
+      if (contentRow == null) continue;
+      candidates.push({
+        detectedRowIndex: parsed.rowIndex,
+        detectedColIndex: parsed.colIndex,
+        contentRow,
+        backlinkState: item.backlinkState || "will-insert",
+      });
+    }
+    if (candidates.length > 0) {
+      worksheetCandidates.set(sheetResult.sheetName, candidates);
+    }
+  }
+
+  for (const [sheetName, candidates] of worksheetCandidates) {
+    const sorted = candidates.slice().sort((a, b) => b.detectedRowIndex - a.detectedRowIndex);
+    const worksheet = context.workbook.worksheets.getItem(sheetName);
+
+    for (const candidate of sorted) {
+      await writeOrUpdateBacklink(
+        context,
+        worksheet,
+        candidate.detectedRowIndex,
+        candidate.detectedColIndex,
+        candidate.contentRow,
+        candidate.backlinkState
+      );
+    }
+  }
+}
+
 function getContentTableHyperlinkTarget(sheetName, rangeAddress) {
   if (!sheetName || !rangeAddress) return null;
   const escaped = sheetName.replace(/'/g, "''");
@@ -1558,12 +1901,12 @@ function buildClientContentRows(sheetResults) {
   let index = 1;
   for (const sheetResult of sheetResults) {
     for (const item of sheetResult.items) {
-      rows.push([index, item.title || "", "", item.sheetName || sheetResult.sheetName, item.rangeAddress || ""]);
+      rows.push([index, item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || "")), "", item.sheetName || sheetResult.sheetName]);
       index++;
     }
   }
   if (rows.length === 0) {
-    rows.push(["", "Кандидаты не обнаружены", "", "", ""]);
+    rows.push(["", "Кандидаты не обнаружены", "", ""]);
   }
   return rows;
 }
@@ -1691,12 +2034,13 @@ function writeMinimalCheckContent(worksheet, inventoryResults) {
   const RANGE_COL_INDEX = 3;
   for (let i = 0; i < allItems.length; i++) {
     const item = allItems[i];
-    const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, item.rangeAddress);
+    const effectiveRange = item.resolvedRangeAddress || item.rangeAddress;
+    const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, effectiveRange);
     if (hyperlinkTarget) {
       const cell = worksheet.getRangeByIndexes(headerRowIndex + i, RANGE_COL_INDEX, 1, 1);
       cell.hyperlink = {
         documentReference: hyperlinkTarget,
-        screenTip: `${item.sheetName}!${item.rangeAddress}`,
+        screenTip: `${item.sheetName}!${effectiveRange}`,
       };
     }
   }
@@ -1737,22 +2081,25 @@ function writeClientFacingContent(worksheet, inventoryResults) {
   tableRange.format.borders.getItem("InsideHorizontal").style = "Continuous";
   tableRange.format.borders.getItem("InsideVertical").style = "Continuous";
 
-  const columnWidths = [42, 260, 180, 120, 100];
+  const columnWidths = [42, 260, 180, 120];
   columnWidths.forEach((width, index) => {
     worksheet.getRangeByIndexes(0, index, 1, 1).format.columnWidth = width;
   });
 
   worksheet.getRangeByIndexes(0, 0, dataRows.length + headerRowIndex, colCount).format.verticalAlignment = "Top";
 
-  const LINK_COL_INDEX = 4;
+  const TITLE_COL_INDEX = 1;
   for (let i = 0; i < allItems.length; i++) {
     const item = allItems[i];
-    const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, item.rangeAddress);
+    const effectiveRange = item.resolvedRangeAddress || item.rangeAddress;
+    const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, effectiveRange);
     if (hyperlinkTarget) {
-      const cell = worksheet.getRangeByIndexes(headerRowIndex + i, LINK_COL_INDEX, 1, 1);
+      const cell = worksheet.getRangeByIndexes(headerRowIndex + i, TITLE_COL_INDEX, 1, 1);
+      const displayTitle = item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""));
       cell.hyperlink = {
         documentReference: hyperlinkTarget,
-        screenTip: `${item.sheetName}!${item.rangeAddress}`,
+        textToDisplay: displayTitle || `Таблица ${i + 1}`,
+        screenTip: `${item.sheetName}!${effectiveRange}`,
       };
     }
   }
@@ -1786,7 +2133,26 @@ async function writeInventoryContentSheet(context, inventoryResults) {
 async function runTableInventory() {
   await Excel.run(async (context) => {
     const inventoryResults = await collectWorkbookInventoryResults(context);
+    const addBacklinks = readBacklinkSettingFromPanel();
+    const contentMode = readContentOutputModeFromPanel();
+
+    // Always normalize: fixes resolvedRangeAddress for items whose detected range
+    // starts with a generated backlink row (in-range), even when backlinks are OFF.
+    // When backlinks are ON, also predicts the +1 end-row shift for will-insert.
+    normalizeBacklinkItems(inventoryResults.sheetResults, addBacklinks);
+
+    const contentRowMap = addBacklinks
+      ? buildContentRowMap(inventoryResults.sheetResults, contentMode)
+      : null;
+
+    // Write Content first (hyperlinks use resolvedRangeAddress when available).
     await writeInventoryContentSheet(context, inventoryResults);
+
+    // Insert/update backlink rows after Content is written so the Content sheet
+    // is not affected by row insertions in source sheets.
+    if (addBacklinks && contentRowMap) {
+      await ensureBacklinkRows(context, inventoryResults.sheetResults, contentRowMap);
+    }
 
     setInventoryMessage(
       formatWorkbookInventoryMessage({
