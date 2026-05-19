@@ -1571,15 +1571,23 @@ function parseRangeStartCell(rangeAddress) {
 }
 
 /**
- * Shifts the start-row of an A1-notation range address by rowOffset rows.
- * Only the first cell reference (top-left) is modified; the end cell is unchanged.
- * Example: adjustRangeStartRow("A3:F15", 1) → "A4:F15"
+ * Shifts the start row and/or end row of an A1-notation range address independently.
+ *
+ * Examples:
+ *   adjustRangeRows("A3:F15", { startOffset: 1, endOffset: 1 }) → "A4:F16"
+ *   adjustRangeRows("A3:F15", { startOffset: 1, endOffset: 0 }) → "A4:F15"
+ *   adjustRangeRows("A3:F15", { startOffset: 0, endOffset: 0 }) → "A3:F15"
  */
-function adjustRangeStartRow(rangeAddress, rowOffset) {
-  if (!rangeAddress || rowOffset === 0) return rangeAddress;
-  return rangeAddress.replace(/^([A-Z]+)(\d+)/i, (_, col, row) => {
-    return col.toUpperCase() + (parseInt(row, 10) + rowOffset);
-  });
+function adjustRangeRows(rangeAddress, { startOffset = 0, endOffset = 0 } = {}) {
+  if (!rangeAddress) return rangeAddress;
+  let result = rangeAddress;
+  if (startOffset !== 0) {
+    result = result.replace(/^([A-Z]+)(\d+)/i, (_, col, row) => col.toUpperCase() + (parseInt(row, 10) + startOffset));
+  }
+  if (endOffset !== 0 && result.includes(":")) {
+    result = result.replace(/:([A-Z]+)(\d+)/i, (_, col, row) => ":" + col.toUpperCase() + (parseInt(row, 10) + endOffset));
+  }
+  return result;
 }
 
 /**
@@ -1596,8 +1604,12 @@ function adjustRangeStartRow(rangeAddress, rowOffset) {
  *   "cannot-insert" — table starts at sheet row 0; cannot insert above
  *
  * resolvedRangeAddress always points to the actual table body (post-insertion).
+ *
+ * backlinksEnabled controls whether will-insert shifts the end row:
+ *   true  → will-insert: start +1, end +1  (row will be inserted)
+ *   false → will-insert: start +0, end +0  (no insertion; only fix in-range stale addresses)
  */
-function normalizeBacklinkItems(sheetResults) {
+function normalizeBacklinkItems(sheetResults, backlinksEnabled) {
   for (const sheetResult of sheetResults) {
     const { usedRangeRowOffset, usedRangeColOffset, usedRangeValues } = sheetResult;
 
@@ -1622,8 +1634,9 @@ function normalizeBacklinkItems(sheetResults) {
 
       if (isGeneratedBacklinkRow(cellAt(localRow, localCol))) {
         // The first row of the detected range is the generated backlink row.
+        // Shift only the start by +1; end row is unchanged because no new row is inserted.
         item.backlinkState = "in-range";
-        item.resolvedRangeAddress = adjustRangeStartRow(item.rangeAddress, 1);
+        item.resolvedRangeAddress = adjustRangeRows(item.rangeAddress, { startOffset: 1, endOffset: 0 });
         continue;
       }
 
@@ -1640,9 +1653,13 @@ function normalizeBacklinkItems(sheetResults) {
         continue;
       }
 
-      // No backlink present; a new row will be inserted above.
+      // No backlink present. When backlinks are enabled a new row will be inserted above,
+      // shifting the whole table down by one. Shift both start and end rows by +1.
+      // When backlinks are disabled no insertion happens, so keep the range unchanged.
       item.backlinkState = "will-insert";
-      item.resolvedRangeAddress = adjustRangeStartRow(item.rangeAddress, 1);
+      item.resolvedRangeAddress = backlinksEnabled
+        ? adjustRangeRows(item.rangeAddress, { startOffset: 1, endOffset: 1 })
+        : item.rangeAddress;
     }
   }
 }
@@ -2041,11 +2058,10 @@ async function runTableInventory() {
     const addBacklinks = readBacklinkSettingFromPanel();
     const contentMode = readContentOutputModeFromPanel();
 
-    if (addBacklinks) {
-      // Annotate items with backlinkState and resolvedRangeAddress using the
-      // already-loaded usedRangeValues — no extra Office.js round trips needed.
-      normalizeBacklinkItems(inventoryResults.sheetResults);
-    }
+    // Always normalize: fixes resolvedRangeAddress for items whose detected range
+    // starts with a generated backlink row (in-range), even when backlinks are OFF.
+    // When backlinks are ON, also predicts the +1 end-row shift for will-insert.
+    normalizeBacklinkItems(inventoryResults.sheetResults, addBacklinks);
 
     const contentRowMap = addBacklinks
       ? buildContentRowMap(inventoryResults.sheetResults, contentMode)
