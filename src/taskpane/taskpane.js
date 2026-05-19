@@ -2668,8 +2668,8 @@ function refreshPreviousColumnComparisonState() {
     ? respectBannerStructureCheckbox.checked
     : false;
 
-  const hasValidTotalSource =
-    firstColumnIsTotal || totalInEachBanner || respectBannerStructure;
+  const hasManualTotalPlacement = firstColumnIsTotal || totalInEachBanner;
+  const hasValidTotalSource = hasManualTotalPlacement || respectBannerStructure;
 
   if (previousColumnFillWrapper) {
     previousColumnFillWrapper.style.display = isPreviousColumnMode ? "block" : "none";
@@ -2718,7 +2718,7 @@ function refreshPreviousColumnComparisonState() {
   if (warningElement) {
     const shouldShowWarning =
       isPreviousColumnMode &&
-      firstColumnIsTotal &&
+      hasManualTotalPlacement &&
       !respectBannerStructure &&
       excludeTotalCheckbox &&
       !excludeTotalCheckbox.checked;
