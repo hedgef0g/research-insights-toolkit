@@ -232,35 +232,12 @@ function isLikelyRatingScaleLabelColumn(values, colIndex, startRow, endRow) {
   return textOnlyCount >= minText && ordinalScaleCount >= 3 && labelLikeFraction >= 0.8;
 }
 
-/**
- * Returns true when a column consists entirely of ordinal scale values (integers 0–10,
- * as numbers or short digit strings) plus optional text cells — and has no out-of-range
- * numeric cells.  Used to recognise question-code / scale-code label columns where the
- * text fraction alone is too low to satisfy the main text-fraction threshold.
- *
- * Requires at least 3 ordinal values to avoid false positives on short numeric runs.
- */
-function isMostlyOrdinalLabelColumn(values, colIndex, startRow, endRow) {
-  let totalNonEmpty = 0;
-  let ordinalCount = 0;
-  let textCount = 0;
-
+/** Returns true when every body cell in a column is empty. */
+function isColumnAllEmpty(values, colIndex, startRow, endRow) {
   for (let row = startRow; row <= endRow; row++) {
-    const cell = (values[row] || [])[colIndex];
-    if (isCellEmpty(cell)) continue;
-    totalNonEmpty++;
-    if (isLikelyOrdinalScaleLabelCell(cell)) {
-      ordinalCount++;
-    } else if (isTextOnlyCell(cell)) {
-      textCount++;
-    }
-    // any other cell (out-of-range numeric) disqualifies the column immediately
-    else {
-      return false;
-    }
+    if (!isCellEmpty((values[row] || [])[colIndex])) return false;
   }
-
-  return totalNonEmpty > 0 && ordinalCount >= 3;
+  return true;
 }
 
 function splitLabelData(values, band) {
@@ -269,10 +246,12 @@ function splitLabelData(values, band) {
 
   // Determine label column count by inspecting the character of the leftmost columns.
   // Rules:
-  //   col0 text + col1 text  → 2 label columns, confident
-  //   col0 text + col1 numeric → 1 label column, confident (never consume a numeric column as label)
-  //   col0 not clearly text  → 1 label column, uncertain
-  //   trimmedWidth < 2       → 0 label columns, uncertain
+  //   col0 text + col1 text        → 2 label columns, confident
+  //   col0 text + col1 empty gutter → 2 label columns, twoColumn (skip the gutter)
+  //   col0 text + col1 numeric     → 1 label column, confident
+  //   col0 not text + col1 text    → 2 label columns, twoColumn (col0 is code/gutter)
+  //   col0 not text + col1 not text → 1 label column, uncertain
+  //   trimmedWidth < 2             → 0 label columns, uncertain
   let labelColCount;
   let labelSplitConfidence;
 
@@ -292,12 +271,9 @@ function splitLabelData(values, band) {
       isLikelyRatingScaleLabelColumn(values, localTrimmedFirstCol, localStartRow, localEndRow);
 
     if (!col0IsText) {
-      // First column looks numeric — check for ordinal-scale code + text-answer pattern
-      // before falling back to the generic uncertain case.
-      if (
-        trimmedWidth >= 3 &&
-        isMostlyOrdinalLabelColumn(values, localTrimmedFirstCol, localStartRow, localEndRow)
-      ) {
+      // col0 does not look like a text label column.  Check col1: if it is strongly text
+      // then col0 is a code/numeric identifier and col1 carries the real row labels.
+      if (trimmedWidth >= 3) {
         const col1Fraction = computeTextFraction(
           values,
           localTrimmedFirstCol + 1,
@@ -306,7 +282,6 @@ function splitLabelData(values, band) {
           localEndRow
         );
         if (col1Fraction >= LABEL_TEXT_FRACTION_THRESHOLD) {
-          // Both columns are row-label material: ordinal code + text answer label.
           labelColCount = 2;
           labelSplitConfidence = "twoColumn";
         } else {
@@ -314,7 +289,6 @@ function splitLabelData(values, band) {
           labelSplitConfidence = "uncertain";
         }
       } else {
-        // First column looks numeric — split is ambiguous.
         labelColCount = 1;
         labelSplitConfidence = "uncertain";
       }
@@ -323,7 +297,7 @@ function splitLabelData(values, band) {
       labelColCount = 1;
       labelSplitConfidence = "confident";
     } else {
-      // 3+ columns: inspect col1 to decide between 1 and 2 label columns.
+      // 3+ columns, col0 is text: inspect col1.
       const col1Fraction = computeTextFraction(
         values,
         localTrimmedFirstCol + 1,
@@ -334,11 +308,16 @@ function splitLabelData(values, band) {
       const col1IsText = col1Fraction >= LABEL_TEXT_FRACTION_THRESHOLD;
 
       if (col1IsText) {
-        // Both col0 and col1 are text — use 2 label columns.
+        // Both col0 and col1 are text — 2 label columns.
         labelColCount = 2;
         labelSplitConfidence = "confident";
+      } else if (isColumnAllEmpty(values, localTrimmedFirstCol + 1, localStartRow, localEndRow)) {
+        // col0 is text labels and col1 is an empty visual gutter — skip the gutter so it
+        // does not land in the data matrix and trigger spurious quality warnings.
+        labelColCount = 2;
+        labelSplitConfidence = "twoColumn";
       } else {
-        // col0 text, col1 numeric — 1 label column only.
+        // col0 text, col1 has numeric / mixed content — 1 label column.
         labelColCount = 1;
         labelSplitConfidence = "confident";
       }
@@ -480,7 +459,7 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     candidateNotes.push("Граница лейблов/данных не определена");
   }
   if (labelSplitConfidence === "twoColumn") {
-    candidateNotes.push("Двухколоночные метки строк: порядковый код + текстовый ответ");
+    candidateNotes.push("Двухколоночные метки строк");
   }
   if (isLikelyTable && qualitySummary.warningCount > 0) {
     candidateNotes.push(`Предупреждений в превью: ${qualitySummary.warningCount}`);

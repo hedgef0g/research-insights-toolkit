@@ -417,6 +417,51 @@ describe("scanWorksheetForTables", () => {
     );
   });
 
+  it("mean/variance/base table with empty gutter column is available, not uncertain", () => {
+    // Smoke-failing case from PR #154 review: metric labels in col0, col1 is an empty
+    // visual gutter, col2+ is numeric data.  The gutter must not land in the data matrix
+    // and cause quality warnings that flip the candidate to uncertain.
+    const values = [
+      ["Сколько (примерно) потратили?", null, null, null, null],  // title row
+      ["Среднее", null, 5000, 4500, 5500],
+      ["variance", null, 2500, 2300, 2700],
+      ["BASE", null, 500, 450, 550],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `mean/variance/base with gutter column must not be uncertain; got ${item.candidateStatus}`
+    );
+    assert.strictEqual(item.isLikelyTable, true);
+  });
+
+  it("mean/variance/base with non-ordinal code col0 + text metric col1 is available", () => {
+    // Variant: col0 carries a non-ordinal code (e.g. year/wave number > 10) that fails
+    // the text test, col1 has the metric labels.  The generalised twoColumn path must
+    // still classify this as available.
+    const values = [
+      [2025, "Среднее", 5000, 4500, 5500],
+      [2025, "variance", 2500, 2300, 2700],
+      [2025, "BASE", 500, 450, 550],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(
+      item.labelSplitConfidence,
+      "twoColumn",
+      `non-ordinal code col0 + text metric col1 must yield twoColumn; got ${item.labelSplitConfidence}`
+    );
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      `non-ordinal code col0 + text metric col1 must not be uncertain; got ${item.candidateStatus}`
+    );
+  });
+
   it("extended NPS inventory behavior is preserved with two-column layout", () => {
     // Extended NPS: col0 has scale values 0-10 + text bucket rows + NPS + Base.
     // This previously worked; confirm it still does after the #153 changes.
