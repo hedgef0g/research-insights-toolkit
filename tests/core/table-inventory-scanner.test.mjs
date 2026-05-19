@@ -462,6 +462,80 @@ describe("scanWorksheetForTables", () => {
     );
   });
 
+  it("metric table with text+sample banner rows in col1 and null gutter in body rows is available", () => {
+    // Real-world structure: title row, two banner rows (col0=null, col1=segment labels/sample sizes),
+    // then body rows with col0=metric label, col1=null gutter, col2+=data.
+    // col1 banner rows carry text values ("Total", "(n=500)") but col1 is null for all body rows.
+    // isGutterColumnForBodyRows must recognise col1 as a gutter (ignoring banner rows).
+    const values = [
+      ["Сколько (примерно) потратили?", null, null, null, null],
+      [null, "Total", "Male", "Female", "Other"],
+      [null, "(n=500)", "(n=250)", "(n=250)", "(n=100)"],
+      ["Среднее", null, 5000, 4500, 4800],
+      ["variance", null, 2500, 2300, 2400],
+      ["BASE", null, 500, 450, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected item");
+    const item = items[0];
+    assert.strictEqual(item.candidateStatus, "available",
+      `${item.candidateStatus} split=${item.labelSplitConfidence} warn=${item.warningsCount} notes=${JSON.stringify(item.candidateNotes)}`);
+  });
+
+  it("metric table with numeric year in banner col1 and null gutter in body rows is available", () => {
+    // col1 banner row carries a numeric year (2025) which is not a text value.
+    // isGutterColumnForBodyRows must ignore the banner row (col0=null) and only
+    // test body rows where col0 has content — those have col1=null → gutter detected.
+    const values = [
+      ["Сколько (примерно) потратили?", null, null, null, null],
+      [null, 2025, "Male", "Female", "Other"],
+      ["Среднее", null, 5000, 4500, 4800],
+      ["variance", null, 2500, 2300, 2700],
+      ["BASE", null, 500, 450, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected item");
+    const item = items[0];
+    assert.strictEqual(item.candidateStatus, "available",
+      `${item.candidateStatus} split=${item.labelSplitConfidence} warn=${item.warningsCount} notes=${JSON.stringify(item.candidateNotes)}`);
+  });
+
+  it("metric table with percent values in banner col1 and null gutter in body rows is available", () => {
+    // col1 banner row carries percent strings ("44%", "41%", "39%") — numeric-like but text.
+    // isGutterColumnForBodyRows must ignore that row and detect col1 as a gutter via body rows only.
+    const values = [
+      ["Сколько (примерно) потратили?", null, null, null],
+      [null, "44%", "41%", "39%"],
+      ["Среднее", null, 5000, 4500],
+      ["variance", null, 2500, 2300],
+      ["BASE", null, 500, 450],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected item");
+    const item = items[0];
+    assert.strictEqual(item.candidateStatus, "available",
+      `${item.candidateStatus} split=${item.labelSplitConfidence} warn=${item.warningsCount} notes=${JSON.stringify(item.candidateNotes)}`);
+  });
+
+  it("metric table with two banner rows (text then numeric) in col1 and null gutter in body is available", () => {
+    // Two banner rows: first has text ("Total"/"Male"/...), second has numeric sample sizes (1000/500/...).
+    // Both have col0=null so isGutterColumnForBodyRows skips them.
+    // Body rows (col0 non-empty) have col1=null → gutter correctly detected → no BASE_BLANK_VALUES warning.
+    const values = [
+      ["Сколько (примерно) потратили?", null, null, null, null],
+      [null, "Total", "Male", "Female", "Other"],
+      [null, 1000, 500, 450, 50],
+      ["Среднее", null, 5000, 4500, 4800],
+      ["variance", null, 2500, 2300, 2400],
+      ["BASE", null, 500, 450, 50],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected item");
+    const item = items[0];
+    assert.strictEqual(item.candidateStatus, "available",
+      `${item.candidateStatus} split=${item.labelSplitConfidence} warn=${item.warningsCount} notes=${JSON.stringify(item.candidateNotes)}`);
+  });
+
   it("extended NPS inventory behavior is preserved with two-column layout", () => {
     // Extended NPS: col0 has scale values 0-10 + text bucket rows + NPS + Base.
     // This previously worked; confirm it still does after the #153 changes.

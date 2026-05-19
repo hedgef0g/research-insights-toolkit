@@ -232,12 +232,22 @@ function isLikelyRatingScaleLabelColumn(values, colIndex, startRow, endRow) {
   return textOnlyCount >= minText && ordinalScaleCount >= 3 && labelLikeFraction >= 0.8;
 }
 
-/** Returns true when every body cell in a column is empty. */
-function isColumnAllEmpty(values, colIndex, startRow, endRow) {
+/**
+ * Returns true when every body row has an empty gutter cell, where "body row" means
+ * a row whose col0 (labelCol0Index) is non-empty.  Banner/header rows above the body
+ * have an empty col0 and are intentionally ignored — they may carry numeric values
+ * (sample sizes, years, percentages) in the gutter column that must not disqualify it.
+ * Returns false if no body rows are found (conservative: do not promote to gutter).
+ */
+function isGutterColumnForBodyRows(values, gutterColIndex, labelCol0Index, startRow, endRow) {
+  let bodyRowSeen = false;
   for (let row = startRow; row <= endRow; row++) {
-    if (!isCellEmpty((values[row] || [])[colIndex])) return false;
+    const labelCell = (values[row] || [])[labelCol0Index];
+    if (isCellEmpty(labelCell)) continue;
+    bodyRowSeen = true;
+    if (!isCellEmpty((values[row] || [])[gutterColIndex])) return false;
   }
-  return true;
+  return bodyRowSeen;
 }
 
 function splitLabelData(values, band) {
@@ -246,12 +256,14 @@ function splitLabelData(values, band) {
 
   // Determine label column count by inspecting the character of the leftmost columns.
   // Rules:
-  //   col0 text + col1 text        → 2 label columns, confident
-  //   col0 text + col1 empty gutter → 2 label columns, twoColumn (skip the gutter)
-  //   col0 text + col1 numeric     → 1 label column, confident
-  //   col0 not text + col1 text    → 2 label columns, twoColumn (col0 is code/gutter)
-  //   col0 not text + col1 not text → 1 label column, uncertain
-  //   trimmedWidth < 2             → 0 label columns, uncertain
+  //   col0 text + col1 text                       → 2 label columns, confident
+  //   col0 text + col1 empty gutter (body rows)   → 2 label columns, twoColumn (skip the gutter)
+  //   col0 text + col1 numeric                    → 1 label column, confident
+  //   col0 not text + col1 text                   → 2 label columns, twoColumn (col0 is code/gutter)
+  //   col0 not text + col1 not text               → 1 label column, uncertain
+  //   trimmedWidth < 2                            → 0 label columns, uncertain
+  // "Empty gutter in body rows" means col1 is null in every row where col0 is non-empty.
+  // Banner/header rows above the body may have numeric values in col1 and are ignored.
   let labelColCount;
   let labelSplitConfidence;
 
@@ -311,9 +323,11 @@ function splitLabelData(values, band) {
         // Both col0 and col1 are text — 2 label columns.
         labelColCount = 2;
         labelSplitConfidence = "confident";
-      } else if (isColumnAllEmpty(values, localTrimmedFirstCol + 1, localStartRow, localEndRow)) {
-        // col0 is text labels and col1 is an empty visual gutter — skip the gutter so it
-        // does not land in the data matrix and trigger spurious quality warnings.
+      } else if (isGutterColumnForBodyRows(values, localTrimmedFirstCol + 1, localTrimmedFirstCol, localStartRow, localEndRow)) {
+        // col0 is text labels and col1 is an empty visual gutter in body rows — skip the
+        // gutter so it does not land in the data matrix and trigger spurious quality warnings.
+        // Banner rows above the body may have non-empty values in col1 (sample sizes, years,
+        // percents) — isGutterColumnForBodyRows ignores those rows.
         labelColCount = 2;
         labelSplitConfidence = "twoColumn";
       } else {
