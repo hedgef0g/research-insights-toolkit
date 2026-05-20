@@ -353,6 +353,7 @@ Office.onReady((info) => {
   const detectMetricTypeButton = document.getElementById("detect-metric-type"); // Diagnostic detector button.
   const checkTableButton = document.getElementById("check-table"); // Read-only table check button.
   const findTablesButton = document.getElementById("find-tables"); // Table inventory button.
+  const runAllTablesButton = document.getElementById("run-all-tables"); // Auto-runner button.
 
   initializeSettingsPanel();
   loadSavedSettingsIntoPanel();
@@ -377,6 +378,10 @@ Office.onReady((info) => {
 
   if (findTablesButton) {
     findTablesButton.addEventListener("click", runTableInventory);
+  }
+
+  if (runAllTablesButton) {
+    runAllTablesButton.addEventListener("click", runAutoSignificance);
   }
 });
 
@@ -683,6 +688,365 @@ async function runSignificanceFromSelection() {
   });
 }
 
+
+/**
+ * Runs the full significance pipeline for a single named range on a named sheet.
+ *
+ * Mirrors the core calculation path of runSignificanceFromSelection() without
+ * touching the selected-range UI state. Returns a compact result object so the
+ * caller can aggregate per-table outcomes without crashing on the first failure.
+ *
+ * Returns { status, blocksProcessed, message, rangeAddress }.
+ * status: "processed" | "skipped" | "blocked" | "error"
+ *
+ * NOTE: runSignificanceFromSelection() and this helper share the same pipeline
+ * logic. A future refactor could unify them once the auto-runner pattern is
+ * proven stable. Tracked as a follow-up tech-debt item.
+ */
+async function runSignificanceForRange(sheetName, rangeAddress, calculationSettings) {
+  return await Excel.run(async (context) => {
+    const worksheet = context.workbook.worksheets.getItem(sheetName);
+    const sourceRange = worksheet.getRange(rangeAddress);
+
+    sourceRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+
+    await context.sync();
+
+    const selectedValues = sourceRange.values;
+    const selectedText = sourceRange.text;
+
+    if (!selectedValues || selectedValues.length < 2 || selectedValues[0].length < 2) {
+      return { status: "skipped", message: "слишком мало данных", rangeAddress };
+    }
+
+    const interpretation = await interpretSelectedRange(
+      context,
+      sourceRange,
+      selectedValues,
+      selectedText,
+      calculationSettings
+    );
+
+    if (interpretation.state === "blocked") {
+      const codes =
+        interpretation.blockingReasons && interpretation.blockingReasons.length > 0
+          ? ` [${interpretation.blockingReasons.join(", ")}]`
+          : "";
+      return {
+        status: "blocked",
+        message: `${interpretation.blockingMessage}${codes}`,
+        rangeAddress,
+      };
+    }
+
+    const {
+      valuesForCalculation,
+      textForCalculation,
+      leftLabelValues,
+      bannerContext: interpretedBannerContext,
+    } = interpretation;
+
+    let { writeTargetRange } = interpretation;
+
+    if (
+      !valuesForCalculation ||
+      valuesForCalculation.length < 2 ||
+      !valuesForCalculation[0] ||
+      valuesForCalculation[0].length < 2
+    ) {
+      return { status: "skipped", message: "нет данных для расчёта", rangeAddress };
+    }
+
+    writeTargetRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+
+    await context.sync();
+
+    const targetStartRowIndex = writeTargetRange.rowIndex;
+
+    if (calculationSettings.writeBannerLetters && targetStartRowIndex === 0) {
+      return {
+        status: "skipped",
+        message: "данные в первой строке — баннер недоступен",
+        rangeAddress,
+      };
+    }
+
+    writeTargetRange.values = valuesForCalculation;
+    writeTargetRange.format.font.bold = false;
+    writeTargetRange.format.fill.clear();
+    writeTargetRange.format.horizontalAlignment = "Center";
+    writeTargetRange.format.verticalAlignment = "Center";
+
+    await context.sync();
+
+    const detectionResult = detectMetricRowsFromLeftLabels(valuesForCalculation, leftLabelValues);
+    const calculationBlocks = buildCalculationBlocks(detectionResult);
+
+    if (!calculationBlocks || calculationBlocks.length === 0) {
+      return { status: "skipped", message: "нет блоков расчёта", rangeAddress };
+    }
+
+    let bannerStructure = null;
+
+    if (calculationSettings.respectBannerStructure) {
+      const bannerContext = interpretedBannerContext;
+      bannerStructure = detectBannerStructure(bannerContext, calculationSettings);
+      if (bannerContext && bannerContext.messages && bannerContext.messages.length > 0) {
+        bannerStructure.messages = [...bannerContext.messages, ...(bannerStructure.messages || [])];
+      }
+    }
+
+    const fullCellResultMatrix = createEmptyCellResultMatrix(
+      valuesForCalculation.length,
+      valuesForCalculation[0].length
+    );
+
+    for (const calculationBlock of calculationBlocks) {
+      const smallBaseResult = applySmallBaseRulesForCalculationBlock(
+        valuesForCalculation,
+        calculationBlock,
+        fullCellResultMatrix,
+        calculationSettings
+      );
+
+      if (smallBaseResult.errorMessage) {
+        return { status: "error", message: smallBaseResult.errorMessage, rangeAddress };
+      }
+
+      const blockCalculationSettings = {
+        ...calculationSettings,
+        excludedColumnIndexes: smallBaseResult.excludedColumnIndexes,
+        bannerStructure,
+      };
+
+      const blockResults = calculateBlockResults(
+        valuesForCalculation,
+        calculationBlock,
+        blockCalculationSettings
+      );
+
+      const bannerStructureError = getFirstBannerStructureError(bannerStructure);
+
+      if (bannerStructureError) {
+        return { status: "error", message: bannerStructureError.text, rangeAddress };
+      }
+
+      if (!blockResults) {
+        continue;
+      }
+
+      applyComparisonResultsToFullCellResultMatrix(
+        blockResults,
+        fullCellResultMatrix,
+        blockCalculationSettings
+      );
+    }
+
+    const allowedMarkerRows = getAllowedMarkerRowIndexes(calculationBlocks);
+
+    keepMarkersOnlyInAllowedRows(fullCellResultMatrix, allowedMarkerRows);
+
+    writeCellResultsToSelectedRange(
+      writeTargetRange,
+      textForCalculation,
+      fullCellResultMatrix,
+      detectionResult,
+      calculationSettings
+    );
+
+    if (calculationSettings.writeBannerLetters) {
+      await clearStaleBannerMarkersLeftOfWriteRange(
+        context,
+        writeTargetRange.worksheet,
+        sourceRange.columnIndex,
+        writeTargetRange.rowIndex,
+        writeTargetRange.columnIndex
+      );
+
+      if (calculationSettings.respectBannerStructure && bannerStructure) {
+        await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
+          context,
+          writeTargetRange,
+          bannerStructure,
+          calculationSettings
+        );
+      } else {
+        await writeBannerMarkersAboveSelectedRange(context, writeTargetRange, calculationSettings);
+      }
+    }
+
+    await context.sync();
+
+    return {
+      status: "processed",
+      blocksProcessed: calculationBlocks.length,
+      message: `обработано блоков: ${calculationBlocks.length}`,
+      rangeAddress,
+    };
+  });
+}
+
+/**
+ * Auto-runner: processes all "available" inventory candidates in the workbook.
+ *
+ * Collects the workbook inventory, filters to candidates with
+ * candidateStatus === "available" that have a usable range address, then
+ * calls runSignificanceForRange for each one. Skips the Content sheet and
+ * any candidate that is uncertain, rejected, or has no range.
+ *
+ * Shows a compact summary (processed / skipped / error counts) in the
+ * significance status panel when done.
+ */
+async function runAutoSignificance() {
+  const calculationSettings = readCalculationSettingsFromPanel();
+
+  if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
+    setStatusMessage(
+      // eslint-disable-next-line quotes
+      'Режим “Сравнение с предыдущей колонкой” несовместим с режимом “Сравнивать только с Тотал”.'
+    );
+    return;
+  }
+
+  if (
+    calculationSettings.excludeTotalFromComparisons &&
+    !calculationSettings.firstColumnIsTotal &&
+    !calculationSettings.respectBannerStructure
+  ) {
+    setStatusMessage(
+      'Для режима “Не сравнивать с Тотал” нужно указать расположение Тотала. Сейчас поддерживается вариант “Первая колонка — Тотал” или режим “Учитывать структуру баннера”.'
+    );
+    return;
+  }
+
+  if (
+    calculationSettings.compareOnlyWithTotal &&
+    !calculationSettings.firstColumnIsTotal &&
+    !calculationSettings.respectBannerStructure
+  ) {
+    setStatusMessage(
+      'Для режима “Сравнивать только с Тотал” нужно указать расположение Тотала. Сейчас поддерживается вариант “Первая колонка — Тотал” или режим “Учитывать структуру баннера”.'
+    );
+    return;
+  }
+
+  if (
+    calculationSettings.compareWithPreviousColumn &&
+    calculationSettings.fillOnlyTotalComparisons
+  ) {
+    setStatusMessage(
+      'Режим “Сравнение с предыдущей колонкой” несовместим с настройкой “Заливка только для Тотала”.'
+    );
+    return;
+  }
+
+  // Collect inventory to identify eligible candidates.
+  let inventoryResults;
+  try {
+    await Excel.run(async (context) => {
+      inventoryResults = await collectWorkbookInventoryResults(context);
+      // Normalize without inserting backlinks — only needed for resolvedRangeAddress.
+      normalizeBacklinkItems(inventoryResults.sheetResults, false);
+    });
+  } catch (err) {
+    setStatusMessage(`Автозапуск: ошибка при сканировании книги — ${err.message || err}`);
+    return;
+  }
+
+  // Partition candidates: eligible to process vs. pre-skipped due to status/range.
+  // The Content sheet is excluded entirely and does not count toward skipped.
+  const eligible = [];
+  let skipped = 0;
+  const detailLines = [];
+
+  for (const sheetResult of inventoryResults.sheetResults) {
+    if (sheetResult.sheetName === INVENTORY_CONTENT_SHEET_NAME) {
+      continue;
+    }
+    for (const item of sheetResult.items) {
+      const rangeAddr = item.resolvedRangeAddress || item.rangeAddress;
+      const label = `- ${sheetResult.sheetName} ${rangeAddr || item.rangeAddress || "?"}`;
+
+      if (!rangeAddr) {
+        skipped++;
+        detailLines.push(`${label}: пропущено — нет диапазона`);
+      } else if (item.candidateStatus === "uncertain") {
+        skipped++;
+        detailLines.push(`${label}: пропущено — кандидат неопределён`);
+      } else if (item.candidateStatus === "rejected") {
+        skipped++;
+        detailLines.push(`${label}: пропущено — не опознан как таблица ResearchSignal`);
+      } else if (item.candidateStatus === "available" && item.canRunCheckTable) {
+        eligible.push({
+          sheetName: sheetResult.sheetName,
+          rangeAddress: rangeAddr,
+          title: item.resolvedTitle || (item.title || ""),
+        });
+      } else {
+        // Catch-all for unknown future statuses.
+        skipped++;
+        detailLines.push(`${label}: пропущено — статус «${item.candidateStatus || "unknown"}»`);
+      }
+    }
+  }
+
+  if (eligible.length === 0) {
+    const noEligibleLines = [
+      "Автозапуск: доступных кандидатов не найдено.",
+      'Проверьте статусы таблиц через «Найти таблицы» / «С полной проверкой».',
+    ];
+    if (skipped > 0) {
+      noEligibleLines.push("", `Пропущено: ${skipped}.`, ...detailLines);
+    }
+    setStatusMessage(noEligibleLines.join("\n"));
+    return;
+  }
+
+  let processed = 0;
+  let errors = 0;
+
+  for (const candidate of eligible) {
+    try {
+      const result = await runSignificanceForRange(
+        candidate.sheetName,
+        candidate.rangeAddress,
+        calculationSettings
+      );
+
+      if (result.status === "processed") {
+        processed++;
+      } else if (result.status === "skipped" || result.status === "blocked") {
+        skipped++;
+        detailLines.push(
+          `- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
+        );
+      } else {
+        errors++;
+        detailLines.push(
+          `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+        );
+      }
+    } catch (err) {
+      errors++;
+      detailLines.push(
+        `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
+      );
+    }
+  }
+
+  const summaryLines = [
+    "Автозапуск завершён.",
+    `Обработано таблиц: ${processed}.`,
+    `Пропущено: ${skipped}.`,
+    `Ошибок: ${errors}.`,
+  ];
+
+  if (detailLines.length > 0) {
+    summaryLines.push("", ...detailLines);
+  }
+
+  setStatusMessage(summaryLines.join("\n"));
+}
 
 /**
  * Calculates one detected metric block.
