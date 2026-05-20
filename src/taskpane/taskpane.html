@@ -116,6 +116,17 @@
           </div>
 
           <div class="settings-group">
+            <label for="preferred-base">База для расчёта</label>
+            <select id="preferred-base">
+              <option value="auto" selected>Авто</option>
+              <option value="effective">Effective Base</option>
+              <option value="unweighted">Unweighted Base</option>
+              <option value="plain">Base</option>
+              <option value="weighted">Weighted Base</option>
+            </select>
+          </div>
+
+          <div class="settings-group">
             <label>
               <input type="checkbox" id="round-cell-values" />
               Округлять значения в ячейках

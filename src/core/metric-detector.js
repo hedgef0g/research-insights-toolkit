@@ -334,17 +334,41 @@ function getBasePriorityValue(rowDiagnostic) {
  * When a block is followed by multiple base rows (e.g. Weighted Base then
  * Effective Base), pick the one best suited for significance testing rather
  * than always taking the first.
+ *
+ * When preferredBase is set (not "auto"), try to find a base with that
+ * subtype in the consecutive run. If not found, fall back to auto priority.
  */
-function selectBestFromConsecutiveBases(rowDiagnostics, firstBaseIndex) {
-  let bestIndex = firstBaseIndex;
-  let bestPriority = getBasePriorityValue(rowDiagnostics[firstBaseIndex]);
-
+function selectBestFromConsecutiveBases(rowDiagnostics, firstBaseIndex, { preferredBase = "auto" } = {}) {
+  // Collect all consecutive base rows starting at firstBaseIndex.
+  const consecutiveIndexes = [firstBaseIndex];
   for (let i = firstBaseIndex + 1; i < rowDiagnostics.length; i++) {
     if (rowDiagnostics[i].rowType !== "base") break;
-    const p = getBasePriorityValue(rowDiagnostics[i]);
+    consecutiveIndexes.push(i);
+  }
+
+  if (preferredBase !== "auto") {
+    // Try to find a base row matching the preferred subtype.
+    for (const idx of consecutiveIndexes) {
+      const subtype = rowDiagnostics[idx]?.baseSubtype;
+      // "plain" means no baseSubtype (undefined).
+      const isMatch =
+        preferredBase === "plain" ? subtype === undefined : subtype === preferredBase;
+      if (isMatch) {
+        return idx;
+      }
+    }
+    // Preferred subtype not found — fall through to auto priority.
+  }
+
+  // Auto priority: Effective (0) > Unweighted (1) > plain Base (2) > Weighted (3).
+  let bestIndex = firstBaseIndex;
+  let bestPriority = getBasePriorityValue(rowDiagnostics[firstBaseIndex]);
+  for (let i = 1; i < consecutiveIndexes.length; i++) {
+    const idx = consecutiveIndexes[i];
+    const p = getBasePriorityValue(rowDiagnostics[idx]);
     if (p < bestPriority) {
       bestPriority = p;
-      bestIndex = i;
+      bestIndex = idx;
     }
   }
 
@@ -355,10 +379,10 @@ function selectBestFromConsecutiveBases(rowDiagnostics, firstBaseIndex) {
  * Finds the nearest base row below startRowIndex and selects the best
  * from consecutive base rows at that position.
  */
-function findBestBaseRowIndex(rowDiagnostics, startRowIndex) {
+function findBestBaseRowIndex(rowDiagnostics, startRowIndex, options) {
   const firstBase = findNextBaseRowIndex(rowDiagnostics, startRowIndex);
   if (firstBase === null) return null;
-  return selectBestFromConsecutiveBases(rowDiagnostics, firstBase);
+  return selectBestFromConsecutiveBases(rowDiagnostics, firstBase, options);
 }
 
 /**
@@ -368,10 +392,11 @@ function findBestBaseRowIndex(rowDiagnostics, startRowIndex) {
  * Support complex tables where proportions, means, and NPS can appear
  * in one selected range in different combinations.
  */
-export function buildCalculationBlocks(detectionResult) {
+export function buildCalculationBlocks(detectionResult, { preferredBase = "auto" } = {}) {
   const rowDiagnostics = detectionResult.rowDiagnostics; // Classified rows.
   const calculationBlocks = []; // Final list of calculation blocks.
   const pendingProportionRows = []; // Proportion rows waiting for the next available base.
+  const baseOptions = { preferredBase };
 
   let rowIndex = 0; // Current row scanner position.
 
@@ -388,7 +413,7 @@ export function buildCalculationBlocks(detectionResult) {
     // 2. Строка Базы: закрываем висящие проценты, если они есть
     if (currentRowType === "base") {
       if (pendingProportionRows.length > 0) {
-        const bestBaseIndex = selectBestFromConsecutiveBases(rowDiagnostics, rowIndex);
+        const bestBaseIndex = selectBestFromConsecutiveBases(rowDiagnostics, rowIndex, baseOptions);
         calculationBlocks.push(
           attachBaseSubtype(
             { metricType: "proportion", valueRowIndexes: [...pendingProportionRows], baseRowIndex: bestBaseIndex },
@@ -409,7 +434,7 @@ export function buildCalculationBlocks(detectionResult) {
         rowDiagnostics[rowIndex + 1].rowType === "variance")
     ) {
       const spreadRowIndex = rowIndex + 1;
-      const baseRowIndex = findBestBaseRowIndex(rowDiagnostics, spreadRowIndex);
+      const baseRowIndex = findBestBaseRowIndex(rowDiagnostics, spreadRowIndex, baseOptions);
 
       if (baseRowIndex !== null) {
         calculationBlocks.push(
@@ -439,7 +464,7 @@ export function buildCalculationBlocks(detectionResult) {
     // 4. NPS-first (format 1 and 2, unified handler)
     const npsFirstBlock = tryParseNpsFirstBlock(rowDiagnostics, rowIndex);
     if (npsFirstBlock !== null) {
-      const baseRowIndex = selectBestFromConsecutiveBases(rowDiagnostics, npsFirstBlock.baseRowIndex);
+      const baseRowIndex = selectBestFromConsecutiveBases(rowDiagnostics, npsFirstBlock.baseRowIndex, baseOptions);
 
       if (pendingProportionRows.length > 0) {
         calculationBlocks.push(
@@ -481,7 +506,7 @@ export function buildCalculationBlocks(detectionResult) {
         rowDiagnostics[rowIndex + 1].rowType === "variance")
     ) {
       const spreadRowIndex = rowIndex + 1;
-      const baseRowIndex = findBestBaseRowIndex(rowDiagnostics, spreadRowIndex);
+      const baseRowIndex = findBestBaseRowIndex(rowDiagnostics, spreadRowIndex, baseOptions);
 
       if (baseRowIndex !== null) {
         calculationBlocks.push(
@@ -518,7 +543,7 @@ export function buildCalculationBlocks(detectionResult) {
       const promotersIdx = findRowTypeInPending(rowDiagnostics, pendingProportionRows, "promoters");
 
       if (detractorsIdx !== null && promotersIdx !== null) {
-        const baseRowIndex = findBestBaseRowIndex(rowDiagnostics, rowIndex);
+        const baseRowIndex = findBestBaseRowIndex(rowDiagnostics, rowIndex, baseOptions);
 
         if (baseRowIndex !== null) {
           // All buffered rows, including Detractors and Promoters, receive proportion markers.

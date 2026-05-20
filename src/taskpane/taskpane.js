@@ -226,6 +226,8 @@ const SETTINGS_CONTROL_CONFIG = [
   { id: "small-base-threshold", type: "number", settingName: "smallBaseThreshold" },
   { id: "small-base-fill-color", type: "value", settingName: "smallBaseFillColor" },
 
+  { id: "preferred-base", type: "value", settingName: "preferredBase" },
+
   { id: "settings-storage-mode", type: "value", settingName: "settingsStorageMode" },
 ];
 
@@ -257,6 +259,8 @@ const DEFAULT_CALCULATION_SETTINGS = {
   excludeSmallBasesFromComparisons: false,
   smallBaseThreshold: 50,
   smallBaseFillColor: "#D0D0D0",
+
+  preferredBase: "auto",
 
   settingsStorageMode: "none",
 };
@@ -318,6 +322,9 @@ const SETTINGS_TOOLTIPS = {
 
   "small-base-fill-color":
     "Цвет заливки для колонок с маленькой базой. Эта заливка имеет самый высокий приоритет и перекрывает остальные типы заливки.",
+
+  "preferred-base":
+    "Выберите тип базы для расчёта значимости. «Авто» использует приоритет: Effective → Unweighted → Base → Weighted. Если выбранный тип базы не найден в таблице, используется автоматический приоритет.",
 
   "settings-storage-mode":
     "Выберите, сохранять ли настройки панели. Локальное сохранение работает только на этом устройстве и в этом браузере/Excel WebView.",
@@ -529,7 +536,7 @@ async function runSignificanceFromSelection() {
       leftLabelValues
     ); // Row type diagnostics based on left-side labels.
 
-    const calculationBlocks = buildCalculationBlocks(detectionResult); // List of metric blocks to calculate.
+    const calculationBlocks = buildCalculationBlocks(detectionResult, { preferredBase: calculationSettings.preferredBase }); // List of metric blocks to calculate.
 
     if (!calculationBlocks || calculationBlocks.length === 0) {
       setStatusMessage(
@@ -780,7 +787,7 @@ async function runSignificanceForRange(sheetName, rangeAddress, calculationSetti
     await context.sync();
 
     const detectionResult = detectMetricRowsFromLeftLabels(valuesForCalculation, leftLabelValues);
-    const calculationBlocks = buildCalculationBlocks(detectionResult);
+    const calculationBlocks = buildCalculationBlocks(detectionResult, { preferredBase: calculationSettings.preferredBase });
 
     if (!calculationBlocks || calculationBlocks.length === 0) {
       return { status: "skipped", message: "нет блоков расчёта", rangeAddress };
@@ -3121,6 +3128,8 @@ function readCalculationSettingsFromPanel() {
     smallBaseThreshold: smallBaseThresholdElement ? Number(smallBaseThresholdElement.value) : 50,
 
     smallBaseFillColor: getInputValue("small-base-fill-color", "#d0d0d0"),
+
+    preferredBase: getInputValue("preferred-base", "auto"),
 
     settingsStorageMode: getInputValue("settings-storage-mode", "none"),
   };

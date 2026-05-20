@@ -124,7 +124,7 @@ export function buildTablePreviewModel(input) {
 
   // Enrich outputs for the preview layer.
   const rawRowDiagnostics = detectionResult?.rowDiagnostics || [];
-  const rawBlocks = buildCalculationBlocks(detectionResult);
+  const rawBlocks = buildCalculationBlocks(detectionResult, { preferredBase: safeSettings.preferredBase || "auto" });
   const rowDiagnostics = buildPreviewRowDiagnostics(rawRowDiagnostics, safeLeft);
   const calculationBlocks = buildPreviewBlocks(rawBlocks, rawRowDiagnostics, safeValues);
   enrichBlocksWithBaseSelection(calculationBlocks, rowDiagnostics);
