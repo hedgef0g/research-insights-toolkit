@@ -82,6 +82,7 @@ const INVENTORY_FULL_CHECK_COLUMNS = [
   "Metric rows",
   "Base rows",
   "Blocks",
+  "Selected base",
   "Metric types",
   "Warnings",
   "Critical",
@@ -1700,6 +1701,10 @@ function formatInventoryItemLines(item, index) {
     lines.push(`   ${item.previewSummary}.`);
   }
 
+  if (item.selectedBaseSubtypeLabel) {
+    lines.push(`   База: ${item.selectedBaseSubtypeLabel}.`);
+  }
+
   const warnParts = [];
   if (item.criticalCount > 0) warnParts.push(`Критических: ${item.criticalCount}`);
   if (item.warningsCount > 0) warnParts.push(`Предупреждений: ${item.warningsCount}`);
@@ -2528,6 +2533,7 @@ function buildFullCheckCandidateRows(sheetResults) {
         item.detectedMetricRows ?? "",
         item.detectedBaseRows ?? "",
         item.detectedBlocks ?? "",
+        item.selectedBaseSubtypeLabel || "",
         metricTypes.join(", "),
         item.warningsCount ?? 0,
         item.criticalCount ?? 0,
@@ -2610,7 +2616,7 @@ function writeFullCheckContent(worksheet, inventoryResults) {
   tableRange.format.borders.getItem("InsideHorizontal").style = "Continuous";
   tableRange.format.borders.getItem("InsideVertical").style = "Continuous";
 
-  const columnWidths = [42, 100, 160, 92, 200, 160, 50, 60, 72, 72, 50, 110, 72, 72, 200, 170, 85, 70];
+  const columnWidths = [42, 100, 160, 92, 200, 160, 50, 60, 72, 72, 50, 130, 110, 72, 72, 200, 170, 85, 70];
   columnWidths.forEach((width, index) => {
     worksheet.getRangeByIndexes(0, index, 1, 1).format.columnWidth = width;
   });

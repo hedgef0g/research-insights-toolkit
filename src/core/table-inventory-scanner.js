@@ -455,6 +455,23 @@ function inferTitle(values, band) {
 
 // ─── Item builder ─────────────────────────────────────────────────────────────
 
+// ─── Base subtype helpers ─────────────────────────────────────────────────────
+
+/**
+ * Maps a raw baseSubtype value to a human-readable display label.
+ *
+ *   "effective"  → "Effective Base"
+ *   "unweighted" → "Unweighted Base"
+ *   "weighted"   → "Weighted Base"
+ *   undefined / null / anything else → "Base"
+ */
+function baseSubtypeToLabel(subtype) {
+  if (subtype === "effective") return "Effective Base";
+  if (subtype === "unweighted") return "Unweighted Base";
+  if (subtype === "weighted") return "Weighted Base";
+  return "Base";
+}
+
 /**
  * Issue codes that are informational/advisory and must not affect candidateStatus.
  *
@@ -532,6 +549,23 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     labelSplitConfidence,
   });
 
+  // Derive the selected base subtype label from calculationBlocks.
+  // Collects the unique human-readable base type labels across all blocks that
+  // have a base row, then joins them (multiple distinct subtypes are rare but
+  // possible when a table has both proportion and mean blocks with different bases).
+  const seenSubtypeLabels = [];
+  const seenSubtypeSet = new Set();
+  for (const block of calculationBlocks || []) {
+    if (block.baseRowIndex != null) {
+      const label = baseSubtypeToLabel(block.baseSubtype);
+      if (!seenSubtypeSet.has(label)) {
+        seenSubtypeSet.add(label);
+        seenSubtypeLabels.push(label);
+      }
+    }
+  }
+  const selectedBaseSubtypeLabel = seenSubtypeLabels.length > 0 ? seenSubtypeLabels.join(", ") : "";
+
   let previewSummary = "";
   if (isLikelyTable) {
     const parts = [];
@@ -576,6 +610,7 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     detectedBlocks: summary.detectedBlocks ?? 0,
     hasNps: summary.hasNps ?? false,
     hasMeans: summary.hasMeans ?? false,
+    selectedBaseSubtypeLabel,
   };
 }
 

@@ -776,3 +776,93 @@ describe("scanWorksheetForTables — advisory issue codes do not affect candidat
     );
   });
 });
+
+// ─── selectedBaseSubtypeLabel field ──────────────────────────────────────────
+
+describe("scanWorksheetForTables — selectedBaseSubtypeLabel field", () => {
+  it("plain 'Base' row → selectedBaseSubtypeLabel is 'Base'", () => {
+    const values = [
+      ["Agree",    0.4, 0.6],
+      ["Disagree", 0.6, 0.4],
+      ["Base",     100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].selectedBaseSubtypeLabel, "Base");
+  });
+
+  it("'Base effective' row → selectedBaseSubtypeLabel is 'Effective Base'", () => {
+    const values = [
+      ["Agree",          0.4, 0.6],
+      ["Disagree",       0.6, 0.4],
+      ["Base effective", 100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].selectedBaseSubtypeLabel, "Effective Base");
+  });
+
+  it("'Base unweighted' row → selectedBaseSubtypeLabel is 'Unweighted Base'", () => {
+    const values = [
+      ["Agree",           0.4, 0.6],
+      ["Disagree",        0.6, 0.4],
+      ["Base unweighted", 100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].selectedBaseSubtypeLabel, "Unweighted Base");
+  });
+
+  it("'Base weighted' row → selectedBaseSubtypeLabel is 'Weighted Base'", () => {
+    const values = [
+      ["Agree",         0.4, 0.6],
+      ["Disagree",      0.6, 0.4],
+      ["Base weighted", 100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].selectedBaseSubtypeLabel, "Weighted Base");
+  });
+
+  it("preferredBase=effective with effective+weighted available → 'Effective Base'", () => {
+    const values = [
+      ["Agree",          0.4, 0.6],
+      ["Disagree",       0.6, 0.4],
+      ["Base weighted",  200, 300],
+      ["Base effective", 160, 250],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: { preferredBase: "effective" } });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].selectedBaseSubtypeLabel, "Effective Base");
+  });
+
+  it("preferredBase=weighted with effective+weighted available → 'Weighted Base'", () => {
+    const values = [
+      ["Agree",          0.4, 0.6],
+      ["Disagree",       0.6, 0.4],
+      ["Base weighted",  200, 300],
+      ["Base effective", 160, 250],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: { preferredBase: "weighted" } });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].selectedBaseSubtypeLabel, "Weighted Base");
+  });
+
+  it("no calculation blocks (proportion rows only, no base) → selectedBaseSubtypeLabel is ''", () => {
+    // Without a base row no blocks can be formed so the label must be empty.
+    const values = [
+      ["Agree",    0.4, 0.6],
+      ["Disagree", 0.6, 0.4],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    // No base row — scanner may or may not produce a candidate, but if it does
+    // selectedBaseSubtypeLabel must be empty string.
+    for (const item of items) {
+      assert.strictEqual(
+        item.selectedBaseSubtypeLabel,
+        "",
+        "no-base table must have empty selectedBaseSubtypeLabel"
+      );
+    }
+  });
+});
