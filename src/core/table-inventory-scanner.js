@@ -568,7 +568,7 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
  * @param {string} input.sheetName          - worksheet name
  * @returns {Array} TableInventoryItem[]
  */
-export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeColOffset, sheetName }) {
+export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeColOffset, sheetName, settings }) {
   if (!Array.isArray(values) || values.length === 0 || !values[0]) {
     return [];
   }
@@ -600,7 +600,7 @@ export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeCo
 
     if (!dataCols.length || !dataCols[0] || dataCols[0].length < 1) continue;
 
-    const model = buildTablePreviewModel({ values: dataCols, leftLabelValues: labelCols });
+    const model = buildTablePreviewModel({ values: dataCols, leftLabelValues: labelCols, settings });
 
     // Range address always covers the full original band (title row included).
     const absRowStart = band.localStartRow + usedRangeRowOffset;

@@ -951,7 +951,7 @@ async function runAutoSignificance() {
   let inventoryResults;
   try {
     await Excel.run(async (context) => {
-      inventoryResults = await collectWorkbookInventoryResults(context);
+      inventoryResults = await collectWorkbookInventoryResults(context, calculationSettings);
       // Normalize without inserting backlinks — only needed for resolvedRangeAddress.
       normalizeBacklinkItems(inventoryResults.sheetResults, false);
     });
@@ -1760,7 +1760,7 @@ function formatWorkbookInventoryMessage({ scannedSheets, sheetResults, skippedSh
   return lines.join("\n").trimEnd();
 }
 
-async function collectWorkbookInventoryResults(context) {
+async function collectWorkbookInventoryResults(context, settings) {
   const worksheets = context.workbook.worksheets;
   worksheets.load("items/name");
 
@@ -1817,6 +1817,7 @@ async function collectWorkbookInventoryResults(context) {
         usedRangeRowOffset: usedRange.rowIndex,
         usedRangeColOffset: usedRange.columnIndex,
         sheetName: worksheet.name,
+        settings,
       }),
     }))
     .filter((sheetResult) => sheetResult.items.length > 0);
@@ -2653,7 +2654,7 @@ async function writeInventoryContentSheet(context, inventoryResults) {
 
 async function runTableInventory() {
   await Excel.run(async (context) => {
-    const inventoryResults = await collectWorkbookInventoryResults(context);
+    const inventoryResults = await collectWorkbookInventoryResults(context, readCalculationSettingsFromPanel());
     const addBacklinks = readBacklinkSettingFromPanel();
     const contentMode = readContentOutputModeFromPanel();
 

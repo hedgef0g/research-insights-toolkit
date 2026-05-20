@@ -653,3 +653,47 @@ describe("scanWorksheetForTables", () => {
     assert.strictEqual(item.hasNps, true, "NPS table should have hasNps=true");
   });
 });
+
+// ─── preferredBase threading through inventory scanner ───────────────────────
+//
+// Observable: WEIGHTED_BASE_FALLBACK appears in qualityIssueCodes when weighted
+// base is selected (either by preference or auto fallback when only weighted is
+// available). It is absent when a non-weighted base is chosen.
+//
+// Table: effective + weighted bases available.
+
+describe("scanWorksheetForTables — preferredBase setting threading", () => {
+  const values = [
+    ["Agree",          0.4, 0.6],
+    ["Disagree",       0.6, 0.4],
+    ["Base weighted",  200, 300],
+    ["Base effective", 160, 250],
+  ];
+
+  it("no settings (omitted): auto picks effective — no WEIGHTED_BASE_FALLBACK", () => {
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.ok(
+      !items[0].qualityIssueCodes.some((e) => e.code === "WEIGHTED_BASE_FALLBACK"),
+      "auto should pick effective, not weighted"
+    );
+  });
+
+  it("settings.preferredBase=auto: same as omitted — no WEIGHTED_BASE_FALLBACK", () => {
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: { preferredBase: "auto" } });
+    assert.strictEqual(items.length, 1);
+    assert.ok(
+      !items[0].qualityIssueCodes.some((e) => e.code === "WEIGHTED_BASE_FALLBACK"),
+      "auto should pick effective, not weighted"
+    );
+  });
+
+  it("settings.preferredBase=weighted: weighted base selected — WEIGHTED_BASE_FALLBACK present", () => {
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: { preferredBase: "weighted" } });
+    assert.strictEqual(items.length, 1);
+    assert.ok(
+      items[0].qualityIssueCodes.some((e) => e.code === "WEIGHTED_BASE_FALLBACK"),
+      "WEIGHTED_BASE_FALLBACK should be present when weighted base is preferred"
+    );
+  });
+});
