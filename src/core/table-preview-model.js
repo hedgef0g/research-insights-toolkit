@@ -1434,11 +1434,24 @@ function buildSummary(values, rowDiagnostics, calculationBlocks, bannerStructure
 
   const baseRows = rowDiagnostics.filter((r) => r.rowType === "base").length;
 
-  const hasProportions = calculationBlocks.some((b) => b.metricType === "proportion");
-  const hasNps = calculationBlocks.some(
-    (b) => b.metricType === "npsStructure" || b.metricType === "npsSpread"
-  );
-  const hasMeans = calculationBlocks.some((b) => b.metricType === "mean");
+  // Metric-type flags: rowDiagnostics-first so that detected rows with no
+  // accompanying base still surface in Full Check reporting.  calculationBlocks
+  // serves as fallback for edge cases where block assembly succeeds without an
+  // explicitly-typed diagnostic row (e.g. unknownText value rows that assemble
+  // into a proportion block when a base row is present).
+  const hasProportions =
+    rowDiagnostics.some(
+      (r) => r.rowType === "proportion" || r.rowType === "promoters" || r.rowType === "detractors"
+    ) ||
+    calculationBlocks.some((b) => b.metricType === "proportion");
+
+  const hasNps =
+    rowDiagnostics.some((r) => r.rowType === "nps") ||
+    calculationBlocks.some((b) => b.metricType === "npsStructure" || b.metricType === "npsSpread");
+
+  const hasMeans =
+    rowDiagnostics.some((r) => r.rowType === "mean") ||
+    calculationBlocks.some((b) => b.metricType === "mean");
 
   const hasBanner = !!(bannerStructure && bannerStructure.isDetected);
   const hasGlobalTotal = !!(bannerStructure && bannerStructure.globalTotalColumnIndex !== null);

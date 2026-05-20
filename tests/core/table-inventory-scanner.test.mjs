@@ -950,4 +950,45 @@ describe("scanWorksheetForTables — hasProportions / hasMeans / hasNps fields",
     assert.strictEqual(item.hasProportions, true,  "NPS table with Agree/Disagree must have hasProportions=true");
     assert.strictEqual(item.hasMeans, true,        "NPS table with Mean+SD block must have hasMeans=true");
   });
+
+  it("proportion rowType labels without base → hasProportions=true from rowDiagnostics (no block)", () => {
+    // Rows labeled "Share", "Percent", "Доля" get rowType 'proportion' from the dictionary.
+    // Without a base row no proportion block forms, so calculationBlocks is empty.
+    // hasProportions must still be true because rowDiagnostics carries the detected type.
+    // Note: "50%" would NOT match — the "%" keyword is length 1 and only matched exactly.
+    // "Share"/"Percent"/"Доля" are length > 3 and matched via substring, so they do match.
+    const values = [
+      ["Share",   0.4, 0.6],
+      ["Percent", 0.6, 0.4],
+      ["Доля",    0.5, 0.5],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(
+      item.hasProportions, true,
+      "proportion-rowType rows without base must yield hasProportions=true via rowDiagnostics"
+    );
+    assert.strictEqual(item.hasMeans, false, "no mean rows present");
+    assert.strictEqual(item.hasNps,   false, "no NPS rows present");
+  });
+
+  it("Promoters + Detractors without NPS or base → hasProportions=true from rowDiagnostics", () => {
+    // Promoters/Detractors have specific rowTypes in the dictionary.
+    // Without NPS and without a base row, no blocks form in calculationBlocks.
+    // hasProportions must still be true from rowDiagnostics.
+    const values = [
+      ["Promoters",  0.5, 0.52],
+      ["Detractors", 0.2, 0.19],
+      ["Passives",   0.3, 0.29],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(
+      item.hasProportions, true,
+      "Promoters/Detractors rows without NPS must yield hasProportions=true via rowDiagnostics"
+    );
+    assert.strictEqual(item.hasNps, false, "no NPS row present");
+  });
 });
