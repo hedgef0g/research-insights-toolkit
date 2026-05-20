@@ -70,6 +70,27 @@ const INVENTORY_CONTENT_COLUMNS = [
 
 const INVENTORY_CLIENT_COLUMNS = ["#", "Название таблицы", "Подзаголовок", "Лист"];
 
+const INVENTORY_FULL_CHECK_COLUMNS = [
+  "#",
+  "Sheet",
+  "Title",
+  "Range",
+  "Status",
+  "Summary",
+  "Rows",
+  "Columns",
+  "Metric rows",
+  "Base rows",
+  "Blocks",
+  "Metric types",
+  "Warnings",
+  "Critical",
+  "Issue codes",
+  "Notes",
+  "Label split",
+  "Label cols",
+];
+
 function formatBannerUserMessages(bannerStructure) {
   if (!bannerStructure || !bannerStructure.messages) {
     return "";
@@ -2105,6 +2126,133 @@ function writeClientFacingContent(worksheet, inventoryResults) {
   }
 }
 
+function buildFullCheckCandidateRows(sheetResults) {
+  const rows = [];
+  let candidateIndex = 1;
+
+  for (const sheetResult of sheetResults) {
+    for (const item of sheetResult.items) {
+      const metricTypes = [];
+      if (item.hasNps) metricTypes.push("NPS");
+      if (item.hasMeans) metricTypes.push("Средние");
+      if (item.isLikelyTable && !item.hasNps && !item.hasMeans) metricTypes.push("Пропорции");
+
+      rows.push([
+        candidateIndex,
+        sheetResult.sheetName,
+        item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || "")),
+        item.resolvedRangeAddress || item.rangeAddress || "",
+        getInventoryCandidateStatusLabel(item.candidateStatus),
+        item.previewSummary || "",
+        item.rowCount ?? "",
+        item.columnCount ?? "",
+        item.detectedMetricRows ?? "",
+        item.detectedBaseRows ?? "",
+        item.detectedBlocks ?? "",
+        metricTypes.join(", "),
+        item.warningsCount ?? 0,
+        item.criticalCount ?? 0,
+        (item.qualityIssueCodes || []).map((q) => q.code).join(", "),
+        item.candidateNotes && item.candidateNotes.length > 0 ? item.candidateNotes.join("; ") : "",
+        item.labelSplitConfidence || "",
+        item.labelColCount ?? "",
+      ]);
+      candidateIndex += 1;
+    }
+  }
+
+  if (rows.length === 0) {
+    const emptyRow = new Array(INVENTORY_FULL_CHECK_COLUMNS.length).fill("");
+    emptyRow[5] = "Нет кандидатов";
+    rows.push(emptyRow);
+  }
+
+  return rows;
+}
+
+function writeFullCheckContent(worksheet, inventoryResults) {
+  const allItems = [];
+  for (const sheetResult of inventoryResults.sheetResults) {
+    for (const item of sheetResult.items) {
+      allItems.push(item);
+    }
+  }
+
+  const colCount = INVENTORY_FULL_CHECK_COLUMNS.length;
+  const candidateRows = normalizeRowsToColumnCount(
+    buildFullCheckCandidateRows(inventoryResults.sheetResults),
+    colCount
+  );
+  const totalCandidates = inventoryResults.sheetResults.reduce(
+    (sum, sheetResult) => sum + sheetResult.items.length,
+    0
+  );
+
+  const titleRange = worksheet.getRangeByIndexes(0, 0, 1, colCount);
+  titleRange.values = normalizeRowsToColumnCount([["Table Full Check"]], colCount);
+  titleRange.merge();
+  titleRange.format.font.bold = true;
+  titleRange.format.font.size = 14;
+
+  const metadataRows = normalizeRowsToColumnCount(
+    [
+      ["Generated sheet", INVENTORY_CONTENT_SHEET_NAME],
+      ["Scanned sheets", inventoryResults.scannedSheets],
+      ["Candidate sheets", inventoryResults.sheetResults.length],
+      ["Detected candidates", totalCandidates],
+      ["Mode", "Full Check — expanded diagnostics for all detected candidates"],
+    ],
+    2
+  );
+
+  const metadataRange = worksheet.getRangeByIndexes(1, 0, metadataRows.length, 2);
+  metadataRange.values = metadataRows;
+  worksheet.getRange("A2:A6").format.font.bold = true;
+
+  const headerRowIndex = 7;
+  const headerRange = worksheet.getRangeByIndexes(headerRowIndex - 1, 0, 1, colCount);
+  headerRange.values = normalizeRowsToColumnCount([INVENTORY_FULL_CHECK_COLUMNS], colCount);
+  headerRange.format.font.bold = true;
+
+  const candidateRange = worksheet.getRangeByIndexes(headerRowIndex, 0, candidateRows.length, colCount);
+  candidateRange.values = candidateRows;
+  candidateRange.format.wrapText = true;
+
+  const tableRange = worksheet.getRangeByIndexes(
+    headerRowIndex - 1,
+    0,
+    candidateRows.length + 1,
+    colCount
+  );
+  tableRange.format.borders.getItem("EdgeBottom").style = "Continuous";
+  tableRange.format.borders.getItem("EdgeTop").style = "Continuous";
+  tableRange.format.borders.getItem("EdgeLeft").style = "Continuous";
+  tableRange.format.borders.getItem("EdgeRight").style = "Continuous";
+  tableRange.format.borders.getItem("InsideHorizontal").style = "Continuous";
+  tableRange.format.borders.getItem("InsideVertical").style = "Continuous";
+
+  const columnWidths = [42, 100, 160, 92, 200, 160, 50, 60, 72, 72, 50, 110, 72, 72, 200, 170, 85, 70];
+  columnWidths.forEach((width, index) => {
+    worksheet.getRangeByIndexes(0, index, 1, 1).format.columnWidth = width;
+  });
+
+  worksheet.getRangeByIndexes(0, 0, candidateRows.length + headerRowIndex, colCount).format.verticalAlignment = "Top";
+
+  const RANGE_COL_INDEX = 3;
+  for (let i = 0; i < allItems.length; i++) {
+    const item = allItems[i];
+    const effectiveRange = item.resolvedRangeAddress || item.rangeAddress;
+    const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, effectiveRange);
+    if (hyperlinkTarget) {
+      const cell = worksheet.getRangeByIndexes(headerRowIndex + i, RANGE_COL_INDEX, 1, 1);
+      cell.hyperlink = {
+        documentReference: hyperlinkTarget,
+        screenTip: `${item.sheetName}!${effectiveRange}`,
+      };
+    }
+  }
+}
+
 async function writeInventoryContentSheet(context, inventoryResults) {
   const worksheet = await ensureInventoryContentWorksheet(context);
   const existingUsedRange = worksheet.getUsedRangeOrNullObject();
@@ -2121,6 +2269,8 @@ async function writeInventoryContentSheet(context, inventoryResults) {
 
   if (mode === "client") {
     writeClientFacingContent(worksheet, inventoryResults);
+  } else if (mode === "full-check") {
+    writeFullCheckContent(worksheet, inventoryResults);
   } else {
     writeMinimalCheckContent(worksheet, inventoryResults);
   }

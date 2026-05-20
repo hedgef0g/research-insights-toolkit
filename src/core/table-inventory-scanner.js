@@ -548,6 +548,11 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     warningsCount: isLikelyTable ? qualitySummary.warningCount : 0,
     criticalCount: isLikelyTable ? qualitySummary.criticalCount : 0,
     qualityIssueCodes,
+    detectedMetricRows: summary.detectedMetricRows ?? 0,
+    detectedBaseRows: summary.baseRows ?? 0,
+    detectedBlocks: summary.detectedBlocks ?? 0,
+    hasNps: summary.hasNps ?? false,
+    hasMeans: summary.hasMeans ?? false,
   };
 }
 
