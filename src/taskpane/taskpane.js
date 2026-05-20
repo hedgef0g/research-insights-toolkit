@@ -1684,8 +1684,14 @@ function getInventoryCandidateStatusLabel(candidateStatus) {
 
 function formatInventoryItemLines(item, index) {
   const lines = [];
-  const displayTitle = item.title && !isGeneratedBacklinkRow(item.title) ? item.title : null;
-  const header = displayTitle ? `${index}. ${displayTitle} — ${item.rangeAddress}` : `${index}. ${item.rangeAddress}`;
+  // Prefer resolvedTitle (set after backlink normalization) over raw title.
+  // Fall back to raw title only if it is not a generated backlink marker.
+  const displayTitle =
+    item.resolvedTitle ||
+    (item.title && !isGeneratedBacklinkRow(item.title) ? item.title : null);
+  // Prefer resolvedRangeAddress (adjusted for any inserted backlink rows).
+  const displayRange = item.resolvedRangeAddress || item.rangeAddress;
+  const header = displayTitle ? `${index}. ${displayTitle} — ${displayRange}` : `${index}. ${displayRange}`;
 
   lines.push(header);
   lines.push(`   ${item.rowCount} строк, ${item.columnCount} колонок.`);
@@ -1705,20 +1711,6 @@ function formatInventoryItemLines(item, index) {
 
   if (item.candidateNotes && item.candidateNotes.length > 0) {
     lines.push(`   [${item.candidateNotes.join("; ")}]`);
-  }
-
-  // TEMPORARY DIAGNOSTIC — remove before final merge.
-  if (item.candidateStatus === "uncertain") {
-    lines.push(`   DIAG: labelSplit=${item.labelSplitConfidence} labelColCount=${item.labelColCount}`);
-    lines.push(`   DIAG: isLikelyTable=${item.isLikelyTable} metricRows=${item.detectedMetricRows} baseRows=${item.detectedBaseRows} blocks=${item.detectedBlocks}`);
-    lines.push(`   DIAG: hasBlockingIssues=${item.hasBlockingIssues} availabilityWarnings=${item.availabilityWarningCount} allWarnings=${item.warningsCount} criticals=${item.criticalCount}`);
-    const codes = (item.qualityIssueCodes || []).map((e) => `${e.code}(${e.severity})`).join(", ") || "none";
-    lines.push(`   DIAG: issueCodes=[${codes}]`);
-    if (item._diagBlocks && item._diagBlocks.length > 0) {
-      const blockSummary = item._diagBlocks.map((b) => `${b.metricType}@base${b.baseRowIndex}(${b.baseSubtype ?? "plain"})`).join(", ");
-      lines.push(`   DIAG: blocks=[${blockSummary}]`);
-    }
-    lines.push(`   DIAG: title="${item.title ?? ""}" resolvedTitle="${item.resolvedTitle ?? ""}" backlinkState=${item.backlinkState ?? "n/a"}`);
   }
 
   return lines;

@@ -729,3 +729,50 @@ describe("scanWorksheetForTables — preferredBase setting threading", () => {
     );
   });
 });
+
+// ─── Advisory vs availability-affecting warning codes ────────────────────────
+
+describe("scanWorksheetForTables — advisory issue codes do not affect candidateStatus", () => {
+  it("BASE_BELOW_THRESHOLD: stays in qualityIssueCodes but candidateStatus remains available", () => {
+    // Base values all < 50 → BASE_BELOW_THRESHOLD fires when threshold = 50.
+    // It must be visible in qualityIssueCodes but must not downgrade status.
+    const values = [
+      ["Agree",    0.4, 0.6, 0.5],
+      ["Disagree", 0.6, 0.4, 0.5],
+      ["Base",      30,  35,  40],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: { smallBaseThreshold: 50 } });
+    assert.strictEqual(items.length, 1);
+    assert.ok(
+      items[0].qualityIssueCodes.some((e) => e.code === "BASE_BELOW_THRESHOLD"),
+      "BASE_BELOW_THRESHOLD must be present in qualityIssueCodes"
+    );
+    assert.ok(items[0].warningsCount > 0, "warningsCount must count advisory warnings for display");
+    assert.strictEqual(
+      items[0].candidateStatus,
+      "available",
+      `BASE_BELOW_THRESHOLD is advisory and must not downgrade candidateStatus; got ${items[0].candidateStatus}`
+    );
+  });
+
+  it("BASE_BLANK_VALUES: is NOT advisory and still makes candidateStatus uncertain", () => {
+    // A base row with blank cells → BASE_BLANK_VALUES is a real data-quality warning
+    // that genuinely signals the table may not calculate significance correctly.
+    const values = [
+      ["Agree",    0.4,  0.6, 0.5],
+      ["Disagree", 0.6,  0.4, 0.5],
+      ["Base",     100, null, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.ok(
+      items[0].qualityIssueCodes.some((e) => e.code === "BASE_BLANK_VALUES"),
+      "BASE_BLANK_VALUES must be present in qualityIssueCodes"
+    );
+    assert.strictEqual(
+      items[0].candidateStatus,
+      "uncertain",
+      "BASE_BLANK_VALUES must still downgrade candidateStatus to uncertain"
+    );
+  });
+});
