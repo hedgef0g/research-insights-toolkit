@@ -619,4 +619,37 @@ describe("scanWorksheetForTables", () => {
       "extended NPS must not produce uncertain label/data boundary note"
     );
   });
+
+  it("item exposes detectedMetricRows, detectedBaseRows, detectedBlocks, hasNps, hasMeans for a proportion table", () => {
+    const values = [
+      ["Label1", 10, 20, 30],
+      ["Label2", 40, 50, 60],
+      ["Base", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.ok(typeof item.detectedMetricRows === "number", "detectedMetricRows should be a number");
+    assert.ok(typeof item.detectedBaseRows === "number", "detectedBaseRows should be a number");
+    assert.ok(typeof item.detectedBlocks === "number", "detectedBlocks should be a number");
+    assert.strictEqual(typeof item.hasNps, "boolean", "hasNps should be a boolean");
+    assert.strictEqual(typeof item.hasMeans, "boolean", "hasMeans should be a boolean");
+    assert.ok(item.detectedMetricRows > 0, "proportion table should have metric rows");
+    assert.ok(item.detectedBaseRows > 0, "proportion table should have at least one base row");
+    assert.strictEqual(item.hasNps, false, "plain proportion table should not have NPS");
+    assert.strictEqual(item.hasMeans, false, "plain proportion table should not have means");
+  });
+
+  it("item exposes hasNps=true for an NPS table", () => {
+    const values = [
+      ["Promoters", 50, 52, 51],
+      ["Detractors", 20, 19, 18],
+      ["NPS", 30, 33, 33],
+      ["Base", 1000, 500, 500],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(item.hasNps, true, "NPS table should have hasNps=true");
+  });
 });
