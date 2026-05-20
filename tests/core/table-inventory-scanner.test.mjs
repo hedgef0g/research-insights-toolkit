@@ -696,4 +696,36 @@ describe("scanWorksheetForTables — preferredBase setting threading", () => {
       "WEIGHTED_BASE_FALLBACK should be present when weighted base is preferred"
     );
   });
+
+  it("preferredBase=weighted: WEIGHTED_BASE_FALLBACK must not make candidateStatus uncertain", () => {
+    // A table that is otherwise clean (valid base values, confident label split)
+    // must remain 'available' even when WEIGHTED_BASE_FALLBACK is emitted.
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: { preferredBase: "weighted" } });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(
+      items[0].candidateStatus,
+      "available",
+      `WEIGHTED_BASE_FALLBACK is advisory and must not downgrade candidateStatus; got ${items[0].candidateStatus}`
+    );
+  });
+
+  it("real availability-affecting warning (SUSPICIOUS_ALL_100) still makes candidate uncertain", () => {
+    // All-100 rows trigger SUSPICIOUS_ALL_100 — a non-advisory warning that should
+    // still downgrade candidateStatus to uncertain.
+    const allHundredValues = [
+      ["Label1",       100, 100, 100],
+      ["Label2",       100, 100, 100],
+      ["Base weighted", 200, 300, 400],
+      ["Base effective",160, 250, 350],
+    ];
+    const items = scanWorksheetForTables({ values: allHundredValues, ...OFFSET, settings: { preferredBase: "weighted" } });
+    assert.ok(items.length >= 1, "expected at least one item");
+    // warningsCount must reflect all warnings including advisory ones for display.
+    assert.ok(items[0].warningsCount > 0, "warningsCount must include advisory warnings for display");
+    assert.strictEqual(
+      items[0].candidateStatus,
+      "uncertain",
+      "SUSPICIOUS_ALL_100 must still make candidateStatus uncertain"
+    );
+  });
 });

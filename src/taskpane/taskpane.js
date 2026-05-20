@@ -1684,7 +1684,8 @@ function getInventoryCandidateStatusLabel(candidateStatus) {
 
 function formatInventoryItemLines(item, index) {
   const lines = [];
-  const header = item.title ? `${index}. ${item.title} — ${item.rangeAddress}` : `${index}. ${item.rangeAddress}`;
+  const displayTitle = item.title && !isGeneratedBacklinkRow(item.title) ? item.title : null;
+  const header = displayTitle ? `${index}. ${displayTitle} — ${item.rangeAddress}` : `${index}. ${item.rangeAddress}`;
 
   lines.push(header);
   lines.push(`   ${item.rowCount} строк, ${item.columnCount} колонок.`);

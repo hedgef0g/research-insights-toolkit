@@ -456,6 +456,14 @@ function inferTitle(values, band) {
 // ─── Item builder ─────────────────────────────────────────────────────────────
 
 /**
+ * Issue codes that are informational/advisory and must not affect candidateStatus.
+ *
+ * These codes surface useful information in Check / Full Check / qualityIssueCodes
+ * but should not downgrade an otherwise valid candidate to "uncertain".
+ */
+const ADVISORY_ISSUE_CODES = new Set(["WEIGHTED_BASE_FALLBACK"]);
+
+/**
  * Derives a plain-language candidate status from model quality signals.
  *
  * "available"  — looks like a recognisable table with no blocking issues or
@@ -470,9 +478,9 @@ function inferTitle(values, band) {
  * This replaces the former canRunSignificance flag which implied Run-readiness.
  * The scanner is a candidate finder only; Check Table is the authoritative step.
  */
-function deriveCandidateStatus({ isLikelyTable, hasBlockingIssues, warningCount, labelSplitConfidence }) {
+function deriveCandidateStatus({ isLikelyTable, hasBlockingIssues, availabilityWarningCount, labelSplitConfidence }) {
   if (!isLikelyTable) return "rejected";
-  if (hasBlockingIssues || labelSplitConfidence === "uncertain" || warningCount > 0) return "uncertain";
+  if (hasBlockingIssues || labelSplitConfidence === "uncertain" || availabilityWarningCount > 0) return "uncertain";
   return "available";
 }
 
@@ -484,6 +492,12 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
   // canRunCheckTable: true when the candidate looks table-like enough to pass to
   // Check Table. Does NOT imply the candidate is ready for Run significance.
   const canRunCheckTable = isLikelyTable;
+
+  // Warnings that affect availability: exclude advisory codes (e.g. WEIGHTED_BASE_FALLBACK)
+  // which are informational and must not downgrade an otherwise valid candidate.
+  const availabilityWarningCount = (dataQualityIssues || []).filter(
+    (i) => i.severity === "warning" && !ADVISORY_ISSUE_CODES.has(i.code)
+  ).length;
 
   const candidateNotes = [];
   if (!isLikelyTable) {
@@ -507,7 +521,7 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
   const candidateStatus = deriveCandidateStatus({
     isLikelyTable,
     hasBlockingIssues: qualitySummary.hasBlockingIssues,
-    warningCount: qualitySummary.warningCount,
+    availabilityWarningCount,
     labelSplitConfidence,
   });
 
