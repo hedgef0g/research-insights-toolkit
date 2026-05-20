@@ -608,6 +608,7 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     detectedMetricRows: summary.detectedMetricRows ?? 0,
     detectedBaseRows: summary.baseRows ?? 0,
     detectedBlocks: summary.detectedBlocks ?? 0,
+    hasProportions: summary.hasProportions ?? false,
     hasNps: summary.hasNps ?? false,
     hasMeans: summary.hasMeans ?? false,
     selectedBaseSubtypeLabel,

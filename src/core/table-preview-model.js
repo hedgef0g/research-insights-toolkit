@@ -1434,6 +1434,7 @@ function buildSummary(values, rowDiagnostics, calculationBlocks, bannerStructure
 
   const baseRows = rowDiagnostics.filter((r) => r.rowType === "base").length;
 
+  const hasProportions = calculationBlocks.some((b) => b.metricType === "proportion");
   const hasNps = calculationBlocks.some(
     (b) => b.metricType === "npsStructure" || b.metricType === "npsSpread"
   );
@@ -1449,6 +1450,7 @@ function buildSummary(values, rowDiagnostics, calculationBlocks, bannerStructure
     detectedMetricRows,
     detectedBlocks: calculationBlocks.length,
     baseRows,
+    hasProportions,
     hasNps,
     hasMeans,
     hasBanner,

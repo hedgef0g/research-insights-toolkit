@@ -2517,9 +2517,9 @@ function buildFullCheckCandidateRows(sheetResults) {
   for (const sheetResult of sheetResults) {
     for (const item of sheetResult.items) {
       const metricTypes = [];
-      if (item.hasNps) metricTypes.push("NPS");
+      if (item.hasProportions) metricTypes.push("Пропорции");
       if (item.hasMeans) metricTypes.push("Средние");
-      if (item.isLikelyTable && !item.hasNps && !item.hasMeans) metricTypes.push("Пропорции");
+      if (item.hasNps) metricTypes.push("NPS");
 
       rows.push([
         candidateIndex,

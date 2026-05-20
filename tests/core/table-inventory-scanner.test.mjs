@@ -866,3 +866,88 @@ describe("scanWorksheetForTables — selectedBaseSubtypeLabel field", () => {
     }
   });
 });
+
+// ─── Metric type detection (hasProportions / hasMeans / hasNps) ───────────────
+//
+// Full Check "Metric types" column is derived from these fields.
+// Each type is detected independently; the presence of one must not suppress
+// the others.
+
+describe("scanWorksheetForTables — hasProportions / hasMeans / hasNps fields", () => {
+  it("proportion-only table: hasProportions=true, hasMeans=false, hasNps=false", () => {
+    const values = [
+      ["Agree",    0.4, 0.6],
+      ["Disagree", 0.6, 0.4],
+      ["Base",     100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(item.hasProportions, true, "proportion table must have hasProportions=true");
+    assert.strictEqual(item.hasMeans, false, "proportion table must have hasMeans=false");
+    assert.strictEqual(item.hasNps, false, "proportion table must have hasNps=false");
+  });
+
+  it("means-only table: hasProportions=false, hasMeans=true, hasNps=false", () => {
+    // Mean + Base only; no proportion value rows present.
+    const values = [
+      ["Mean",     3.5, 4.2],
+      ["Variance", 0.8, 0.9],
+      ["Base",     100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(item.hasProportions, false, "means-only table must have hasProportions=false");
+    assert.strictEqual(item.hasMeans, true, "means-only table must have hasMeans=true");
+    assert.strictEqual(item.hasNps, false, "means-only table must have hasNps=false");
+  });
+
+  it("proportions + means table: hasProportions=true and hasMeans=true simultaneously", () => {
+    // Research tables commonly have both proportion value rows and a mean row.
+    // A mean block requires Mean + SD (or Variance) + Base — Mean alone does not form a block.
+    // Both metric types must be detected independently.
+    const values = [
+      ["Agree",    0.4, 0.6],
+      ["Disagree", 0.6, 0.4],
+      ["Mean",     3.5, 4.2],
+      ["SD",       0.8, 0.9],
+      ["Base",     100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(
+      item.hasProportions, true,
+      "mixed proportion+means table must have hasProportions=true"
+    );
+    assert.strictEqual(
+      item.hasMeans, true,
+      "mixed proportion+means table must have hasMeans=true"
+    );
+    assert.strictEqual(item.hasNps, false, "mixed proportion+means table must have hasNps=false");
+  });
+
+  it("proportions + means + NPS table: all three flags are true", () => {
+    // Extended-NPS-style table: proportion rows (Agree/Disagree) + Promoters/Detractors/NPS
+    // + Mean+SD block + Base.
+    // Extended NPS path: Promoters/Detractors are buffered as proportion rows, then NPS
+    // closes them into a proportion block + npsStructure block; Mean+SD+Base follows.
+    const values = [
+      ["Agree",      0.4,  0.6],
+      ["Disagree",   0.6,  0.4],
+      ["Promoters",  0.5,  0.52],
+      ["Detractors", 0.2,  0.19],
+      ["NPS",        0.3,  0.33],
+      ["Mean",       3.5,  4.2],
+      ["SD",         0.8,  0.9],
+      ["Base",       100,  200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(item.hasNps, true,          "NPS table must have hasNps=true");
+    assert.strictEqual(item.hasProportions, true,  "NPS table with Agree/Disagree must have hasProportions=true");
+    assert.strictEqual(item.hasMeans, true,        "NPS table with Mean+SD block must have hasMeans=true");
+  });
+});
