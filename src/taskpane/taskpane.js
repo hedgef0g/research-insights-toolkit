@@ -953,35 +953,57 @@ async function runAutoSignificance() {
     return;
   }
 
-  // Collect eligible candidates: available status, usable range, not on Content sheet.
+  // Partition candidates: eligible to process vs. pre-skipped due to status/range.
+  // The Content sheet is excluded entirely and does not count toward skipped.
   const eligible = [];
+  let skipped = 0;
+  const detailLines = [];
+
   for (const sheetResult of inventoryResults.sheetResults) {
     if (sheetResult.sheetName === INVENTORY_CONTENT_SHEET_NAME) {
       continue;
     }
     for (const item of sheetResult.items) {
       const rangeAddr = item.resolvedRangeAddress || item.rangeAddress;
-      if (item.candidateStatus === "available" && item.canRunCheckTable && rangeAddr) {
+      const label = `- ${sheetResult.sheetName} ${rangeAddr || item.rangeAddress || "?"}`;
+
+      if (!rangeAddr) {
+        skipped++;
+        detailLines.push(`${label}: пропущено — нет диапазона`);
+      } else if (item.candidateStatus === "uncertain") {
+        skipped++;
+        detailLines.push(`${label}: пропущено — кандидат неопределён`);
+      } else if (item.candidateStatus === "rejected") {
+        skipped++;
+        detailLines.push(`${label}: пропущено — не опознан как таблица ResearchSignal`);
+      } else if (item.candidateStatus === "available" && item.canRunCheckTable) {
         eligible.push({
           sheetName: sheetResult.sheetName,
           rangeAddress: rangeAddr,
           title: item.resolvedTitle || (item.title || ""),
         });
+      } else {
+        // Catch-all for unknown future statuses.
+        skipped++;
+        detailLines.push(`${label}: пропущено — статус «${item.candidateStatus || "unknown"}»`);
       }
     }
   }
 
   if (eligible.length === 0) {
-    setStatusMessage(
-      "Автозапуск: нет доступных кандидатов.\nЗапустите «Найти таблицы» перед автозапуском или проверьте статусы кандидатов."
-    );
+    const noEligibleLines = [
+      "Автозапуск: доступных кандидатов не найдено.",
+      'Проверьте статусы таблиц через «Найти таблицы» / «С полной проверкой».',
+    ];
+    if (skipped > 0) {
+      noEligibleLines.push("", `Пропущено: ${skipped}.`, ...detailLines);
+    }
+    setStatusMessage(noEligibleLines.join("\n"));
     return;
   }
 
   let processed = 0;
-  let skipped = 0;
   let errors = 0;
-  const detailLines = [];
 
   for (const candidate of eligible) {
     try {
