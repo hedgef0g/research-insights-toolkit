@@ -543,7 +543,14 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     ? (dataQualityIssues || []).map((i) => ({ code: i.code, severity: i.severity }))
     : [];
 
-  return {
+  // Compact block summary for diagnostics (base row index + subtype per block).
+  const _diagBlocks = calculationBlocks.slice(0, 5).map((b) => ({
+    metricType: b.metricType,
+    baseRowIndex: b.baseRowIndex ?? null,
+    baseSubtype: b.baseSubtype ?? null,
+  }));
+
+  const item = {
     tableId,
     sheetName,
     rangeAddress,
@@ -562,12 +569,39 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     warningsCount: isLikelyTable ? qualitySummary.warningCount : 0,
     criticalCount: isLikelyTable ? qualitySummary.criticalCount : 0,
     qualityIssueCodes,
+    // Diagnostic fields — used by formatInventoryItemLines and console.debug.
+    availabilityWarningCount,
+    hasBlockingIssues: qualitySummary.hasBlockingIssues,
+    _diagBlocks,
     detectedMetricRows: summary.detectedMetricRows ?? 0,
     detectedBaseRows: summary.baseRows ?? 0,
     detectedBlocks: summary.detectedBlocks ?? 0,
     hasNps: summary.hasNps ?? false,
     hasMeans: summary.hasMeans ?? false,
   };
+
+  if (item.candidateStatus === "uncertain") {
+    // TEMPORARY DIAGNOSTIC — remove before final merge.
+    console.debug("[RIT diag] uncertain candidate", {
+      rangeAddress: item.rangeAddress,
+      title: item.title,
+      isLikelyTable: item.isLikelyTable,
+      labelSplitConfidence: item.labelSplitConfidence,
+      labelColCount: item.labelColCount,
+      hasBlockingIssues: item.hasBlockingIssues,
+      availabilityWarningCount: item.availabilityWarningCount,
+      warningsCount: item.warningsCount,
+      criticalCount: item.criticalCount,
+      detectedMetricRows: item.detectedMetricRows,
+      detectedBaseRows: item.detectedBaseRows,
+      detectedBlocks: item.detectedBlocks,
+      qualityIssueCodes: item.qualityIssueCodes,
+      candidateNotes: item.candidateNotes,
+      _diagBlocks: item._diagBlocks,
+    });
+  }
+
+  return item;
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
@@ -635,6 +669,16 @@ export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeCo
       labelSplitConfidence,
       labelColCount,
     });
+
+    // TEMPORARY DIAGNOSTIC — remove before final merge.
+    if (item.candidateStatus === "uncertain") {
+      console.debug("[RIT diag] settings passed to scanner:", {
+        smallBaseThreshold: settings?.smallBaseThreshold,
+        preferredBase: settings?.preferredBase,
+        hasSettings: settings != null,
+      });
+    }
+
     items.push(item);
   }
 

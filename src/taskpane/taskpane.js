@@ -1707,6 +1707,20 @@ function formatInventoryItemLines(item, index) {
     lines.push(`   [${item.candidateNotes.join("; ")}]`);
   }
 
+  // TEMPORARY DIAGNOSTIC — remove before final merge.
+  if (item.candidateStatus === "uncertain") {
+    lines.push(`   DIAG: labelSplit=${item.labelSplitConfidence} labelColCount=${item.labelColCount}`);
+    lines.push(`   DIAG: isLikelyTable=${item.isLikelyTable} metricRows=${item.detectedMetricRows} baseRows=${item.detectedBaseRows} blocks=${item.detectedBlocks}`);
+    lines.push(`   DIAG: hasBlockingIssues=${item.hasBlockingIssues} availabilityWarnings=${item.availabilityWarningCount} allWarnings=${item.warningsCount} criticals=${item.criticalCount}`);
+    const codes = (item.qualityIssueCodes || []).map((e) => `${e.code}(${e.severity})`).join(", ") || "none";
+    lines.push(`   DIAG: issueCodes=[${codes}]`);
+    if (item._diagBlocks && item._diagBlocks.length > 0) {
+      const blockSummary = item._diagBlocks.map((b) => `${b.metricType}@base${b.baseRowIndex}(${b.baseSubtype ?? "plain"})`).join(", ");
+      lines.push(`   DIAG: blocks=[${blockSummary}]`);
+    }
+    lines.push(`   DIAG: title="${item.title ?? ""}" resolvedTitle="${item.resolvedTitle ?? ""}" backlinkState=${item.backlinkState ?? "n/a"}`);
+  }
+
   return lines;
 }
 
