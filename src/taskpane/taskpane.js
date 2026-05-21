@@ -398,6 +398,17 @@ Office.onReady((info) => {
   if (clearAllTablesButton) {
     clearAllTablesButton.addEventListener("click", clearAutoSignificance);
   }
+
+  const runSheetTablesButton = document.getElementById("run-sheet-tables");
+  const clearSheetTablesButton = document.getElementById("clear-sheet-tables");
+
+  if (runSheetTablesButton) {
+    runSheetTablesButton.addEventListener("click", runCurrentSheetSignificance);
+  }
+
+  if (clearSheetTablesButton) {
+    clearSheetTablesButton.addEventListener("click", clearCurrentSheetSignificance);
+  }
 });
 
 
@@ -1259,6 +1270,211 @@ async function clearAutoSignificance() {
 }
 
 /**
+ * Current-sheet run: processes all "available" inventory candidates on the
+ * active worksheet only.
+ *
+ * Mirrors runAutoSignificance() but scans only the active sheet via
+ * collectActiveSheetInventoryResults(). Content sheet is silently ignored.
+ * Settings validation is identical to runAutoSignificance().
+ */
+async function runCurrentSheetSignificance() {
+  const calculationSettings = readCalculationSettingsFromPanel();
+
+  if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
+    setStatusMessage(
+      // eslint-disable-next-line quotes
+      'Режим "Сравнение с предыдущей колонкой" несовместим с режимом "Сравнивать только с Тотал".'
+    );
+    return;
+  }
+
+  if (
+    calculationSettings.excludeTotalFromComparisons &&
+    !calculationSettings.firstColumnIsTotal &&
+    !calculationSettings.respectBannerStructure
+  ) {
+    setStatusMessage(
+      'Для режима "Не сравнивать с Тотал" нужно указать расположение Тотала. Сейчас поддерживается вариант "Первая колонка — Тотал" или режим "Учитывать структуру баннера".'
+    );
+    return;
+  }
+
+  if (
+    calculationSettings.compareOnlyWithTotal &&
+    !calculationSettings.firstColumnIsTotal &&
+    !calculationSettings.respectBannerStructure
+  ) {
+    setStatusMessage(
+      'Для режима "Сравнивать только с Тотал" нужно указать расположение Тотала. Сейчас поддерживается вариант "Первая колонка — Тотал" или режим "Учитывать структуру баннера".'
+    );
+    return;
+  }
+
+  if (
+    calculationSettings.compareWithPreviousColumn &&
+    calculationSettings.fillOnlyTotalComparisons
+  ) {
+    setStatusMessage(
+      'Режим "Сравнение с предыдущей колонкой" несовместим с настройкой "Заливка только для Тотала".'
+    );
+    return;
+  }
+
+  let inventoryResults;
+  try {
+    await Excel.run(async (context) => {
+      inventoryResults = await collectActiveSheetInventoryResults(context, calculationSettings);
+      normalizeBacklinkItems(inventoryResults.sheetResults, false);
+    });
+  } catch (err) {
+    setStatusMessage(`Лист — запуск: ошибка при сканировании листа — ${err.message || err}`);
+    return;
+  }
+
+  const { eligible, skipped: preSkipped } = filterWorkbookCandidates(inventoryResults, {
+    contentSheetName: INVENTORY_CONTENT_SHEET_NAME,
+  });
+  let skipped = preSkipped.length;
+  const detailLines = preSkipped.map(formatSkippedCandidateDetail);
+
+  if (eligible.length === 0) {
+    const noEligibleLines = [
+      "Лист — запуск: доступных кандидатов не найдено.",
+      'Проверьте статусы таблиц через «Найти таблицы» / «С полной проверкой».',
+    ];
+    if (skipped > 0) {
+      noEligibleLines.push("", `Пропущено: ${skipped}.`, ...detailLines);
+    }
+    setStatusMessage(noEligibleLines.join("\n"));
+    return;
+  }
+
+  let processed = 0;
+  let errors = 0;
+
+  for (const candidate of eligible) {
+    try {
+      const result = await runSignificanceForRange(
+        candidate.sheetName,
+        candidate.rangeAddress,
+        calculationSettings
+      );
+
+      if (result.status === "processed") {
+        processed++;
+      } else if (result.status === "skipped" || result.status === "blocked") {
+        skipped++;
+        detailLines.push(
+          `- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
+        );
+      } else {
+        errors++;
+        detailLines.push(
+          `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+        );
+      }
+    } catch (err) {
+      errors++;
+      detailLines.push(
+        `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
+      );
+    }
+  }
+
+  const summaryLines = [
+    "Лист — запуск завершён.",
+    `Обработано таблиц: ${processed}.`,
+    `Пропущено: ${skipped}.`,
+    `Ошибок: ${errors}.`,
+  ];
+
+  if (detailLines.length > 0) {
+    summaryLines.push("", ...detailLines);
+  }
+
+  setStatusMessage(summaryLines.join("\n"));
+}
+
+/**
+ * Current-sheet clear: removes significance markers from all "available"
+ * inventory candidates on the active worksheet only.
+ *
+ * Mirrors clearAutoSignificance() but scans only the active sheet via
+ * collectActiveSheetInventoryResults(). Content sheet is silently ignored.
+ */
+async function clearCurrentSheetSignificance() {
+  let inventoryResults;
+  try {
+    await Excel.run(async (context) => {
+      inventoryResults = await collectActiveSheetInventoryResults(context, readCalculationSettingsFromPanel());
+      normalizeBacklinkItems(inventoryResults.sheetResults, false);
+    });
+  } catch (err) {
+    setStatusMessage(`Лист — очистка: ошибка при сканировании листа — ${err.message || err}`);
+    return;
+  }
+
+  const { eligible, skipped: preSkipped } = filterWorkbookCandidates(inventoryResults, {
+    contentSheetName: INVENTORY_CONTENT_SHEET_NAME,
+  });
+  let skipped = preSkipped.length;
+  const detailLines = preSkipped.map(formatSkippedCandidateDetail);
+
+  if (eligible.length === 0) {
+    const noEligibleLines = [
+      "Лист — очистка: доступных кандидатов не найдено.",
+      'Проверьте статусы таблиц через «Найти таблицы» / «С полной проверкой».',
+    ];
+    if (skipped > 0) {
+      noEligibleLines.push("", `Пропущено: ${skipped}.`, ...detailLines);
+    }
+    setStatusMessage(noEligibleLines.join("\n"));
+    return;
+  }
+
+  let cleared = 0;
+  let errors = 0;
+
+  for (const candidate of eligible) {
+    try {
+      const result = await clearSignificanceForRange(candidate.sheetName, candidate.rangeAddress);
+
+      if (result.status === "cleared") {
+        cleared++;
+      } else if (result.status === "skipped") {
+        skipped++;
+        detailLines.push(
+          `- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
+        );
+      } else {
+        errors++;
+        detailLines.push(
+          `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+        );
+      }
+    } catch (err) {
+      errors++;
+      detailLines.push(
+        `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
+      );
+    }
+  }
+
+  const summaryLines = [
+    "Лист — очистка завершена.",
+    `Очищено таблиц: ${cleared}.`,
+    `Пропущено: ${skipped}.`,
+    `Ошибок: ${errors}.`,
+  ];
+
+  if (detailLines.length > 0) {
+    summaryLines.push("", ...detailLines);
+  }
+
+  setStatusMessage(summaryLines.join("\n"));
+}
+
+/**
  * Calculates one detected metric block.
  *
  * PURPOSE:
@@ -2041,6 +2257,80 @@ async function collectWorkbookInventoryResults(context, settings) {
     sheetResults,
     skippedSheets,
   };
+}
+
+/**
+ * Collects inventory results for the active worksheet only.
+ *
+ * Mirrors collectWorkbookInventoryResults() but scans only the active sheet,
+ * returning the same { scannedSheets, sheetResults, skippedSheets } shape so
+ * that filterWorkbookCandidates() and normalizeBacklinkItems() work unchanged.
+ */
+async function collectActiveSheetInventoryResults(context, settings) {
+  const worksheet = context.workbook.worksheets.getActiveWorksheet();
+  worksheet.load("name");
+
+  await context.sync();
+
+  if (worksheet.name === INVENTORY_CONTENT_SHEET_NAME) {
+    return { scannedSheets: 0, sheetResults: [], skippedSheets: [] };
+  }
+
+  const usedRange = worksheet.getUsedRangeOrNullObject();
+  usedRange.load(["isNullObject", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+
+  await context.sync();
+
+  if (usedRange.isNullObject) {
+    return {
+      scannedSheets: 0,
+      sheetResults: [],
+      skippedSheets: [{ sheetName: worksheet.name, reason: "empty" }],
+    };
+  }
+
+  const cellCount = usedRange.rowCount * usedRange.columnCount;
+  if (cellCount > SCAN_CELL_LIMIT) {
+    return {
+      scannedSheets: 0,
+      sheetResults: [],
+      skippedSheets: [
+        {
+          sheetName: worksheet.name,
+          reason: "tooLarge",
+          rowCount: usedRange.rowCount,
+          columnCount: usedRange.columnCount,
+          cellCount,
+        },
+      ],
+    };
+  }
+
+  usedRange.load("values");
+
+  await context.sync();
+
+  const items = scanWorksheetForTables({
+    values: usedRange.values,
+    usedRangeRowOffset: usedRange.rowIndex,
+    usedRangeColOffset: usedRange.columnIndex,
+    sheetName: worksheet.name,
+    settings,
+  });
+
+  const sheetResults = items.length > 0
+    ? [
+        {
+          sheetName: worksheet.name,
+          usedRangeRowOffset: usedRange.rowIndex,
+          usedRangeColOffset: usedRange.columnIndex,
+          usedRangeValues: usedRange.values,
+          items,
+        },
+      ]
+    : [];
+
+  return { scannedSheets: 1, sheetResults, skippedSheets: [] };
 }
 
 function buildInventoryContentCandidateRows(sheetResults) {
