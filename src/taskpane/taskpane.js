@@ -991,6 +991,23 @@ function runReportMetricTypes(item) {
   return parts.join(", ");
 }
 
+/**
+ * Builds a compact warning-detail string from scanner-side item metadata.
+ * Uses qualityIssueCodes (code identifiers) and candidateNotes (human-readable).
+ * Returns an empty string when there is nothing to report.
+ */
+function runReportWarningDetails(item) {
+  if (!item) return "";
+  const parts = [];
+  if (item.qualityIssueCodes && item.qualityIssueCodes.length > 0) {
+    parts.push(item.qualityIssueCodes.map((q) => q.code).join(", "));
+  }
+  if (item.candidateNotes && item.candidateNotes.length > 0) {
+    parts.push(...item.candidateNotes);
+  }
+  return parts.join("; ");
+}
+
 const RUN_REPORT_COLUMNS = [
   "Лист",
   "Таблица",
@@ -1001,6 +1018,7 @@ const RUN_REPORT_COLUMNS = [
   "Типы метрик",
   "Предупреждений",
   "Критических",
+  "Детали",
   "Блоков обработано",
 ];
 
@@ -1053,6 +1071,7 @@ function writeRunReportContent(worksheet, reportRows, runLabel) {
       r.metricTypes,
       r.warnings,
       r.critical,
+      r.warningDetails,
       r.blocksProcessed,
     ]),
     colCount
@@ -1088,8 +1107,8 @@ function writeRunReportContent(worksheet, reportRows, runLabel) {
   tableRange.format.borders.getItem("InsideHorizontal").style = "Continuous";
   tableRange.format.borders.getItem("InsideVertical").style = "Continuous";
 
-  // Column widths: Sheet, Title, Range, Status, Message, Base, Metrics, Warn, Critical, Blocks
-  [100, 160, 100, 85, 200, 120, 100, 75, 75, 85].forEach((width, i) => {
+  // Column widths: Sheet, Title, Range, Status, Message, Base, Metrics, Warn, Critical, Details, Blocks
+  [100, 160, 100, 85, 200, 120, 100, 75, 75, 200, 85].forEach((width, i) => {
     worksheet.getRangeByIndexes(0, i, 1, 1).format.columnWidth = width;
   });
 
@@ -1101,6 +1120,28 @@ function writeRunReportContent(worksheet, reportRows, runLabel) {
 /**
  * Creates or updates the Run report sheet, writes report rows, moves the sheet
  * to the last position, and returns the worksheet object.
+ *
+ * Placement uses a two-tier strategy:
+ *
+ * Tier 1 — direct position assignment.
+ *   Content writes and position assignment are in separate sync batches so the
+ *   heavy write batch does not interfere with the position batch. After the
+ *   assignment a verification pass re-reads the actual server-side position.
+ *   If the sheet is already last, we return early.
+ *
+ * Tier 2 — copy / delete / rename fallback.
+ *   Setting worksheet.position on an existing sheet is silently ignored by
+ *   some Office.js host builds (confirmed in smoke testing). When Tier 1
+ *   verification shows the sheet is still not last, we fall back to:
+ *     1. Load the worksheets collection to find the actual current last sheet.
+ *     2. worksheet.copy("After", lastSheet) — places a copy at the true end.
+ *     3. copy.activate() — make the copy active before deleting the original,
+ *        to avoid the "cannot delete the active/only sheet" host error.
+ *     4. worksheet.delete() — remove the original (now-not-active) sheet.
+ *     5. copy.name = RUN_REPORT_SHEET_NAME — restore the canonical name.
+ *   The copy operation is layout-level only; all content was already written
+ *   to the original sheet before Tier 1 was attempted, and the copy carries
+ *   that content forward.
  */
 async function writeRunReportSheet(context, reportRows, runLabel) {
   const worksheet = await ensureRunReportWorksheet(context);
@@ -1116,13 +1157,65 @@ async function writeRunReportSheet(context, reportRows, runLabel) {
 
   writeRunReportContent(worksheet, reportRows, runLabel);
 
-  // Move to last position
+  // Tier 1 — flush content writes first, then attempt direct position assignment.
+  // Keeping these in separate batches prevents the heavy write operations from
+  // interfering with the position mutation on the server side.
+  await context.sync();
+
   const worksheets = context.workbook.worksheets;
   worksheets.load("count");
   await context.sync();
   worksheet.position = worksheets.count - 1;
+  await context.sync();
 
-  return worksheet;
+  // Verification: reload the sheet's actual position from the host.
+  worksheet.load("position");
+  worksheets.load("count");
+  await context.sync();
+
+  if (worksheet.position === worksheets.count - 1) {
+    return worksheet; // Tier 1 succeeded — sheet is already last.
+  }
+
+  // Tier 2 — copy/delete/rename fallback.
+  // Direct position assignment did not take effect; use Worksheet.copy() to
+  // physically place the sheet at the end of the tab bar.
+
+  // Reload worksheet items in tab order to find the current last sheet.
+  worksheets.load("items/name");
+  await context.sync();
+
+  const allSheets = worksheets.items; // Ordered by tab position (0-based).
+  let lastSheet = null;
+  for (let i = allSheets.length - 1; i >= 0; i--) {
+    if (allSheets[i].name !== RUN_REPORT_SHEET_NAME) {
+      lastSheet = allSheets[i];
+      break;
+    }
+  }
+
+  if (lastSheet === null) {
+    // The Run report is the only sheet; it is trivially last.
+    return worksheet;
+  }
+
+  // Copy the sheet to immediately after lastSheet (the true last position).
+  // The copy receives a temporary system name, e.g. "Run report (2)".
+  const copy = worksheet.copy("After", lastSheet);
+
+  // Activate the copy before deleting the original to satisfy the host
+  // constraint that the active sheet cannot be deleted.
+  copy.activate();
+  await context.sync();
+
+  // Remove the original (now not-active) sheet and rename the copy.
+  worksheet.delete();
+  await context.sync();
+
+  copy.name = RUN_REPORT_SHEET_NAME;
+  await context.sync();
+
+  return copy;
 }
 
 /**
@@ -1216,6 +1309,7 @@ async function runAutoSignificance() {
       metricTypes: runReportMetricTypes(item),
       warnings: item ? (item.warningsCount ?? "") : "",
       critical: item ? (item.criticalCount ?? "") : "",
+      warningDetails: runReportWarningDetails(item),
       blocksProcessed: "",
     };
   });
@@ -1283,6 +1377,7 @@ async function runAutoSignificance() {
         metricTypes: runReportMetricTypes(item),
         warnings: item ? (item.warningsCount ?? "") : "",
         critical: item ? (item.criticalCount ?? "") : "",
+        warningDetails: runReportWarningDetails(item),
         blocksProcessed: result.blocksProcessed != null ? result.blocksProcessed : "",
       });
     } catch (err) {
@@ -1301,6 +1396,7 @@ async function runAutoSignificance() {
         metricTypes: runReportMetricTypes(item),
         warnings: item ? (item.warningsCount ?? "") : "",
         critical: item ? (item.criticalCount ?? "") : "",
+        warningDetails: runReportWarningDetails(item),
         blocksProcessed: "",
       });
     }
@@ -1622,6 +1718,7 @@ async function runCurrentSheetSignificance() {
       metricTypes: runReportMetricTypes(item),
       warnings: item ? (item.warningsCount ?? "") : "",
       critical: item ? (item.criticalCount ?? "") : "",
+      warningDetails: runReportWarningDetails(item),
       blocksProcessed: "",
     };
   });
@@ -1689,6 +1786,7 @@ async function runCurrentSheetSignificance() {
         metricTypes: runReportMetricTypes(item),
         warnings: item ? (item.warningsCount ?? "") : "",
         critical: item ? (item.criticalCount ?? "") : "",
+        warningDetails: runReportWarningDetails(item),
         blocksProcessed: result.blocksProcessed != null ? result.blocksProcessed : "",
       });
     } catch (err) {
@@ -1707,6 +1805,7 @@ async function runCurrentSheetSignificance() {
         metricTypes: runReportMetricTypes(item),
         warnings: item ? (item.warningsCount ?? "") : "",
         critical: item ? (item.criticalCount ?? "") : "",
+        warningDetails: runReportWarningDetails(item),
         blocksProcessed: "",
       });
     }
