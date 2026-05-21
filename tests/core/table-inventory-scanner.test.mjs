@@ -653,3 +653,342 @@ describe("scanWorksheetForTables", () => {
     assert.strictEqual(item.hasNps, true, "NPS table should have hasNps=true");
   });
 });
+
+// ─── preferredBase threading through inventory scanner ───────────────────────
+//
+// Observable: WEIGHTED_BASE_FALLBACK appears in qualityIssueCodes when weighted
+// base is selected (either by preference or auto fallback when only weighted is
+// available). It is absent when a non-weighted base is chosen.
+//
+// Table: effective + weighted bases available.
+
+describe("scanWorksheetForTables — preferredBase setting threading", () => {
+  const values = [
+    ["Agree",          0.4, 0.6],
+    ["Disagree",       0.6, 0.4],
+    ["Base weighted",  200, 300],
+    ["Base effective", 160, 250],
+  ];
+
+  it("no settings (omitted): auto picks effective — no WEIGHTED_BASE_FALLBACK", () => {
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.ok(
+      !items[0].qualityIssueCodes.some((e) => e.code === "WEIGHTED_BASE_FALLBACK"),
+      "auto should pick effective, not weighted"
+    );
+  });
+
+  it("settings.preferredBase=auto: same as omitted — no WEIGHTED_BASE_FALLBACK", () => {
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: { preferredBase: "auto" } });
+    assert.strictEqual(items.length, 1);
+    assert.ok(
+      !items[0].qualityIssueCodes.some((e) => e.code === "WEIGHTED_BASE_FALLBACK"),
+      "auto should pick effective, not weighted"
+    );
+  });
+
+  it("settings.preferredBase=weighted: weighted base selected — WEIGHTED_BASE_FALLBACK present", () => {
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: { preferredBase: "weighted" } });
+    assert.strictEqual(items.length, 1);
+    assert.ok(
+      items[0].qualityIssueCodes.some((e) => e.code === "WEIGHTED_BASE_FALLBACK"),
+      "WEIGHTED_BASE_FALLBACK should be present when weighted base is preferred"
+    );
+  });
+
+  it("preferredBase=weighted: WEIGHTED_BASE_FALLBACK must not make candidateStatus uncertain", () => {
+    // A table that is otherwise clean (valid base values, confident label split)
+    // must remain 'available' even when WEIGHTED_BASE_FALLBACK is emitted.
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: { preferredBase: "weighted" } });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(
+      items[0].candidateStatus,
+      "available",
+      `WEIGHTED_BASE_FALLBACK is advisory and must not downgrade candidateStatus; got ${items[0].candidateStatus}`
+    );
+  });
+
+  it("real availability-affecting warning (SUSPICIOUS_ALL_100) still makes candidate uncertain", () => {
+    // All-100 rows trigger SUSPICIOUS_ALL_100 — a non-advisory warning that should
+    // still downgrade candidateStatus to uncertain.
+    const allHundredValues = [
+      ["Label1",       100, 100, 100],
+      ["Label2",       100, 100, 100],
+      ["Base weighted", 200, 300, 400],
+      ["Base effective",160, 250, 350],
+    ];
+    const items = scanWorksheetForTables({ values: allHundredValues, ...OFFSET, settings: { preferredBase: "weighted" } });
+    assert.ok(items.length >= 1, "expected at least one item");
+    // warningsCount must reflect all warnings including advisory ones for display.
+    assert.ok(items[0].warningsCount > 0, "warningsCount must include advisory warnings for display");
+    assert.strictEqual(
+      items[0].candidateStatus,
+      "uncertain",
+      "SUSPICIOUS_ALL_100 must still make candidateStatus uncertain"
+    );
+  });
+});
+
+// ─── Advisory vs availability-affecting warning codes ────────────────────────
+
+describe("scanWorksheetForTables — advisory issue codes do not affect candidateStatus", () => {
+  it("BASE_BELOW_THRESHOLD: stays in qualityIssueCodes but candidateStatus remains available", () => {
+    // Base values all < 50 → BASE_BELOW_THRESHOLD fires when threshold = 50.
+    // It must be visible in qualityIssueCodes but must not downgrade status.
+    const values = [
+      ["Agree",    0.4, 0.6, 0.5],
+      ["Disagree", 0.6, 0.4, 0.5],
+      ["Base",      30,  35,  40],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: { smallBaseThreshold: 50 } });
+    assert.strictEqual(items.length, 1);
+    assert.ok(
+      items[0].qualityIssueCodes.some((e) => e.code === "BASE_BELOW_THRESHOLD"),
+      "BASE_BELOW_THRESHOLD must be present in qualityIssueCodes"
+    );
+    assert.ok(items[0].warningsCount > 0, "warningsCount must count advisory warnings for display");
+    assert.strictEqual(
+      items[0].candidateStatus,
+      "available",
+      `BASE_BELOW_THRESHOLD is advisory and must not downgrade candidateStatus; got ${items[0].candidateStatus}`
+    );
+  });
+
+  it("BASE_BLANK_VALUES: is NOT advisory and still makes candidateStatus uncertain", () => {
+    // A base row with blank cells → BASE_BLANK_VALUES is a real data-quality warning
+    // that genuinely signals the table may not calculate significance correctly.
+    const values = [
+      ["Agree",    0.4,  0.6, 0.5],
+      ["Disagree", 0.6,  0.4, 0.5],
+      ["Base",     100, null, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.ok(
+      items[0].qualityIssueCodes.some((e) => e.code === "BASE_BLANK_VALUES"),
+      "BASE_BLANK_VALUES must be present in qualityIssueCodes"
+    );
+    assert.strictEqual(
+      items[0].candidateStatus,
+      "uncertain",
+      "BASE_BLANK_VALUES must still downgrade candidateStatus to uncertain"
+    );
+  });
+});
+
+// ─── selectedBaseSubtypeLabel field ──────────────────────────────────────────
+
+describe("scanWorksheetForTables — selectedBaseSubtypeLabel field", () => {
+  it("plain 'Base' row → selectedBaseSubtypeLabel is 'Base'", () => {
+    const values = [
+      ["Agree",    0.4, 0.6],
+      ["Disagree", 0.6, 0.4],
+      ["Base",     100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].selectedBaseSubtypeLabel, "Base");
+  });
+
+  it("'Base effective' row → selectedBaseSubtypeLabel is 'Effective Base'", () => {
+    const values = [
+      ["Agree",          0.4, 0.6],
+      ["Disagree",       0.6, 0.4],
+      ["Base effective", 100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].selectedBaseSubtypeLabel, "Effective Base");
+  });
+
+  it("'Base unweighted' row → selectedBaseSubtypeLabel is 'Unweighted Base'", () => {
+    const values = [
+      ["Agree",           0.4, 0.6],
+      ["Disagree",        0.6, 0.4],
+      ["Base unweighted", 100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].selectedBaseSubtypeLabel, "Unweighted Base");
+  });
+
+  it("'Base weighted' row → selectedBaseSubtypeLabel is 'Weighted Base'", () => {
+    const values = [
+      ["Agree",         0.4, 0.6],
+      ["Disagree",      0.6, 0.4],
+      ["Base weighted", 100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].selectedBaseSubtypeLabel, "Weighted Base");
+  });
+
+  it("preferredBase=effective with effective+weighted available → 'Effective Base'", () => {
+    const values = [
+      ["Agree",          0.4, 0.6],
+      ["Disagree",       0.6, 0.4],
+      ["Base weighted",  200, 300],
+      ["Base effective", 160, 250],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: { preferredBase: "effective" } });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].selectedBaseSubtypeLabel, "Effective Base");
+  });
+
+  it("preferredBase=weighted with effective+weighted available → 'Weighted Base'", () => {
+    const values = [
+      ["Agree",          0.4, 0.6],
+      ["Disagree",       0.6, 0.4],
+      ["Base weighted",  200, 300],
+      ["Base effective", 160, 250],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: { preferredBase: "weighted" } });
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].selectedBaseSubtypeLabel, "Weighted Base");
+  });
+
+  it("no calculation blocks (proportion rows only, no base) → selectedBaseSubtypeLabel is ''", () => {
+    // Without a base row no blocks can be formed so the label must be empty.
+    const values = [
+      ["Agree",    0.4, 0.6],
+      ["Disagree", 0.6, 0.4],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    // No base row — scanner may or may not produce a candidate, but if it does
+    // selectedBaseSubtypeLabel must be empty string.
+    for (const item of items) {
+      assert.strictEqual(
+        item.selectedBaseSubtypeLabel,
+        "",
+        "no-base table must have empty selectedBaseSubtypeLabel"
+      );
+    }
+  });
+});
+
+// ─── Metric type detection (hasProportions / hasMeans / hasNps) ───────────────
+//
+// Full Check "Metric types" column is derived from these fields.
+// Each type is detected independently; the presence of one must not suppress
+// the others.
+
+describe("scanWorksheetForTables — hasProportions / hasMeans / hasNps fields", () => {
+  it("proportion-only table: hasProportions=true, hasMeans=false, hasNps=false", () => {
+    const values = [
+      ["Agree",    0.4, 0.6],
+      ["Disagree", 0.6, 0.4],
+      ["Base",     100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(item.hasProportions, true, "proportion table must have hasProportions=true");
+    assert.strictEqual(item.hasMeans, false, "proportion table must have hasMeans=false");
+    assert.strictEqual(item.hasNps, false, "proportion table must have hasNps=false");
+  });
+
+  it("means-only table: hasProportions=false, hasMeans=true, hasNps=false", () => {
+    // Mean + Base only; no proportion value rows present.
+    const values = [
+      ["Mean",     3.5, 4.2],
+      ["Variance", 0.8, 0.9],
+      ["Base",     100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(item.hasProportions, false, "means-only table must have hasProportions=false");
+    assert.strictEqual(item.hasMeans, true, "means-only table must have hasMeans=true");
+    assert.strictEqual(item.hasNps, false, "means-only table must have hasNps=false");
+  });
+
+  it("proportions + means table: hasProportions=true and hasMeans=true simultaneously", () => {
+    // Research tables commonly have both proportion value rows and a mean row.
+    // A mean block requires Mean + SD (or Variance) + Base — Mean alone does not form a block.
+    // Both metric types must be detected independently.
+    const values = [
+      ["Agree",    0.4, 0.6],
+      ["Disagree", 0.6, 0.4],
+      ["Mean",     3.5, 4.2],
+      ["SD",       0.8, 0.9],
+      ["Base",     100, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(
+      item.hasProportions, true,
+      "mixed proportion+means table must have hasProportions=true"
+    );
+    assert.strictEqual(
+      item.hasMeans, true,
+      "mixed proportion+means table must have hasMeans=true"
+    );
+    assert.strictEqual(item.hasNps, false, "mixed proportion+means table must have hasNps=false");
+  });
+
+  it("proportions + means + NPS table: all three flags are true", () => {
+    // Extended-NPS-style table: proportion rows (Agree/Disagree) + Promoters/Detractors/NPS
+    // + Mean+SD block + Base.
+    // Extended NPS path: Promoters/Detractors are buffered as proportion rows, then NPS
+    // closes them into a proportion block + npsStructure block; Mean+SD+Base follows.
+    const values = [
+      ["Agree",      0.4,  0.6],
+      ["Disagree",   0.6,  0.4],
+      ["Promoters",  0.5,  0.52],
+      ["Detractors", 0.2,  0.19],
+      ["NPS",        0.3,  0.33],
+      ["Mean",       3.5,  4.2],
+      ["SD",         0.8,  0.9],
+      ["Base",       100,  200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(item.hasNps, true,          "NPS table must have hasNps=true");
+    assert.strictEqual(item.hasProportions, true,  "NPS table with Agree/Disagree must have hasProportions=true");
+    assert.strictEqual(item.hasMeans, true,        "NPS table with Mean+SD block must have hasMeans=true");
+  });
+
+  it("proportion rowType labels without base → hasProportions=true from rowDiagnostics (no block)", () => {
+    // Rows labeled "Share", "Percent", "Доля" get rowType 'proportion' from the dictionary.
+    // Without a base row no proportion block forms, so calculationBlocks is empty.
+    // hasProportions must still be true because rowDiagnostics carries the detected type.
+    // Note: "50%" would NOT match — the "%" keyword is length 1 and only matched exactly.
+    // "Share"/"Percent"/"Доля" are length > 3 and matched via substring, so they do match.
+    const values = [
+      ["Share",   0.4, 0.6],
+      ["Percent", 0.6, 0.4],
+      ["Доля",    0.5, 0.5],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(
+      item.hasProportions, true,
+      "proportion-rowType rows without base must yield hasProportions=true via rowDiagnostics"
+    );
+    assert.strictEqual(item.hasMeans, false, "no mean rows present");
+    assert.strictEqual(item.hasNps,   false, "no NPS rows present");
+  });
+
+  it("Promoters + Detractors without NPS or base → hasProportions=true from rowDiagnostics", () => {
+    // Promoters/Detractors have specific rowTypes in the dictionary.
+    // Without NPS and without a base row, no blocks form in calculationBlocks.
+    // hasProportions must still be true from rowDiagnostics.
+    const values = [
+      ["Promoters",  0.5, 0.52],
+      ["Detractors", 0.2, 0.19],
+      ["Passives",   0.3, 0.29],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.strictEqual(
+      item.hasProportions, true,
+      "Promoters/Detractors rows without NPS must yield hasProportions=true via rowDiagnostics"
+    );
+    assert.strictEqual(item.hasNps, false, "no NPS row present");
+  });
+});

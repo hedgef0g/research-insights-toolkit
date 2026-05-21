@@ -455,6 +455,38 @@ function inferTitle(values, band) {
 
 // ─── Item builder ─────────────────────────────────────────────────────────────
 
+// ─── Base subtype helpers ─────────────────────────────────────────────────────
+
+/**
+ * Maps a raw baseSubtype value to a human-readable display label.
+ *
+ *   "effective"  → "Effective Base"
+ *   "unweighted" → "Unweighted Base"
+ *   "weighted"   → "Weighted Base"
+ *   undefined / null / anything else → "Base"
+ */
+function baseSubtypeToLabel(subtype) {
+  if (subtype === "effective") return "Effective Base";
+  if (subtype === "unweighted") return "Unweighted Base";
+  if (subtype === "weighted") return "Weighted Base";
+  return "Base";
+}
+
+/**
+ * Issue codes that are informational/advisory and must not affect candidateStatus.
+ *
+ * These codes surface useful information in Check / Full Check / qualityIssueCodes
+ * but should not downgrade an otherwise valid candidate to "uncertain".
+ */
+const ADVISORY_ISSUE_CODES = new Set([
+  "WEIGHTED_BASE_FALLBACK",
+  // BASE_BELOW_THRESHOLD reflects a runtime/data characteristic (small sample)
+  // that does not indicate a table-structure problem.  It must remain visible
+  // in qualityIssueCodes / Check / Full Check but must not downgrade an
+  // otherwise valid candidate to "uncertain".
+  "BASE_BELOW_THRESHOLD",
+]);
+
 /**
  * Derives a plain-language candidate status from model quality signals.
  *
@@ -470,9 +502,9 @@ function inferTitle(values, band) {
  * This replaces the former canRunSignificance flag which implied Run-readiness.
  * The scanner is a candidate finder only; Check Table is the authoritative step.
  */
-function deriveCandidateStatus({ isLikelyTable, hasBlockingIssues, warningCount, labelSplitConfidence }) {
+function deriveCandidateStatus({ isLikelyTable, hasBlockingIssues, availabilityWarningCount, labelSplitConfidence }) {
   if (!isLikelyTable) return "rejected";
-  if (hasBlockingIssues || labelSplitConfidence === "uncertain" || warningCount > 0) return "uncertain";
+  if (hasBlockingIssues || labelSplitConfidence === "uncertain" || availabilityWarningCount > 0) return "uncertain";
   return "available";
 }
 
@@ -484,6 +516,12 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
   // canRunCheckTable: true when the candidate looks table-like enough to pass to
   // Check Table. Does NOT imply the candidate is ready for Run significance.
   const canRunCheckTable = isLikelyTable;
+
+  // Warnings that affect availability: exclude advisory codes (e.g. WEIGHTED_BASE_FALLBACK)
+  // which are informational and must not downgrade an otherwise valid candidate.
+  const availabilityWarningCount = (dataQualityIssues || []).filter(
+    (i) => i.severity === "warning" && !ADVISORY_ISSUE_CODES.has(i.code)
+  ).length;
 
   const candidateNotes = [];
   if (!isLikelyTable) {
@@ -507,9 +545,26 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
   const candidateStatus = deriveCandidateStatus({
     isLikelyTable,
     hasBlockingIssues: qualitySummary.hasBlockingIssues,
-    warningCount: qualitySummary.warningCount,
+    availabilityWarningCount,
     labelSplitConfidence,
   });
+
+  // Derive the selected base subtype label from calculationBlocks.
+  // Collects the unique human-readable base type labels across all blocks that
+  // have a base row, then joins them (multiple distinct subtypes are rare but
+  // possible when a table has both proportion and mean blocks with different bases).
+  const seenSubtypeLabels = [];
+  const seenSubtypeSet = new Set();
+  for (const block of calculationBlocks || []) {
+    if (block.baseRowIndex != null) {
+      const label = baseSubtypeToLabel(block.baseSubtype);
+      if (!seenSubtypeSet.has(label)) {
+        seenSubtypeSet.add(label);
+        seenSubtypeLabels.push(label);
+      }
+    }
+  }
+  const selectedBaseSubtypeLabel = seenSubtypeLabels.length > 0 ? seenSubtypeLabels.join(", ") : "";
 
   let previewSummary = "";
   if (isLikelyTable) {
@@ -548,11 +603,15 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     warningsCount: isLikelyTable ? qualitySummary.warningCount : 0,
     criticalCount: isLikelyTable ? qualitySummary.criticalCount : 0,
     qualityIssueCodes,
+    availabilityWarningCount,
+    hasBlockingIssues: qualitySummary.hasBlockingIssues,
     detectedMetricRows: summary.detectedMetricRows ?? 0,
     detectedBaseRows: summary.baseRows ?? 0,
     detectedBlocks: summary.detectedBlocks ?? 0,
+    hasProportions: summary.hasProportions ?? false,
     hasNps: summary.hasNps ?? false,
     hasMeans: summary.hasMeans ?? false,
+    selectedBaseSubtypeLabel,
   };
 }
 
@@ -568,7 +627,7 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
  * @param {string} input.sheetName          - worksheet name
  * @returns {Array} TableInventoryItem[]
  */
-export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeColOffset, sheetName }) {
+export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeColOffset, sheetName, settings }) {
   if (!Array.isArray(values) || values.length === 0 || !values[0]) {
     return [];
   }
@@ -600,7 +659,7 @@ export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeCo
 
     if (!dataCols.length || !dataCols[0] || dataCols[0].length < 1) continue;
 
-    const model = buildTablePreviewModel({ values: dataCols, leftLabelValues: labelCols });
+    const model = buildTablePreviewModel({ values: dataCols, leftLabelValues: labelCols, settings });
 
     // Range address always covers the full original band (title row included).
     const absRowStart = band.localStartRow + usedRangeRowOffset;
@@ -621,6 +680,7 @@ export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeCo
       labelSplitConfidence,
       labelColCount,
     });
+
     items.push(item);
   }
 

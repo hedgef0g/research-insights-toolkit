@@ -76,6 +76,7 @@ describe("buildTablePreviewModel - normalized full-table regression coverage", (
       detectedMetricRows: 1,
       detectedBlocks: 1,
       baseRows: 1,
+      hasProportions: true,
       hasNps: false,
       hasMeans: false,
       hasBanner: false,

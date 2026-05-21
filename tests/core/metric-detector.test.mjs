@@ -13,6 +13,12 @@ function detectBlocks(values, labels) {
   return buildCalculationBlocks(detectionResult);
 }
 
+function detectBlocksWithPreference(values, labels, preferredBase) {
+  const leftLabelValues = labels.map((label) => [label]);
+  const detectionResult = detectMetricRowsFromLeftLabels(values, leftLabelValues);
+  return buildCalculationBlocks(detectionResult, { preferredBase });
+}
+
 // ─── Suffix base-subtype label detection ──────────────────────────────────────
 
 describe("classifyMetricLabel — suffix base-subtype patterns", () => {
@@ -210,5 +216,88 @@ describe("buildCalculationBlocks - explicit base requirement", () => {
     );
 
     assert.deepStrictEqual(blocks, []);
+  });
+});
+
+// ─── preferredBase option ────────────────────────────────────────────────────
+//
+// Table used across most cases:
+//   Agree / Disagree / Weighted Base / Base / Unweighted Base / Effective Base
+
+const ALL_BASE_TYPES_VALUES = [
+  [0.4, 0.6], [0.6, 0.4],
+  [200, 300], [180, 280], [170, 260], [160, 250],
+];
+const ALL_BASE_TYPES_LABELS = [
+  "Agree", "Disagree",
+  "Base weighted", "Base", "Base unweighted", "Base effective",
+];
+
+describe("buildCalculationBlocks — preferredBase option", () => {
+  it("auto: selects effective base (highest priority) when all types present", () => {
+    const blocks = detectBlocksWithPreference(ALL_BASE_TYPES_VALUES, ALL_BASE_TYPES_LABELS, "auto");
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].baseSubtype, "effective");
+    assert.strictEqual(blocks[0].baseRowIndex, 5);
+  });
+
+  it("no option (omitted): auto priority unchanged — selects effective base", () => {
+    const blocks = detectBlocks(ALL_BASE_TYPES_VALUES, ALL_BASE_TYPES_LABELS);
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].baseSubtype, "effective");
+    assert.strictEqual(blocks[0].baseRowIndex, 5);
+  });
+
+  it("prefer effective: selects effective base", () => {
+    const blocks = detectBlocksWithPreference(ALL_BASE_TYPES_VALUES, ALL_BASE_TYPES_LABELS, "effective");
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].baseSubtype, "effective");
+    assert.strictEqual(blocks[0].baseRowIndex, 5);
+  });
+
+  it("prefer unweighted: selects unweighted base", () => {
+    const blocks = detectBlocksWithPreference(ALL_BASE_TYPES_VALUES, ALL_BASE_TYPES_LABELS, "unweighted");
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].baseSubtype, "unweighted");
+    assert.strictEqual(blocks[0].baseRowIndex, 4);
+  });
+
+  it("prefer plain: selects plain Base (no baseSubtype)", () => {
+    const blocks = detectBlocksWithPreference(ALL_BASE_TYPES_VALUES, ALL_BASE_TYPES_LABELS, "plain");
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].baseSubtype, undefined);
+    assert.strictEqual(blocks[0].baseRowIndex, 3);
+  });
+
+  it("prefer weighted: selects weighted base", () => {
+    const blocks = detectBlocksWithPreference(ALL_BASE_TYPES_VALUES, ALL_BASE_TYPES_LABELS, "weighted");
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].baseSubtype, "weighted");
+    assert.strictEqual(blocks[0].baseRowIndex, 2);
+  });
+
+  it("prefer effective but only weighted and unweighted available: falls back to auto (unweighted)", () => {
+    const values = [[0.4, 0.6], [0.6, 0.4], [200, 300], [180, 280]];
+    const labels = ["Agree", "Disagree", "Base weighted", "Base unweighted"];
+    const blocks = detectBlocksWithPreference(values, labels, "effective");
+    assert.strictEqual(blocks.length, 1);
+    // Auto priority among weighted and unweighted picks unweighted (priority 1 < 3).
+    assert.strictEqual(blocks[0].baseSubtype, "unweighted");
+  });
+
+  it("prefer plain but only weighted and effective available: falls back to auto (effective)", () => {
+    const values = [[0.4, 0.6], [200, 300], [160, 250]];
+    const labels = ["Agree", "Base weighted", "Base effective"];
+    const blocks = detectBlocksWithPreference(values, labels, "plain");
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].baseSubtype, "effective");
+  });
+
+  it("prefer weighted but only plain Base available: falls back to auto (plain)", () => {
+    const values = [[0.4, 0.6], [0.6, 0.4], [100, 200]];
+    const labels = ["Agree", "Disagree", "Base"];
+    const blocks = detectBlocksWithPreference(values, labels, "weighted");
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].baseSubtype, undefined);
   });
 });

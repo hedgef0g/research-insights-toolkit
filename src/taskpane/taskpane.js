@@ -82,6 +82,7 @@ const INVENTORY_FULL_CHECK_COLUMNS = [
   "Metric rows",
   "Base rows",
   "Blocks",
+  "Selected base",
   "Metric types",
   "Warnings",
   "Critical",
@@ -226,6 +227,8 @@ const SETTINGS_CONTROL_CONFIG = [
   { id: "small-base-threshold", type: "number", settingName: "smallBaseThreshold" },
   { id: "small-base-fill-color", type: "value", settingName: "smallBaseFillColor" },
 
+  { id: "preferred-base", type: "value", settingName: "preferredBase" },
+
   { id: "settings-storage-mode", type: "value", settingName: "settingsStorageMode" },
 ];
 
@@ -257,6 +260,8 @@ const DEFAULT_CALCULATION_SETTINGS = {
   excludeSmallBasesFromComparisons: false,
   smallBaseThreshold: 50,
   smallBaseFillColor: "#D0D0D0",
+
+  preferredBase: "auto",
 
   settingsStorageMode: "none",
 };
@@ -318,6 +323,9 @@ const SETTINGS_TOOLTIPS = {
 
   "small-base-fill-color":
     "Цвет заливки для колонок с маленькой базой. Эта заливка имеет самый высокий приоритет и перекрывает остальные типы заливки.",
+
+  "preferred-base":
+    "Выберите тип базы для расчёта значимости. «Авто» использует приоритет: Effective → Unweighted → Base → Weighted. Если выбранный тип базы не найден в таблице, используется автоматический приоритет.",
 
   "settings-storage-mode":
     "Выберите, сохранять ли настройки панели. Локальное сохранение работает только на этом устройстве и в этом браузере/Excel WebView.",
@@ -529,7 +537,7 @@ async function runSignificanceFromSelection() {
       leftLabelValues
     ); // Row type diagnostics based on left-side labels.
 
-    const calculationBlocks = buildCalculationBlocks(detectionResult); // List of metric blocks to calculate.
+    const calculationBlocks = buildCalculationBlocks(detectionResult, { preferredBase: calculationSettings.preferredBase }); // List of metric blocks to calculate.
 
     if (!calculationBlocks || calculationBlocks.length === 0) {
       setStatusMessage(
@@ -780,7 +788,7 @@ async function runSignificanceForRange(sheetName, rangeAddress, calculationSetti
     await context.sync();
 
     const detectionResult = detectMetricRowsFromLeftLabels(valuesForCalculation, leftLabelValues);
-    const calculationBlocks = buildCalculationBlocks(detectionResult);
+    const calculationBlocks = buildCalculationBlocks(detectionResult, { preferredBase: calculationSettings.preferredBase });
 
     if (!calculationBlocks || calculationBlocks.length === 0) {
       return { status: "skipped", message: "нет блоков расчёта", rangeAddress };
@@ -944,7 +952,7 @@ async function runAutoSignificance() {
   let inventoryResults;
   try {
     await Excel.run(async (context) => {
-      inventoryResults = await collectWorkbookInventoryResults(context);
+      inventoryResults = await collectWorkbookInventoryResults(context, calculationSettings);
       // Normalize without inserting backlinks — only needed for resolvedRangeAddress.
       normalizeBacklinkItems(inventoryResults.sheetResults, false);
     });
@@ -1677,13 +1685,24 @@ function getInventoryCandidateStatusLabel(candidateStatus) {
 
 function formatInventoryItemLines(item, index) {
   const lines = [];
-  const header = item.title ? `${index}. ${item.title} — ${item.rangeAddress}` : `${index}. ${item.rangeAddress}`;
+  // Prefer resolvedTitle (set after backlink normalization) over raw title.
+  // Fall back to raw title only if it is not a generated backlink marker.
+  const displayTitle =
+    item.resolvedTitle ||
+    (item.title && !isGeneratedBacklinkRow(item.title) ? item.title : null);
+  // Prefer resolvedRangeAddress (adjusted for any inserted backlink rows).
+  const displayRange = item.resolvedRangeAddress || item.rangeAddress;
+  const header = displayTitle ? `${index}. ${displayTitle} — ${displayRange}` : `${index}. ${displayRange}`;
 
   lines.push(header);
   lines.push(`   ${item.rowCount} строк, ${item.columnCount} колонок.`);
 
   if (item.previewSummary) {
     lines.push(`   ${item.previewSummary}.`);
+  }
+
+  if (item.selectedBaseSubtypeLabel) {
+    lines.push(`   База: ${item.selectedBaseSubtypeLabel}.`);
   }
 
   const warnParts = [];
@@ -1753,7 +1772,7 @@ function formatWorkbookInventoryMessage({ scannedSheets, sheetResults, skippedSh
   return lines.join("\n").trimEnd();
 }
 
-async function collectWorkbookInventoryResults(context) {
+async function collectWorkbookInventoryResults(context, settings) {
   const worksheets = context.workbook.worksheets;
   worksheets.load("items/name");
 
@@ -1810,6 +1829,7 @@ async function collectWorkbookInventoryResults(context) {
         usedRangeRowOffset: usedRange.rowIndex,
         usedRangeColOffset: usedRange.columnIndex,
         sheetName: worksheet.name,
+        settings,
       }),
     }))
     .filter((sheetResult) => sheetResult.items.length > 0);
@@ -2497,9 +2517,9 @@ function buildFullCheckCandidateRows(sheetResults) {
   for (const sheetResult of sheetResults) {
     for (const item of sheetResult.items) {
       const metricTypes = [];
-      if (item.hasNps) metricTypes.push("NPS");
+      if (item.hasProportions) metricTypes.push("Пропорции");
       if (item.hasMeans) metricTypes.push("Средние");
-      if (item.isLikelyTable && !item.hasNps && !item.hasMeans) metricTypes.push("Пропорции");
+      if (item.hasNps) metricTypes.push("NPS");
 
       rows.push([
         candidateIndex,
@@ -2513,6 +2533,7 @@ function buildFullCheckCandidateRows(sheetResults) {
         item.detectedMetricRows ?? "",
         item.detectedBaseRows ?? "",
         item.detectedBlocks ?? "",
+        item.selectedBaseSubtypeLabel || "",
         metricTypes.join(", "),
         item.warningsCount ?? 0,
         item.criticalCount ?? 0,
@@ -2595,7 +2616,7 @@ function writeFullCheckContent(worksheet, inventoryResults) {
   tableRange.format.borders.getItem("InsideHorizontal").style = "Continuous";
   tableRange.format.borders.getItem("InsideVertical").style = "Continuous";
 
-  const columnWidths = [42, 100, 160, 92, 200, 160, 50, 60, 72, 72, 50, 110, 72, 72, 200, 170, 85, 70];
+  const columnWidths = [42, 100, 160, 92, 200, 160, 50, 60, 72, 72, 50, 130, 110, 72, 72, 200, 170, 85, 70];
   columnWidths.forEach((width, index) => {
     worksheet.getRangeByIndexes(0, index, 1, 1).format.columnWidth = width;
   });
@@ -2646,7 +2667,7 @@ async function writeInventoryContentSheet(context, inventoryResults) {
 
 async function runTableInventory() {
   await Excel.run(async (context) => {
-    const inventoryResults = await collectWorkbookInventoryResults(context);
+    const inventoryResults = await collectWorkbookInventoryResults(context, readCalculationSettingsFromPanel());
     const addBacklinks = readBacklinkSettingFromPanel();
     const contentMode = readContentOutputModeFromPanel();
 
@@ -3121,6 +3142,8 @@ function readCalculationSettingsFromPanel() {
     smallBaseThreshold: smallBaseThresholdElement ? Number(smallBaseThresholdElement.value) : 50,
 
     smallBaseFillColor: getInputValue("small-base-fill-color", "#d0d0d0"),
+
+    preferredBase: getInputValue("preferred-base", "auto"),
 
     settingsStorageMode: getInputValue("settings-storage-mode", "none"),
   };
