@@ -36,6 +36,8 @@ import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core
 
 import { normalizeSelectedRange } from "../core/range-normalizer";
 
+import { filterWorkbookCandidates, BATCH_SKIP_REASONS } from "../core/batch-candidate-filter";
+
 import {
   interpretSelectedRange,
   loadLabelValuesForSelectedRange,
@@ -900,6 +902,26 @@ async function runSignificanceForRange(sheetName, rangeAddress, calculationSetti
 }
 
 /**
+ * Formats a pre-execution skipped candidate entry into a Russian-language
+ * detail line for the status panel. Used by runAutoSignificance and
+ * clearAutoSignificance when building their skipped-candidate summaries.
+ */
+function formatSkippedCandidateDetail({ sheetName, rangeAddress, reason, status }) {
+  const addr = rangeAddress || "?";
+  const label = `- ${sheetName} ${addr}`;
+  switch (reason) {
+    case BATCH_SKIP_REASONS.MISSING_RANGE:
+      return `${label}: пропущено — нет диапазона`;
+    case BATCH_SKIP_REASONS.CANDIDATE_UNCERTAIN:
+      return `${label}: пропущено — кандидат неопределён`;
+    case BATCH_SKIP_REASONS.CANDIDATE_REJECTED:
+      return `${label}: пропущено — не опознан как таблица ResearchSignal`;
+    default:
+      return `${label}: пропущено — статус «${status || "unknown"}»`;
+  }
+}
+
+/**
  * Auto-runner: processes all "available" inventory candidates in the workbook.
  *
  * Collects the workbook inventory, filters to candidates with
@@ -967,41 +989,12 @@ async function runAutoSignificance() {
   }
 
   // Partition candidates: eligible to process vs. pre-skipped due to status/range.
-  // The Content sheet is excluded entirely and does not count toward skipped.
-  const eligible = [];
-  let skipped = 0;
-  const detailLines = [];
-
-  for (const sheetResult of inventoryResults.sheetResults) {
-    if (sheetResult.sheetName === INVENTORY_CONTENT_SHEET_NAME) {
-      continue;
-    }
-    for (const item of sheetResult.items) {
-      const rangeAddr = item.resolvedRangeAddress || item.rangeAddress;
-      const label = `- ${sheetResult.sheetName} ${rangeAddr || item.rangeAddress || "?"}`;
-
-      if (!rangeAddr) {
-        skipped++;
-        detailLines.push(`${label}: пропущено — нет диапазона`);
-      } else if (item.candidateStatus === "uncertain") {
-        skipped++;
-        detailLines.push(`${label}: пропущено — кандидат неопределён`);
-      } else if (item.candidateStatus === "rejected") {
-        skipped++;
-        detailLines.push(`${label}: пропущено — не опознан как таблица ResearchSignal`);
-      } else if (item.candidateStatus === "available" && item.canRunCheckTable) {
-        eligible.push({
-          sheetName: sheetResult.sheetName,
-          rangeAddress: rangeAddr,
-          title: item.resolvedTitle || (item.title || ""),
-        });
-      } else {
-        // Catch-all for unknown future statuses.
-        skipped++;
-        detailLines.push(`${label}: пропущено — статус «${item.candidateStatus || "unknown"}»`);
-      }
-    }
-  }
+  // Content sheet is excluded entirely (not counted toward skipped).
+  const { eligible, skipped: preSkipped } = filterWorkbookCandidates(inventoryResults, {
+    contentSheetName: INVENTORY_CONTENT_SHEET_NAME,
+  });
+  let skipped = preSkipped.length;
+  const detailLines = preSkipped.map(formatSkippedCandidateDetail);
 
   if (eligible.length === 0) {
     const noEligibleLines = [
@@ -1205,35 +1198,11 @@ async function clearAutoSignificance() {
     return;
   }
 
-  const eligible = [];
-  let skipped = 0;
-  const detailLines = [];
-
-  for (const sheetResult of inventoryResults.sheetResults) {
-    if (sheetResult.sheetName === INVENTORY_CONTENT_SHEET_NAME) {
-      continue;
-    }
-    for (const item of sheetResult.items) {
-      const rangeAddr = item.resolvedRangeAddress || item.rangeAddress;
-      const label = `- ${sheetResult.sheetName} ${rangeAddr || item.rangeAddress || "?"}`;
-
-      if (!rangeAddr) {
-        skipped++;
-        detailLines.push(`${label}: пропущено — нет диапазона`);
-      } else if (item.candidateStatus === "uncertain") {
-        skipped++;
-        detailLines.push(`${label}: пропущено — кандидат неопределён`);
-      } else if (item.candidateStatus === "rejected") {
-        skipped++;
-        detailLines.push(`${label}: пропущено — не опознан как таблица ResearchSignal`);
-      } else if (item.candidateStatus === "available" && item.canRunCheckTable) {
-        eligible.push({ sheetName: sheetResult.sheetName, rangeAddress: rangeAddr });
-      } else {
-        skipped++;
-        detailLines.push(`${label}: пропущено — статус «${item.candidateStatus || "unknown"}»`);
-      }
-    }
-  }
+  const { eligible, skipped: preSkipped } = filterWorkbookCandidates(inventoryResults, {
+    contentSheetName: INVENTORY_CONTENT_SHEET_NAME,
+  });
+  let skipped = preSkipped.length;
+  const detailLines = preSkipped.map(formatSkippedCandidateDetail);
 
   if (eligible.length === 0) {
     const noEligibleLines = [
