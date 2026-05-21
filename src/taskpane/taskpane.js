@@ -409,6 +409,12 @@ Office.onReady((info) => {
   if (clearSheetTablesButton) {
     clearSheetTablesButton.addEventListener("click", clearCurrentSheetSignificance);
   }
+
+  const checkSheetTablesButton = document.getElementById("check-sheet-tables");
+
+  if (checkSheetTablesButton) {
+    checkSheetTablesButton.addEventListener("click", runCurrentSheetCheck);
+  }
 });
 
 
@@ -1472,6 +1478,242 @@ async function clearCurrentSheetSignificance() {
   }
 
   setStatusMessage(summaryLines.join("\n"));
+}
+
+/**
+ * Read-only check for a single detected candidate range.
+ *
+ * Loads the named range from the given sheet, runs the full interpretation +
+ * preview-model pipeline, and returns a structured result. Does NOT write
+ * anything back to Excel.
+ *
+ * @param {string} sheetName
+ * @param {string} rangeAddress
+ * @param {object} calculationSettings
+ * @returns {Promise<{ status: "checked"|"blocked"|"skipped", model?: object, message?: string }>}
+ */
+async function checkTableForRange(sheetName, rangeAddress, calculationSettings) {
+  return await Excel.run(async (context) => {
+    const worksheet = context.workbook.worksheets.getItem(sheetName);
+    const sourceRange = worksheet.getRange(rangeAddress);
+
+    sourceRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+
+    await context.sync();
+
+    const selectedValues = sourceRange.values;
+    const selectedText = sourceRange.text;
+
+    if (
+      !selectedValues ||
+      selectedValues.length < 1 ||
+      !selectedValues[0] ||
+      selectedValues[0].length < 1
+    ) {
+      return { status: "skipped", message: "нет данных в диапазоне" };
+    }
+
+    const interpretation = await interpretSelectedRange(
+      context,
+      sourceRange,
+      selectedValues,
+      selectedText,
+      calculationSettings
+    );
+
+    if (interpretation.state === "blocked") {
+      const codes =
+        interpretation.blockingReasons && interpretation.blockingReasons.length > 0
+          ? ` [${interpretation.blockingReasons.join(", ")}]`
+          : "";
+      return { status: "blocked", message: `${interpretation.blockingMessage}${codes}` };
+    }
+
+    const { valuesForCalculation, leftLabelValues, bannerContext, normalized } = interpretation;
+
+    const modelInput = {
+      values: valuesForCalculation,
+      leftLabelValues,
+      bannerContext,
+      settings: calculationSettings,
+      trailingBodyRows: normalized?.trailingBodyRows,
+    };
+
+    const model = buildTablePreviewModel(modelInput);
+    return { status: "checked", model };
+  });
+}
+
+/**
+ * Current-sheet check: reports all detected inventory candidates on the
+ * active worksheet only.
+ *
+ * Mirrors runCheckTable() for the single-range case but iterates over all
+ * inventory candidates on the active sheet. For available candidates it runs
+ * the full read-only check pipeline (interpretation + preview model). For
+ * uncertain, rejected, and missing-range candidates it records the status
+ * without attempting execution. Nothing is written to Excel.
+ *
+ * Content sheet is silently ignored (consistent with current-sheet Run/Clear).
+ * Output goes to the existing check panel so wording clearly states it covers
+ * the active sheet only.
+ */
+async function runCurrentSheetCheck() {
+  const calculationSettings = readCalculationSettingsFromPanel();
+
+  let inventoryResults;
+  let activeSheetName = "";
+
+  try {
+    await Excel.run(async (context) => {
+      inventoryResults = await collectActiveSheetInventoryResults(context, calculationSettings);
+      normalizeBacklinkItems(inventoryResults.sheetResults, false);
+    });
+  } catch (err) {
+    setCheckMessage(
+      `Лист — проверка: ошибка при сканировании листа — ${err.message || err}`
+    );
+    return;
+  }
+
+  // Determine the active sheet name for display.
+  if (inventoryResults.sheetResults.length > 0) {
+    activeSheetName = inventoryResults.sheetResults[0].sheetName;
+  } else if (inventoryResults.skippedSheets && inventoryResults.skippedSheets.length > 0) {
+    activeSheetName = inventoryResults.skippedSheets[0].sheetName;
+  }
+
+  // Handle empty / too-large active sheet (no candidates found).
+  if (inventoryResults.sheetResults.length === 0) {
+    const skipped = inventoryResults.skippedSheets || [];
+    if (skipped.length > 0 && skipped[0].reason === "empty") {
+      setCheckMessage(
+        `Лист — проверка (только активный лист): лист «${activeSheetName || "?"}» пустой.`
+      );
+    } else if (skipped.length > 0 && skipped[0].reason === "tooLarge") {
+      setCheckMessage(
+        `Лист — проверка (только активный лист): лист «${activeSheetName || "?"}» слишком большой для сканирования.`
+      );
+    } else if (inventoryResults.scannedSheets === 0 && activeSheetName === "") {
+      // Active sheet is the Content sheet — silently ignored.
+      setCheckMessage(
+        "Лист — проверка (только активный лист): активный лист является сгенерированным листом и пропущен."
+      );
+    } else {
+      setCheckMessage(
+        `Лист — проверка (только активный лист): на листе «${activeSheetName || "?"}» кандидатов не найдено.`
+      );
+    }
+    return;
+  }
+
+  const sheetResult = inventoryResults.sheetResults[0];
+  activeSheetName = sheetResult.sheetName;
+  const allItems = sheetResult.items;
+
+  let availableCount = 0;
+  let uncertainCount = 0;
+  let rejectedCount = 0;
+  let missingCount = 0;
+
+  const candidateLines = [];
+
+  for (let i = 0; i < allItems.length; i++) {
+    const item = allItems[i];
+    const rangeAddr = item.resolvedRangeAddress || item.rangeAddress || null;
+    const displayTitle =
+      item.resolvedTitle ||
+      (item.title && !isGeneratedBacklinkRow(item.title) ? item.title : null);
+    const header = displayTitle
+      ? `${i + 1}. ${displayTitle} — ${rangeAddr || "?"}`
+      : `${i + 1}. ${rangeAddr || "?"}`;
+
+    candidateLines.push("");
+    candidateLines.push(header);
+
+    if (!rangeAddr) {
+      missingCount++;
+      candidateLines.push("   Пропущено — нет диапазона.");
+      continue;
+    }
+
+    if (item.candidateStatus === "rejected") {
+      rejectedCount++;
+      candidateLines.push("   Отклонён — не опознан как таблица ResearchSignal.");
+      if (item.previewSummary) candidateLines.push(`   ${item.previewSummary}.`);
+      if (item.candidateNotes && item.candidateNotes.length > 0) {
+        candidateLines.push(`   [${item.candidateNotes.join("; ")}]`);
+      }
+      continue;
+    }
+
+    if (item.candidateStatus === "uncertain") {
+      uncertainCount++;
+      candidateLines.push("   Неопределён — граница данных неоднозначна.");
+      if (item.previewSummary) candidateLines.push(`   ${item.previewSummary}.`);
+      if (item.candidateNotes && item.candidateNotes.length > 0) {
+        candidateLines.push(`   [${item.candidateNotes.join("; ")}]`);
+      }
+      continue;
+    }
+
+    if (item.candidateStatus === "available") {
+      availableCount++;
+
+      try {
+        const checkResult = await checkTableForRange(
+          activeSheetName,
+          rangeAddr,
+          calculationSettings
+        );
+
+        if (checkResult.status === "checked") {
+          const { summary, qualitySummary } = checkResult.model;
+          candidateLines.push("   Доступен.");
+          candidateLines.push(
+            `   ${item.rowCount ?? summary.rowCount} строк, ${item.columnCount ?? ""} колонок.` +
+              ` Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}.`
+          );
+          const warnParts = [];
+          if (qualitySummary.criticalCount > 0)
+            warnParts.push(`Критических: ${qualitySummary.criticalCount}`);
+          if (qualitySummary.warningCount > 0)
+            warnParts.push(`Предупреждений: ${qualitySummary.warningCount}`);
+          if (warnParts.length > 0) candidateLines.push(`   ${warnParts.join(". ")}.`);
+        } else if (checkResult.status === "blocked") {
+          candidateLines.push(`   Доступен — проверка заблокирована: ${checkResult.message}`);
+        } else {
+          candidateLines.push(
+            `   Доступен — проверка пропущена: ${checkResult.message || "неизвестная причина"}`
+          );
+        }
+      } catch (err) {
+        candidateLines.push(
+          `   Доступен — ошибка при проверке: ${err.message || "неизвестная ошибка"}`
+        );
+      }
+
+      if (item.previewSummary) candidateLines.push(`   ${item.previewSummary}.`);
+      if (item.candidateNotes && item.candidateNotes.length > 0) {
+        candidateLines.push(`   [${item.candidateNotes.join("; ")}]`);
+      }
+    } else {
+      // Unknown / future status — report without attempting check.
+      missingCount++;
+      candidateLines.push(`   Пропущено — статус «${item.candidateStatus || "unknown"}».`);
+    }
+  }
+
+  const summaryLines = [
+    `Лист — проверка (только активный лист): «${activeSheetName}».`,
+    `Кандидатов: ${allItems.length}. Доступно: ${availableCount}. Неопределённых: ${uncertainCount}. Отклонено: ${rejectedCount}. Пропущено: ${missingCount}.`,
+  ];
+
+  summaryLines.push(...candidateLines);
+  summaryLines.push("");
+  summaryLines.push("Данные не изменены.");
+
+  setCheckMessage(summaryLines.join("\n"));
 }
 
 /**
