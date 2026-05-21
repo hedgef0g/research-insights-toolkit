@@ -362,6 +362,7 @@ Office.onReady((info) => {
   const checkTableButton = document.getElementById("check-table"); // Read-only table check button.
   const findTablesButton = document.getElementById("find-tables"); // Table inventory button.
   const runAllTablesButton = document.getElementById("run-all-tables"); // Auto-runner button.
+  const clearAllTablesButton = document.getElementById("clear-all-tables"); // Auto-clear button.
 
   initializeSettingsPanel();
   loadSavedSettingsIntoPanel();
@@ -390,6 +391,10 @@ Office.onReady((info) => {
 
   if (runAllTablesButton) {
     runAllTablesButton.addEventListener("click", runAutoSignificance);
+  }
+
+  if (clearAllTablesButton) {
+    clearAllTablesButton.addEventListener("click", clearAutoSignificance);
   }
 });
 
@@ -1045,6 +1050,234 @@ async function runAutoSignificance() {
   const summaryLines = [
     "Автозапуск завершён.",
     `Обработано таблиц: ${processed}.`,
+    `Пропущено: ${skipped}.`,
+    `Ошибок: ${errors}.`,
+  ];
+
+  if (detailLines.length > 0) {
+    summaryLines.push("", ...detailLines);
+  }
+
+  setStatusMessage(summaryLines.join("\n"));
+}
+
+/**
+ * Clears significance markers for a single named range on a named sheet.
+ *
+ * Mirrors the clear path of clearSignificanceFromSelection() without touching
+ * the Excel selection UI state. Returns a compact result object so the caller
+ * can aggregate per-table outcomes.
+ *
+ * Returns { status, message }.
+ * status: "cleared" | "skipped" | "error"
+ */
+async function clearSignificanceForRange(sheetName, rangeAddress) {
+  return await Excel.run(async (context) => {
+    const worksheet = context.workbook.worksheets.getItem(sheetName);
+    const sourceRange = worksheet.getRange(rangeAddress);
+
+    sourceRange.load(["values", "text"]);
+
+    await context.sync();
+
+    const selectedValues = sourceRange.values;
+    const selectedText = sourceRange.text;
+
+    if (!selectedValues || selectedValues.length < 1 || !selectedValues[0] || selectedValues[0].length < 1) {
+      return { status: "skipped", message: "нет данных в диапазоне" };
+    }
+
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
+    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
+
+    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+      const codes =
+        normalized.blockingReasons && normalized.blockingReasons.length > 0
+          ? ` [${normalized.blockingReasons.join(", ")}]`
+          : "";
+      return { status: "skipped", message: `${normalized.blockingMessage}${codes}` };
+    }
+
+    let clearTargetRange;
+
+    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
+      const bodyRowCount = normalized.valuesForCalculation.length;
+      let bodyColCount = normalized.valuesForCalculation[0].length;
+      let effectiveClearColOffset = normalized.dataColOffset;
+
+      const clearLeadingEmptyCols = detectLeadingEmptyColumns(normalized.textForCalculation);
+      if (clearLeadingEmptyCols > 0) {
+        bodyColCount -= clearLeadingEmptyCols;
+        effectiveClearColOffset += clearLeadingEmptyCols;
+      }
+
+      if (bodyRowCount < 1 || bodyColCount < 1) {
+        return { status: "skipped", message: "нет данных после нормализации" };
+      }
+
+      clearTargetRange = sourceRange
+        .getCell(normalized.dataRowOffset, effectiveClearColOffset)
+        .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
+    } else {
+      const leadingBlankColsForClear = detectLeadingEmptyColumns(selectedText);
+
+      if (leadingBlankColsForClear > 0) {
+        clearTargetRange = sourceRange
+          .getCell(0, leadingBlankColsForClear)
+          .getResizedRange(
+            sourceRange.rowCount - 1,
+            sourceRange.columnCount - leadingBlankColsForClear - 1
+          );
+      } else {
+        clearTargetRange = sourceRange;
+      }
+    }
+
+    clearTargetRange.load(["values", "numberFormat", "rowCount", "columnCount"]);
+
+    await context.sync();
+
+    const targetValues = clearTargetRange.values;
+    const targetNumberFormats = clearTargetRange.numberFormat;
+
+    const nextValues = [];
+    const nextNumberFormats = [];
+
+    for (let rowIndex = 0; rowIndex < targetValues.length; rowIndex++) {
+      const valueRow = [];
+      const formatRow = [];
+
+      for (let columnIndex = 0; columnIndex < targetValues[rowIndex].length; columnIndex++) {
+        const rawValue = targetValues[rowIndex][columnIndex];
+
+        if (typeof rawValue === "number") {
+          valueRow.push(rawValue);
+          formatRow.push(targetNumberFormats[rowIndex][columnIndex]);
+          continue;
+        }
+
+        const cleanedText = removeSignificanceMarkersFromText(rawValue);
+        const resolved = resolveNumericOutput(cleanedText);
+
+        if (resolved !== null) {
+          valueRow.push(resolved.value);
+          formatRow.push(resolved.format);
+        } else {
+          valueRow.push(cleanedText);
+          formatRow.push("@");
+        }
+      }
+
+      nextValues.push(valueRow);
+      nextNumberFormats.push(formatRow);
+    }
+
+    clearTargetRange.numberFormat = nextNumberFormats;
+    clearTargetRange.values = nextValues;
+
+    clearTargetRange.format.font.bold = false;
+    clearTargetRange.format.fill.clear();
+
+    await context.sync();
+
+    await clearBannerMarkersAboveRange(context, clearTargetRange);
+
+    return { status: "cleared", message: "очищено" };
+  });
+}
+
+/**
+ * Auto-clear: removes significance markers from all "available" inventory
+ * candidates in the workbook.
+ *
+ * Mirrors runAutoSignificance() but calls clearSignificanceForRange() instead
+ * of running the significance pipeline.
+ */
+async function clearAutoSignificance() {
+  let inventoryResults;
+  try {
+    await Excel.run(async (context) => {
+      inventoryResults = await collectWorkbookInventoryResults(context, readCalculationSettingsFromPanel());
+      normalizeBacklinkItems(inventoryResults.sheetResults, false);
+    });
+  } catch (err) {
+    setStatusMessage(`Автоочистка: ошибка при сканировании книги — ${err.message || err}`);
+    return;
+  }
+
+  const eligible = [];
+  let skipped = 0;
+  const detailLines = [];
+
+  for (const sheetResult of inventoryResults.sheetResults) {
+    if (sheetResult.sheetName === INVENTORY_CONTENT_SHEET_NAME) {
+      continue;
+    }
+    for (const item of sheetResult.items) {
+      const rangeAddr = item.resolvedRangeAddress || item.rangeAddress;
+      const label = `- ${sheetResult.sheetName} ${rangeAddr || item.rangeAddress || "?"}`;
+
+      if (!rangeAddr) {
+        skipped++;
+        detailLines.push(`${label}: пропущено — нет диапазона`);
+      } else if (item.candidateStatus === "uncertain") {
+        skipped++;
+        detailLines.push(`${label}: пропущено — кандидат неопределён`);
+      } else if (item.candidateStatus === "rejected") {
+        skipped++;
+        detailLines.push(`${label}: пропущено — не опознан как таблица ResearchSignal`);
+      } else if (item.candidateStatus === "available" && item.canRunCheckTable) {
+        eligible.push({ sheetName: sheetResult.sheetName, rangeAddress: rangeAddr });
+      } else {
+        skipped++;
+        detailLines.push(`${label}: пропущено — статус «${item.candidateStatus || "unknown"}»`);
+      }
+    }
+  }
+
+  if (eligible.length === 0) {
+    const noEligibleLines = [
+      "Автоочистка: доступных кандидатов не найдено.",
+      'Проверьте статусы таблиц через «Найти таблицы» / «С полной проверкой».',
+    ];
+    if (skipped > 0) {
+      noEligibleLines.push("", `Пропущено: ${skipped}.`, ...detailLines);
+    }
+    setStatusMessage(noEligibleLines.join("\n"));
+    return;
+  }
+
+  let cleared = 0;
+  let errors = 0;
+
+  for (const candidate of eligible) {
+    try {
+      const result = await clearSignificanceForRange(candidate.sheetName, candidate.rangeAddress);
+
+      if (result.status === "cleared") {
+        cleared++;
+      } else if (result.status === "skipped") {
+        skipped++;
+        detailLines.push(
+          `- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
+        );
+      } else {
+        errors++;
+        detailLines.push(
+          `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+        );
+      }
+    } catch (err) {
+      errors++;
+      detailLines.push(
+        `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
+      );
+    }
+  }
+
+  const summaryLines = [
+    "Автоочистка завершена.",
+    `Очищено таблиц: ${cleared}.`,
     `Пропущено: ${skipped}.`,
     `Ошибок: ${errors}.`,
   ];
