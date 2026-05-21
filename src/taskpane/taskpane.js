@@ -56,6 +56,8 @@ const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
 
 const SCAN_CELL_LIMIT = 250000;
 const INVENTORY_CONTENT_SHEET_NAME = "Content";
+const RUN_REPORT_SHEET_NAME = "Run report";
+const GENERATED_SHEET_NAMES = new Set([INVENTORY_CONTENT_SHEET_NAME, RUN_REPORT_SHEET_NAME]);
 const INVENTORY_CONTENT_COLUMNS = [
   "#",
   "Sheet",
@@ -938,6 +940,191 @@ function formatSkippedCandidateDetail({ sheetName, rangeAddress, reason, status 
   }
 }
 
+// ─── Run report sheet helpers ─────────────────────────────────────────────────
+
+/**
+ * Builds a Map from `sheetName!rangeAddress` -> item for quick metadata lookup.
+ * Keys both resolvedRangeAddress and rangeAddress so candidates can be matched
+ * regardless of which address variant filterWorkbookCandidates resolved.
+ */
+function buildItemMetadataMap(inventoryResults) {
+  const map = new Map();
+  for (const sheetResult of inventoryResults.sheetResults) {
+    for (const item of sheetResult.items) {
+      if (item.resolvedRangeAddress) {
+        map.set(`${sheetResult.sheetName}!${item.resolvedRangeAddress}`, item);
+      }
+      const fallback = item.rangeAddress;
+      if (fallback && !map.has(`${sheetResult.sheetName}!${fallback}`)) {
+        map.set(`${sheetResult.sheetName}!${fallback}`, item);
+      }
+    }
+  }
+  return map;
+}
+
+function runReportSkipReasonLabel(reason) {
+  switch (reason) {
+    case BATCH_SKIP_REASONS.MISSING_RANGE:      return "Нет диапазона";
+    case BATCH_SKIP_REASONS.CANDIDATE_UNCERTAIN: return "Кандидат неопределён";
+    case BATCH_SKIP_REASONS.CANDIDATE_REJECTED:  return "Не опознан как таблица";
+    default:                                      return "Неизвестный статус";
+  }
+}
+
+function runReportStatusLabel(status) {
+  switch (status) {
+    case "processed": return "Обработано";
+    case "skipped":   return "Пропущено";
+    case "blocked":   return "Пропущено";
+    case "error":     return "Ошибка";
+    default:          return status || "";
+  }
+}
+
+function runReportMetricTypes(item) {
+  if (!item) return "";
+  const parts = [];
+  if (item.hasProportions) parts.push("Пропорции");
+  if (item.hasMeans)       parts.push("Средние");
+  if (item.hasNps)         parts.push("NPS");
+  return parts.join(", ");
+}
+
+const RUN_REPORT_COLUMNS = [
+  "Лист",
+  "Таблица",
+  "Диапазон",
+  "Статус",
+  "Причина / Сообщение",
+  "База",
+  "Типы метрик",
+  "Предупреждений",
+  "Критических",
+  "Блоков обработано",
+];
+
+async function ensureRunReportWorksheet(context) {
+  const worksheets = context.workbook.worksheets;
+  const existing = worksheets.getItemOrNullObject(RUN_REPORT_SHEET_NAME);
+  existing.load("isNullObject");
+  await context.sync();
+  return existing.isNullObject ? worksheets.add(RUN_REPORT_SHEET_NAME) : existing;
+}
+
+function writeRunReportContent(worksheet, reportRows, runLabel) {
+  const colCount = RUN_REPORT_COLUMNS.length;
+
+  // Title row
+  const titleRange = worksheet.getRangeByIndexes(0, 0, 1, colCount);
+  titleRange.values = normalizeRowsToColumnCount([[runLabel]], colCount);
+  titleRange.merge();
+  titleRange.format.font.bold = true;
+  titleRange.format.font.size = 13;
+
+  // Metadata
+  const now = new Date().toLocaleString("ru-RU");
+  const metaRows = normalizeRowsToColumnCount(
+    [
+      ["Создан", now],
+      ["Строк", reportRows.length],
+    ],
+    2
+  );
+  const metaRange = worksheet.getRangeByIndexes(1, 0, metaRows.length, 2);
+  metaRange.values = metaRows;
+  worksheet.getRangeByIndexes(1, 0, metaRows.length, 1).format.font.bold = true;
+
+  // Header
+  const headerRowIndex = 4;
+  const headerRange = worksheet.getRangeByIndexes(headerRowIndex - 1, 0, 1, colCount);
+  headerRange.values = normalizeRowsToColumnCount([RUN_REPORT_COLUMNS], colCount);
+  headerRange.format.font.bold = true;
+
+  // Data rows
+  const dataRows = normalizeRowsToColumnCount(
+    reportRows.map((r) => [
+      r.sheetName,
+      r.title,
+      r.rangeAddress,
+      runReportStatusLabel(r.status),
+      r.message,
+      r.selectedBase,
+      r.metricTypes,
+      r.warnings,
+      r.critical,
+      r.blocksProcessed,
+    ]),
+    colCount
+  );
+
+  if (dataRows.length > 0) {
+    const dataRange = worksheet.getRangeByIndexes(headerRowIndex, 0, dataRows.length, colCount);
+    dataRange.values = dataRows;
+
+    // Color-code status column (index 3)
+    for (let i = 0; i < dataRows.length; i++) {
+      const status = reportRows[i].status;
+      const cell = worksheet.getRangeByIndexes(headerRowIndex + i, 3, 1, 1);
+      if (status === "processed") {
+        cell.format.fill.color = "#E2F0D9";
+      } else if (status === "error") {
+        cell.format.fill.color = "#FCE4D6";
+      }
+    }
+  }
+
+  // Table borders
+  const tableRange = worksheet.getRangeByIndexes(
+    headerRowIndex - 1,
+    0,
+    Math.max(dataRows.length, 1) + 1,
+    colCount
+  );
+  tableRange.format.borders.getItem("EdgeBottom").style = "Continuous";
+  tableRange.format.borders.getItem("EdgeTop").style = "Continuous";
+  tableRange.format.borders.getItem("EdgeLeft").style = "Continuous";
+  tableRange.format.borders.getItem("EdgeRight").style = "Continuous";
+  tableRange.format.borders.getItem("InsideHorizontal").style = "Continuous";
+  tableRange.format.borders.getItem("InsideVertical").style = "Continuous";
+
+  // Column widths: Sheet, Title, Range, Status, Message, Base, Metrics, Warn, Critical, Blocks
+  [100, 160, 100, 85, 200, 120, 100, 75, 75, 85].forEach((width, i) => {
+    worksheet.getRangeByIndexes(0, i, 1, 1).format.columnWidth = width;
+  });
+
+  worksheet
+    .getRangeByIndexes(0, 0, headerRowIndex + Math.max(dataRows.length, 1), colCount)
+    .format.verticalAlignment = "Top";
+}
+
+/**
+ * Creates or updates the Run report sheet, writes report rows, moves the sheet
+ * to the last position, and returns the worksheet object.
+ */
+async function writeRunReportSheet(context, reportRows, runLabel) {
+  const worksheet = await ensureRunReportWorksheet(context);
+
+  const existingUsed = worksheet.getUsedRangeOrNullObject();
+  existingUsed.load("isNullObject");
+  await context.sync();
+
+  if (!existingUsed.isNullObject) {
+    existingUsed.unmerge();
+    existingUsed.clear();
+  }
+
+  writeRunReportContent(worksheet, reportRows, runLabel);
+
+  // Move to last position
+  const worksheets = context.workbook.worksheets;
+  worksheets.load("count");
+  await context.sync();
+  worksheet.position = worksheets.count - 1;
+
+  return worksheet;
+}
+
 /**
  * Auto-runner: processes all "available" inventory candidates in the workbook.
  *
@@ -1005,6 +1192,9 @@ async function runAutoSignificance() {
     return;
   }
 
+  const addReport = getCheckboxValue("run-add-report");
+  const itemMap = buildItemMetadataMap(inventoryResults);
+
   // Partition candidates: eligible to process vs. pre-skipped due to status/range.
   // Content sheet is excluded entirely (not counted toward skipped).
   const { eligible, skipped: preSkipped } = filterWorkbookCandidates(inventoryResults, {
@@ -1012,6 +1202,23 @@ async function runAutoSignificance() {
   });
   let skipped = preSkipped.length;
   const detailLines = preSkipped.map(formatSkippedCandidateDetail);
+
+  // Seed report rows with pre-execution skips.
+  const reportRows = preSkipped.map((candidate) => {
+    const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
+    return {
+      sheetName: candidate.sheetName,
+      title: item ? (item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : item.title) || "") : "",
+      rangeAddress: candidate.rangeAddress || "",
+      status: "skipped",
+      message: runReportSkipReasonLabel(candidate.reason),
+      selectedBase: item ? (item.selectedBaseSubtypeLabel || "") : "",
+      metricTypes: runReportMetricTypes(item),
+      warnings: item ? (item.warningsCount ?? "") : "",
+      critical: item ? (item.criticalCount ?? "") : "",
+      blocksProcessed: "",
+    };
+  });
 
   if (eligible.length === 0) {
     const noEligibleLines = [
@@ -1022,6 +1229,21 @@ async function runAutoSignificance() {
       noEligibleLines.push("", `Пропущено: ${skipped}.`, ...detailLines);
     }
     setStatusMessage(noEligibleLines.join("\n"));
+
+    if (addReport && reportRows.length > 0) {
+      try {
+        await Excel.run(async (context) => {
+          const sheet = await writeRunReportSheet(context, reportRows, "Автозапуск — диагностический отчёт");
+          sheet.activate();
+          await context.sync();
+        });
+      } catch (reportErr) {
+        setStatusMessage(
+          (document.getElementById("significance-result")?.textContent || "") +
+          `\n[Отчёт: ошибка записи — ${reportErr.message || reportErr}]`
+        );
+      }
+    }
     return;
   }
 
@@ -1029,6 +1251,7 @@ async function runAutoSignificance() {
   let errors = 0;
 
   for (const candidate of eligible) {
+    const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
     try {
       const result = await runSignificanceForRange(
         candidate.sheetName,
@@ -1049,11 +1272,37 @@ async function runAutoSignificance() {
           `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
         );
       }
+
+      reportRows.push({
+        sheetName: candidate.sheetName,
+        title: candidate.title,
+        rangeAddress: candidate.rangeAddress,
+        status: result.status,
+        message: result.message || "",
+        selectedBase: item ? (item.selectedBaseSubtypeLabel || "") : "",
+        metricTypes: runReportMetricTypes(item),
+        warnings: item ? (item.warningsCount ?? "") : "",
+        critical: item ? (item.criticalCount ?? "") : "",
+        blocksProcessed: result.blocksProcessed != null ? result.blocksProcessed : "",
+      });
     } catch (err) {
       errors++;
+      const errMsg = err.message || "неизвестная ошибка";
       detailLines.push(
-        `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
+        `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${errMsg}`
       );
+      reportRows.push({
+        sheetName: candidate.sheetName,
+        title: candidate.title,
+        rangeAddress: candidate.rangeAddress,
+        status: "error",
+        message: errMsg,
+        selectedBase: item ? (item.selectedBaseSubtypeLabel || "") : "",
+        metricTypes: runReportMetricTypes(item),
+        warnings: item ? (item.warningsCount ?? "") : "",
+        critical: item ? (item.criticalCount ?? "") : "",
+        blocksProcessed: "",
+      });
     }
   }
 
@@ -1069,6 +1318,21 @@ async function runAutoSignificance() {
   }
 
   setStatusMessage(summaryLines.join("\n"));
+
+  if (addReport) {
+    try {
+      await Excel.run(async (context) => {
+        const sheet = await writeRunReportSheet(context, reportRows, "Автозапуск — диагностический отчёт");
+        sheet.activate();
+        await context.sync();
+      });
+    } catch (reportErr) {
+      setStatusMessage(
+        summaryLines.join("\n") +
+        `\n[Отчёт: ошибка записи — ${reportErr.message || reportErr}]`
+      );
+    }
+  }
 }
 
 /**
@@ -1337,11 +1601,30 @@ async function runCurrentSheetSignificance() {
     return;
   }
 
+  const addReport = getCheckboxValue("run-add-report");
+  const itemMap = buildItemMetadataMap(inventoryResults);
+
   const { eligible, skipped: preSkipped } = filterWorkbookCandidates(inventoryResults, {
     contentSheetName: INVENTORY_CONTENT_SHEET_NAME,
   });
   let skipped = preSkipped.length;
   const detailLines = preSkipped.map(formatSkippedCandidateDetail);
+
+  const reportRows = preSkipped.map((candidate) => {
+    const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
+    return {
+      sheetName: candidate.sheetName,
+      title: item ? (item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : item.title) || "") : "",
+      rangeAddress: candidate.rangeAddress || "",
+      status: "skipped",
+      message: runReportSkipReasonLabel(candidate.reason),
+      selectedBase: item ? (item.selectedBaseSubtypeLabel || "") : "",
+      metricTypes: runReportMetricTypes(item),
+      warnings: item ? (item.warningsCount ?? "") : "",
+      critical: item ? (item.criticalCount ?? "") : "",
+      blocksProcessed: "",
+    };
+  });
 
   if (eligible.length === 0) {
     const noEligibleLines = [
@@ -1352,6 +1635,21 @@ async function runCurrentSheetSignificance() {
       noEligibleLines.push("", `Пропущено: ${skipped}.`, ...detailLines);
     }
     setStatusMessage(noEligibleLines.join("\n"));
+
+    if (addReport && reportRows.length > 0) {
+      try {
+        await Excel.run(async (context) => {
+          const sheet = await writeRunReportSheet(context, reportRows, "Лист: запуск — диагностический отчёт");
+          sheet.activate();
+          await context.sync();
+        });
+      } catch (reportErr) {
+        setStatusMessage(
+          (document.getElementById("significance-result")?.textContent || "") +
+          `\n[Отчёт: ошибка записи — ${reportErr.message || reportErr}]`
+        );
+      }
+    }
     return;
   }
 
@@ -1359,6 +1657,7 @@ async function runCurrentSheetSignificance() {
   let errors = 0;
 
   for (const candidate of eligible) {
+    const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
     try {
       const result = await runSignificanceForRange(
         candidate.sheetName,
@@ -1379,11 +1678,37 @@ async function runCurrentSheetSignificance() {
           `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
         );
       }
+
+      reportRows.push({
+        sheetName: candidate.sheetName,
+        title: candidate.title,
+        rangeAddress: candidate.rangeAddress,
+        status: result.status,
+        message: result.message || "",
+        selectedBase: item ? (item.selectedBaseSubtypeLabel || "") : "",
+        metricTypes: runReportMetricTypes(item),
+        warnings: item ? (item.warningsCount ?? "") : "",
+        critical: item ? (item.criticalCount ?? "") : "",
+        blocksProcessed: result.blocksProcessed != null ? result.blocksProcessed : "",
+      });
     } catch (err) {
       errors++;
+      const errMsg = err.message || "неизвестная ошибка";
       detailLines.push(
-        `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
+        `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${errMsg}`
       );
+      reportRows.push({
+        sheetName: candidate.sheetName,
+        title: candidate.title,
+        rangeAddress: candidate.rangeAddress,
+        status: "error",
+        message: errMsg,
+        selectedBase: item ? (item.selectedBaseSubtypeLabel || "") : "",
+        metricTypes: runReportMetricTypes(item),
+        warnings: item ? (item.warningsCount ?? "") : "",
+        critical: item ? (item.criticalCount ?? "") : "",
+        blocksProcessed: "",
+      });
     }
   }
 
@@ -1399,6 +1724,21 @@ async function runCurrentSheetSignificance() {
   }
 
   setStatusMessage(summaryLines.join("\n"));
+
+  if (addReport) {
+    try {
+      await Excel.run(async (context) => {
+        const sheet = await writeRunReportSheet(context, reportRows, "Лист: запуск — диагностический отчёт");
+        sheet.activate();
+        await context.sync();
+      });
+    } catch (reportErr) {
+      setStatusMessage(
+        summaryLines.join("\n") +
+        `\n[Отчёт: ошибка записи — ${reportErr.message || reportErr}]`
+      );
+    }
+  }
 }
 
 /**
@@ -2439,7 +2779,7 @@ async function collectWorkbookInventoryResults(context, settings) {
   await context.sync();
 
   const worksheetEntries = worksheets.items
-    .filter((worksheet) => worksheet.name !== INVENTORY_CONTENT_SHEET_NAME)
+    .filter((worksheet) => !GENERATED_SHEET_NAMES.has(worksheet.name))
     .map((worksheet) => {
       const usedRange = worksheet.getUsedRangeOrNullObject();
       usedRange.load(["isNullObject", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
@@ -2514,7 +2854,7 @@ async function collectActiveSheetInventoryResults(context, settings) {
 
   await context.sync();
 
-  if (worksheet.name === INVENTORY_CONTENT_SHEET_NAME) {
+  if (GENERATED_SHEET_NAMES.has(worksheet.name)) {
     return { scannedSheets: 0, sheetResults: [], skippedSheets: [] };
   }
 
