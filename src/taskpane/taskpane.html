@@ -167,6 +167,7 @@
         <pre id="inventory-result"></pre>
       </section>
 
+      <!-- Settings section (statistical / processing / detection behavior) -->
       <section class="settings-panel">
         <button type="button" id="settings-toggle" class="settings-toggle">
           <span>Настройки</span>
@@ -204,12 +205,6 @@
             </select>
           </div>
 
-          <div class="settings-group">
-            <label>
-              <input type="checkbox" id="round-cell-values" />
-              Округлять значения в ячейках
-            </label>
-          </div>
           <div class="settings-group">
             <label>
               <input type="checkbox" id="compare-with-previous-column" />
@@ -282,20 +277,6 @@
           </div>
 
           <div class="settings-group">
-            <h4>Заливки</h4>
-            <label for="significant-fill-color">Обычная значимость</label>
-            <input type="color" id="significant-fill-color" value="#E2F0D9" />
-
-            <label for="lower-than-total-fill-color">Заливка &lt; Тотал</label>
-            <input type="color" id="lower-than-total-fill-color" value="#FCE4D6" />
-
-            <label
-              ><input type="checkbox" id="fill-only-total-comparisons" /> Заливка только для
-              Тотала</label
-            >
-          </div>
-
-          <div class="settings-group">
             <h4>Маленькие базы</h4>
             <label
               ><input type="checkbox" id="exclude-small-bases" /> Не сравнивать маленькие
@@ -306,9 +287,6 @@
               <label for="small-base-threshold">База &lt;</label>
               <input type="number" id="small-base-threshold" value="50" min="0" step="1" />
             </div>
-
-            <label for="small-base-fill-color">Заливка маленькой базы</label>
-            <input type="color" id="small-base-fill-color" value="#D0D0D0" />
           </div>
 
           <div class="settings-group">
@@ -330,6 +308,42 @@
             id="help-link"
             >Справка об использовании</a
           >
+        </div>
+      </section>
+
+      <!-- Design section (visual output / fills / presentation behavior) -->
+      <section class="settings-panel">
+        <button type="button" id="design-toggle" class="settings-toggle">
+          <span>Дизайн</span>
+          <span id="design-toggle-icon">▾</span>
+        </button>
+
+        <div id="design-content" class="settings-content">
+          <div class="settings-group">
+            <label>
+              <input type="checkbox" id="round-cell-values" />
+              Округлять значения в ячейках
+            </label>
+          </div>
+
+          <div class="settings-group">
+            <h4>Заливки</h4>
+            <label for="significant-fill-color">Обычная значимость</label>
+            <input type="color" id="significant-fill-color" value="#E2F0D9" />
+
+            <label for="lower-than-total-fill-color">Заливка &lt; Тотал</label>
+            <input type="color" id="lower-than-total-fill-color" value="#FCE4D6" />
+
+            <label
+              ><input type="checkbox" id="fill-only-total-comparisons" /> Заливка только для
+              Тотала</label
+            >
+          </div>
+
+          <div class="settings-group">
+            <label for="small-base-fill-color">Заливка маленькой базы</label>
+            <input type="color" id="small-base-fill-color" value="#D0D0D0" />
+          </div>
         </div>
       </section>
     </main>
