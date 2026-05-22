@@ -1396,7 +1396,7 @@ async function runAutoSignificance() {
   if (eligible.length === 0) {
     const noEligibleLines = [
       "Автозапуск: доступных кандидатов не найдено.",
-      'Проверьте статусы таблиц через «Найти таблицы» / «С полной проверкой».',
+      'Проверьте статусы таблиц через «Проверить книгу» / «Оглавление → С полной проверкой».',
     ];
     if (skipped > 0) {
       noEligibleLines.push("", `Пропущено: ${skipped}.`, ...detailLines);
@@ -1663,7 +1663,7 @@ async function clearAutoSignificance() {
   if (eligible.length === 0) {
     const noEligibleLines = [
       "Автоочистка: доступных кандидатов не найдено.",
-      'Проверьте статусы таблиц через «Найти таблицы» / «С полной проверкой».',
+      'Проверьте статусы таблиц через «Проверить книгу» / «Оглавление → С полной проверкой».',
     ];
     if (skipped > 0) {
       noEligibleLines.push("", `Пропущено: ${skipped}.`, ...detailLines);
@@ -1805,7 +1805,7 @@ async function runCurrentSheetSignificance() {
   if (eligible.length === 0) {
     const noEligibleLines = [
       "Лист — запуск: доступных кандидатов не найдено.",
-      'Проверьте статусы таблиц через «Найти таблицы» / «С полной проверкой».',
+      'Проверьте статусы таблиц через «Проверить книгу» / «Оглавление → С полной проверкой».',
     ];
     if (skipped > 0) {
       noEligibleLines.push("", `Пропущено: ${skipped}.`, ...detailLines);
@@ -1947,7 +1947,7 @@ async function clearCurrentSheetSignificance() {
   if (eligible.length === 0) {
     const noEligibleLines = [
       "Лист — очистка: доступных кандидатов не найдено.",
-      'Проверьте статусы таблиц через «Найти таблицы» / «С полной проверкой».',
+      'Проверьте статусы таблиц через «Проверить книгу» / «Оглавление → С полной проверкой».',
     ];
     if (skipped > 0) {
       noEligibleLines.push("", `Пропущено: ${skipped}.`, ...detailLines);
@@ -3033,7 +3033,7 @@ function formatWorkbookInventoryMessage({ scannedSheets, sheetResults, skippedSh
   }
 
   lines.push("");
-  lines.push("Table Inventory — это только поиск кандидатов. Для проверки используйте «Проверить таблицу».");
+  lines.push("Оглавление — только поиск кандидатов. Для детальной проверки используйте «Проверить таблицу».");
 
   return lines.join("\n").trimEnd();
 }
@@ -3692,7 +3692,7 @@ function writeMinimalCheckContent(worksheet, inventoryResults) {
   );
 
   const titleRange = worksheet.getRange("A1:K1");
-  titleRange.values = normalizeRowsToColumnCount([["Table Inventory Content"]], 11);
+  titleRange.values = normalizeRowsToColumnCount([["Оглавление таблиц"]], 11);
   titleRange.merge();
   titleRange.format.font.bold = true;
   titleRange.format.font.size = 14;
@@ -3703,7 +3703,7 @@ function writeMinimalCheckContent(worksheet, inventoryResults) {
       ["Scanned sheets", inventoryResults.scannedSheets],
       ["Candidate sheets", inventoryResults.sheetResults.length],
       ["Detected candidates", totalCandidates],
-      ["Reminder", "Inventory is a candidate finder only. Use «Проверить таблицу» for interpretation."],
+      ["Примечание", "Оглавление — поиск кандидатов. Для детальной проверки используйте «Проверить таблицу»."],
     ],
     2
   );
@@ -3803,7 +3803,7 @@ function writeClientFacingContent(worksheet, inventoryResults) {
   const colCount = INVENTORY_CLIENT_COLUMNS.length;
 
   const titleRange = worksheet.getRangeByIndexes(0, 0, 1, colCount);
-  titleRange.values = normalizeRowsToColumnCount([["Инвентарь таблиц"]], colCount);
+  titleRange.values = normalizeRowsToColumnCount([["Оглавление таблиц"]], colCount);
   titleRange.merge();
   titleRange.format.font.bold = true;
   titleRange.format.font.size = 14;
