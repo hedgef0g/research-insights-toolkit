@@ -642,3 +642,45 @@ b {
   color: var(--rs-color-muted);
   line-height: 1.35;
 }
+
+/* ── Settings tabbed navigation (issue #197) ─────────────────────────────── */
+
+.settings-tabbed-panel {
+  padding-top: 8px;
+}
+
+.settings-tab-nav {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 3px;
+  background: var(--rs-color-bg-soft);
+  border: 1px solid var(--rs-color-border);
+  border-radius: var(--rs-radius-sm);
+}
+
+.settings-tab {
+  flex: 1;
+  padding: 4px 2px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--rs-color-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-tab:hover {
+  background: var(--rs-color-border);
+  color: var(--rs-color-text);
+}
+
+.settings-tab.is-active {
+  background: var(--rs-color-bg-tint);
+  color: var(--rs-color-primary-dark);
+  border: 1px solid var(--rs-color-primary);
+}
