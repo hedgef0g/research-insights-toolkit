@@ -141,6 +141,9 @@ export function buildTablePreviewModel(input) {
     ...checkBaseConsistency(safeValues, calculationBlocks, bannerStructure),
     ...checkNpsMismatch(safeValues, calculationBlocks),
     ...checkWeightedBaseFallback(calculationBlocks),
+    // Inspect rawBlocks so that the preferred-base check covers blocks whose
+    // base row was dropped by blockHasPreviewEvidence.
+    ...checkPreferredBaseNotFound(rawBlocks, safeSettings),
     // Inspect rawBlocks (pre-filter) so that blank/non-numeric base rows are
     // flagged even when blockHasPreviewEvidence later drops the block from
     // calculationBlocks.  Deduplication by base row index is done inside.
@@ -1180,6 +1183,61 @@ function checkWeightedBaseFallback(calculationBlocks) {
       relatedColumnIndexes: [],
       evidence: { baseRowIndex: block.baseRowIndex, baseSubtype: "weighted" },
     });
+  }
+
+  return issues;
+}
+
+/**
+ * Emits PREFERRED_BASE_NOT_FOUND when the user requested a specific base type
+ * (preferredBase !== "auto") but no matching base was found in the table, so
+ * the code fell back to auto-priority selection.
+ *
+ * Runs against rawBlocks (pre-filter) to cover blocks where the base row is
+ * present but has no usable numeric data (those blocks are dropped from
+ * calculationBlocks by blockHasPreviewEvidence but the fallback still occurred).
+ * Deduplicates by base row index.
+ */
+function checkPreferredBaseNotFound(rawBlocks, settings) {
+  const issues = [];
+  const preferredBase = settings?.preferredBase;
+
+  // Only relevant when the user has picked a specific type.
+  if (!preferredBase || preferredBase === "auto") return issues;
+
+  const seenBaseRows = new Set();
+
+  for (const block of rawBlocks || []) {
+    if (block.baseRowIndex == null) continue;
+    if (seenBaseRows.has(block.baseRowIndex)) continue;
+    seenBaseRows.add(block.baseRowIndex);
+
+    // Determine whether the auto-selected base matches the preference.
+    const subtype = block.baseSubtype; // undefined = plain Base
+    const matches =
+      preferredBase === "plain"
+        ? subtype === undefined || subtype === null
+        : subtype === preferredBase;
+
+    if (!matches) {
+      const actualLabel = subtype ? `${subtype} Base` : "plain Base";
+      issues.push({
+        code: "PREFERRED_BASE_NOT_FOUND",
+        severity: "warning",
+        message:
+          `Row ${block.baseRowIndex + 1}: preferred base type '${preferredBase}' not found — ` +
+          `using auto-selected base (${actualLabel}) instead.`,
+        rowIndex: block.baseRowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: {
+          preferredBase,
+          actualBaseSubtype: subtype ?? null,
+          baseRowIndex: block.baseRowIndex,
+        },
+      });
+    }
   }
 
   return issues;
