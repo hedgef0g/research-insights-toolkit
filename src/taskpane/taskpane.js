@@ -3222,7 +3222,7 @@ function buildInventoryContentCandidateRows(sheetResults) {
       rows.push([
         candidateIndex,
         sheetResult.sheetName,
-        item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || "")),
+        resolveContentDisplayTitle(item, candidateIndex),
         item.resolvedRangeAddress || item.rangeAddress || "",
         item.rowCount ?? "",
         item.columnCount ?? "",
@@ -3673,12 +3673,48 @@ function getContentTableHyperlinkTarget(sheetName, rangeAddress) {
   return `${quotedSheet}!${rangeAddress}`;
 }
 
+/**
+ * Returns the Content-sheet display title for a detected table candidate.
+ *
+ * Only trusts a scanner/resolved title when titleConfidence === "high", meaning
+ * the first row of the detected band was a dedicated sparse heading row.
+ * Medium-confidence titles (inferred from rows *above* the band) may be
+ * banner/header cells rather than genuine table titles and are suppressed here.
+ * resolvedTitle (post-backlink) is also only used when the original scan rated
+ * the title as high-confidence.
+ *
+ * Falls back to "Таблица N" for:
+ *   - titleConfidence !== "high" (medium / none)
+ *   - title equals the generated backlink marker
+ *   - title is empty after all checks
+ *
+ * @param {object} item   - TableInventoryItem (may have resolvedTitle set by normalizeBacklinkItems).
+ * @param {number} index  - 1-based candidate number within the Content output.
+ * @returns {string}
+ */
+function resolveContentDisplayTitle(item, index) {
+  const fallback = `Таблица ${index}`;
+
+  // Medium/none confidence titles come from rows above the band and may be
+  // banner or header text, not real table headings — always use the fallback.
+  if (item.titleConfidence !== "high") {
+    return fallback;
+  }
+
+  // High-confidence path: prefer post-backlink resolved title, then raw title.
+  const title =
+    item.resolvedTitle ||
+    (isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""));
+
+  return title || fallback;
+}
+
 function buildClientContentRows(sheetResults) {
   const rows = [];
   let index = 1;
   for (const sheetResult of sheetResults) {
     for (const item of sheetResult.items) {
-      rows.push([index, item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || "")), "", item.sheetName || sheetResult.sheetName]);
+      rows.push([index, resolveContentDisplayTitle(item, index), "", item.sheetName || sheetResult.sheetName]);
       index++;
     }
   }
@@ -3814,12 +3850,10 @@ function writeMinimalCheckContent(worksheet, inventoryResults) {
     const effectiveRange = item.resolvedRangeAddress || item.rangeAddress;
     const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, effectiveRange);
     if (hyperlinkTarget) {
-      const displayTitle =
-        item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""));
       const cell = worksheet.getRangeByIndexes(headerRowIndex + i, TITLE_COL_INDEX, 1, 1);
       cell.hyperlink = {
         documentReference: hyperlinkTarget,
-        textToDisplay: displayTitle || `Таблица ${i + 1}`,
+        textToDisplay: resolveContentDisplayTitle(item, i + 1),
         screenTip: `${item.sheetName}!${effectiveRange}`,
       };
     }
@@ -3875,10 +3909,9 @@ function writeClientFacingContent(worksheet, inventoryResults) {
     const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, effectiveRange);
     if (hyperlinkTarget) {
       const cell = worksheet.getRangeByIndexes(headerRowIndex + i, TITLE_COL_INDEX, 1, 1);
-      const displayTitle = item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""));
       cell.hyperlink = {
         documentReference: hyperlinkTarget,
-        textToDisplay: displayTitle || `Таблица ${i + 1}`,
+        textToDisplay: resolveContentDisplayTitle(item, i + 1),
         screenTip: `${item.sheetName}!${effectiveRange}`,
       };
     }
@@ -3899,7 +3932,7 @@ function buildFullCheckCandidateRows(sheetResults) {
       rows.push([
         candidateIndex,
         sheetResult.sheetName,
-        item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || "")),
+        resolveContentDisplayTitle(item, candidateIndex),
         item.resolvedRangeAddress || item.rangeAddress || "",
         getContentCandidateStatusLabel(item),
         item.previewSummary || "",
@@ -4004,12 +4037,10 @@ function writeFullCheckContent(worksheet, inventoryResults) {
     const effectiveRange = item.resolvedRangeAddress || item.rangeAddress;
     const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, effectiveRange);
     if (hyperlinkTarget) {
-      const displayTitle =
-        item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""));
       const cell = worksheet.getRangeByIndexes(headerRowIndex + i, TITLE_COL_INDEX, 1, 1);
       cell.hyperlink = {
         documentReference: hyperlinkTarget,
-        textToDisplay: displayTitle || `Таблица ${i + 1}`,
+        textToDisplay: resolveContentDisplayTitle(item, i + 1),
         screenTip: `${item.sheetName}!${effectiveRange}`,
       };
     }
