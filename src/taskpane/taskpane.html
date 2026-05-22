@@ -152,17 +152,20 @@
         <pre id="inventory-result"></pre>
       </section>
 
-      <!-- Settings section (statistical / processing / detection behavior) -->
-      <section class="settings-panel">
-        <button type="button" id="settings-toggle" class="settings-toggle">
-          <span>Настройки</span>
-          <span id="settings-toggle-icon">▾</span>
-        </button>
+      <!-- Settings section (tabbed navigation) -->
+      <section class="settings-panel settings-tabbed-panel">
+        <div class="settings-tab-nav" role="tablist" id="settings-tab-nav">
+          <button class="settings-tab is-active" data-settings-tab="osnovnye" role="tab" aria-selected="true">Основные</button>
+          <button class="settings-tab" data-settings-tab="sravneniya" role="tab" aria-selected="false">Сравнения</button>
+          <button class="settings-tab" data-settings-tab="banner" role="tab" aria-selected="false">Баннер</button>
+          <button class="settings-tab" data-settings-tab="bazy" role="tab" aria-selected="false">Базы</button>
+          <button class="settings-tab" data-settings-tab="dizain" role="tab" aria-selected="false">Дизайн</button>
+        </div>
 
-        <div id="settings-content" class="settings-content">
+        <!-- Основные -->
+        <div class="settings-tab-panel" data-settings-panel="osnovnye">
           <div class="settings-group">
             <label for="confidence-level">Уровень значимости</label>
-
             <div class="confidence-settings-row">
               <select id="confidence-level">
                 <option value="99">99%</option>
@@ -171,7 +174,6 @@
                 <option value="80">80%</option>
                 <option value="66.6">66.6%</option>
               </select>
-
               <label class="inline-checkbox-label" for="one-tailed-test">
                 <input type="checkbox" id="one-tailed-test" />
                 <span>Односторонний тест</span>
@@ -190,12 +192,15 @@
             </select>
           </div>
 
+        </div>
+
+        <!-- Сравнения -->
+        <div class="settings-tab-panel" data-settings-panel="sravneniya" style="display:none">
           <div class="settings-group">
             <label>
               <input type="checkbox" id="compare-with-previous-column" />
               Сравнение с предыдущей колонкой
             </label>
-
             <div id="previous-column-fill-wrapper" style="display: none; margin-left: 18px">
               <label>
                 <input type="checkbox" id="apply-previous-column-fill" />
@@ -205,7 +210,43 @@
           </div>
 
           <div class="settings-group">
-            <h4>Баннер</h4>
+            <h4>Сравнение с Тоталом</h4>
+            <fieldset class="exclusive-options">
+              <legend>Режим сравнения с Тоталом</legend>
+              <label
+                ><input type="checkbox" id="compare-only-with-total" /> Сравнивать только с
+                Тотал</label
+              >
+              <label
+                ><input type="checkbox" id="exclude-total-from-comparisons" /> Не сравнивать с
+                Тотал</label
+              >
+            </fieldset>
+
+            <fieldset class="exclusive-options">
+              <legend>Расположение Тотала</legend>
+              <label
+                ><input type="checkbox" id="first-column-is-total" /> Первая колонка — Тотал</label
+              >
+              <div
+                id="previous-column-total-warning"
+                class="settings-warning"
+                style="display: none"
+              >
+                WARNING: При выбранных настройках Тотал будет обрабатываться как обычная предыдущая
+                колонка, если не включить "Не сравнивать с Тотал"
+              </div>
+              <label
+                ><input type="checkbox" id="total-in-each-banner" disabled /> Тотал в каждом
+                баннере</label
+              >
+            </fieldset>
+          </div>
+        </div>
+
+        <!-- Баннер -->
+        <div class="settings-tab-panel" data-settings-panel="banner" style="display:none">
+          <div class="settings-group">
             <label
               ><input type="checkbox" id="write-banner-letters" /> Проставлять буквы в
               баннере</label
@@ -224,86 +265,25 @@
               ><input type="checkbox" id="labels-on-left-side" /> Лейблы значений слева листа</label
             >
           </div>
+        </div>
 
-          <div class="settings-group">
-            <h4>Сравнение с Тоталом</h4>
-            <fieldset class="exclusive-options">
-              <legend>Режим сравнения с Тоталом</legend>
-
-              <label
-                ><input type="checkbox" id="compare-only-with-total" /> Сравнивать только с
-                Тотал</label
-              >
-              <label
-                ><input type="checkbox" id="exclude-total-from-comparisons" /> Не сравнивать с
-                Тотал</label
-              >
-            </fieldset>
-
-            <fieldset class="exclusive-options">
-              <legend>Расположение Тотала</legend>
-
-              <label
-                ><input type="checkbox" id="first-column-is-total" /> Первая колонка — Тотал</label
-              >
-              <div
-                id="previous-column-total-warning"
-                class="settings-warning"
-                style="display: none"
-              >
-                WARNING: При выбранных настройках Тотал будет обрабатываться как обычная предыдущая
-                колонка, если не включить "Не сравнивать с Тотал"
-              </div>
-              <label
-                ><input type="checkbox" id="total-in-each-banner" disabled /> Тотал в каждом
-                баннере</label
-              >
-            </fieldset>
-          </div>
-
+        <!-- Базы -->
+        <div class="settings-tab-panel" data-settings-panel="bazy" style="display:none">
           <div class="settings-group">
             <h4>Маленькие базы</h4>
             <label
               ><input type="checkbox" id="exclude-small-bases" /> Не сравнивать маленькие
               базы</label
             >
-
             <div class="inline-number-setting">
               <label for="small-base-threshold">База &lt;</label>
               <input type="number" id="small-base-threshold" value="50" min="0" step="1" />
             </div>
           </div>
-
-          <div class="settings-group">
-            <label for="settings-storage-mode">Сохранять настройки...</label>
-
-            <div class="settings-storage-row">
-              <select id="settings-storage-mode">
-                <option value="none" selected>Не сохранять</option>
-                <option value="local">Локально</option>
-                <option value="cloud" disabled>В облаке</option>
-              </select>
-
-              <button type="button" id="reset-settings" class="settings-reset-button">Сброс</button>
-            </div>
-          </div>
-
-          <a
-            href="https://hedgef0g.github.io/research-insights-toolkit/assets/rit-help-ru.html"
-            id="help-link"
-            >Справка об использовании</a
-          >
         </div>
-      </section>
 
-      <!-- Design section (visual output / fills / presentation behavior) -->
-      <section class="settings-panel">
-        <button type="button" id="design-toggle" class="settings-toggle">
-          <span>Дизайн</span>
-          <span id="design-toggle-icon">▾</span>
-        </button>
-
-        <div id="design-content" class="settings-content">
+        <!-- Дизайн -->
+        <div class="settings-tab-panel" data-settings-panel="dizain" style="display:none">
           <div class="settings-group">
             <label>
               <input type="checkbox" id="round-cell-values" />
@@ -329,6 +309,26 @@
             <label for="small-base-fill-color">Заливка маленькой базы</label>
             <input type="color" id="small-base-fill-color" value="#D0D0D0" />
           </div>
+        </div>
+
+        <!-- Persistence and help — always visible, outside tab panels -->
+        <div class="settings-footer">
+          <div class="settings-group">
+            <label for="settings-storage-mode">Сохранять настройки...</label>
+            <div class="settings-storage-row">
+              <select id="settings-storage-mode">
+                <option value="none" selected>Не сохранять</option>
+                <option value="local">Локально</option>
+                <option value="cloud" disabled>В облаке</option>
+              </select>
+              <button type="button" id="reset-settings" class="settings-reset-button">Сброс</button>
+            </div>
+          </div>
+          <a
+            href="https://hedgef0g.github.io/research-insights-toolkit/assets/rit-help-ru.html"
+            id="help-link"
+            >Справка об использовании</a
+          >
         </div>
       </section>
     </main>

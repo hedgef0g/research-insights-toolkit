@@ -4602,8 +4602,7 @@ function initializeSettingsPanel() {
 
   initializePreviousColumnComparisonSettings();
   initializeSettingsResetButton();
-  initializeSettingsToggle();
-  initializeDesignToggle();
+  initializeSettingsTabs();
   initializeBannerStructureSettings();
 
   const helpLink = document.getElementById("help-link");
@@ -4700,41 +4699,28 @@ function bindMutuallyExclusiveCheckboxes(firstCheckboxId, secondCheckboxId) {
   });
 }
 
-/**
- * Initializes collapsible settings panel.
- *
- * PURPOSE:
- * Allows user to collapse the settings block and keep the panel compact.
- */
-function initializeSettingsToggle() {
-  const settingsToggle = document.getElementById("settings-toggle");
-  const settingsContent = document.getElementById("settings-content");
-  const settingsToggleIcon = document.getElementById("settings-toggle-icon");
+function initializeSettingsTabs() {
+  const navContainer = document.getElementById("settings-tab-nav");
 
-  if (!settingsToggle || !settingsContent || !settingsToggleIcon) {
+  if (!navContainer) {
     return;
   }
 
-  settingsToggle.addEventListener("click", () => {
-    const isCollapsed = settingsContent.classList.toggle("collapsed");
+  navContainer.addEventListener("click", (e) => {
+    const tab = e.target.closest("[data-settings-tab]");
+    if (!tab) return;
 
-    settingsToggleIcon.textContent = isCollapsed ? "▸" : "▾";
-  });
-}
+    const targetPanel = tab.dataset.settingsTab;
 
-function initializeDesignToggle() {
-  const designToggle = document.getElementById("design-toggle");
-  const designContent = document.getElementById("design-content");
-  const designToggleIcon = document.getElementById("design-toggle-icon");
+    navContainer.querySelectorAll(".settings-tab").forEach((t) => {
+      const active = t.dataset.settingsTab === targetPanel;
+      t.classList.toggle("is-active", active);
+      t.setAttribute("aria-selected", active ? "true" : "false");
+    });
 
-  if (!designToggle || !designContent || !designToggleIcon) {
-    return;
-  }
-
-  designToggle.addEventListener("click", () => {
-    const isCollapsed = designContent.classList.toggle("collapsed");
-
-    designToggleIcon.textContent = isCollapsed ? "▸" : "▾";
+    document.querySelectorAll(".settings-tab-panel").forEach((panel) => {
+      panel.style.display = panel.dataset.settingsPanel === targetPanel ? "" : "none";
+    });
   });
 }
 
