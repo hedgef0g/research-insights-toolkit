@@ -3674,17 +3674,48 @@ function getContentTableHyperlinkTarget(sheetName, rangeAddress) {
 }
 
 /**
+ * Returns true when a candidate title is a known total/banner/header-like label
+ * that should not be used as a table title in Content output.
+ *
+ * The scanner's detectFirstRowTitle fires on any sparse all-text first row —
+ * including a single-cell "Всего" or "Total" banner — and assigns
+ * titleConfidence "high".  This guard catches those labels before they reach
+ * the Content display layer.
+ *
+ * The list is intentionally conservative: only unambiguous aggregate/total
+ * words that cannot be a real research-table title on their own.
+ *
+ * @param {string} title - Raw title string from the scanner item.
+ * @returns {boolean}
+ */
+function isContentTitleFallbackLabel(title) {
+  if (!title) return false;
+  const normalized = String(title).trim().toLowerCase();
+  // prettier-ignore
+  const TOTAL_LIKE_LABELS = new Set([
+    "всего",        // Russian "All / Total"
+    "итого",        // Russian "Grand total / Sum"
+    "total",        // English
+    "grand total",  // English compound
+    "overall",      // English
+    "all",          // English
+  ]);
+  return TOTAL_LIKE_LABELS.has(normalized);
+}
+
+/**
  * Returns the Content-sheet display title for a detected table candidate.
  *
- * Only trusts a scanner/resolved title when titleConfidence === "high", meaning
- * the first row of the detected band was a dedicated sparse heading row.
- * Medium-confidence titles (inferred from rows *above* the band) may be
- * banner/header cells rather than genuine table titles and are suppressed here.
- * resolvedTitle (post-backlink) is also only used when the original scan rated
- * the title as high-confidence.
+ * Only trusts a scanner/resolved title when:
+ *   1. titleConfidence === "high" (first row of the detected band was a
+ *      dedicated sparse heading row, not inferred from rows above), AND
+ *   2. The title is not a known total/banner-like label (e.g. "Всего",
+ *      "Total") that the scanner can legitimately detect as a sparse
+ *      first-row title but that is not a real table heading.
  *
  * Falls back to "Таблица N" for:
  *   - titleConfidence !== "high" (medium / none)
+ *   - title is a known total/banner-like label
  *   - title equals the generated backlink marker
  *   - title is empty after all checks
  *
@@ -3705,6 +3736,12 @@ function resolveContentDisplayTitle(item, index) {
   const title =
     item.resolvedTitle ||
     (isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""));
+
+  // Even high-confidence scanner titles can be total/banner-like labels
+  // (e.g. a lone "Всего" cell at the top of a band passes detectFirstRowTitle).
+  if (isContentTitleFallbackLabel(title)) {
+    return fallback;
+  }
 
   return title || fallback;
 }
