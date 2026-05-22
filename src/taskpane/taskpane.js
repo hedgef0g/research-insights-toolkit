@@ -2960,6 +2960,27 @@ function getInventoryCandidateStatusLabel(candidateStatus) {
   return "Не опознан как таблица ResearchSignal";
 }
 
+/**
+ * User-facing status label for Content sheet output.
+ * Uses warningsCount / criticalCount to produce plain-language readiness labels
+ * instead of internal candidate-finder wording.
+ */
+function getContentCandidateStatusLabel(item) {
+  const status = item.candidateStatus;
+  const warnings = item.warningsCount ?? 0;
+  const criticals = item.criticalCount ?? 0;
+
+  if (status === "available") {
+    return warnings > 0 ? "Есть предупреждения" : "Готово к расчёту";
+  }
+
+  if (status === "uncertain") {
+    return criticals > 0 ? "Есть критические проблемы" : "Нужна проверка";
+  }
+
+  return "Пропущено";
+}
+
 function formatInventoryItemLines(item, index) {
   const lines = [];
   // Prefer resolvedTitle (set after backlink normalization) over raw title.
@@ -3205,7 +3226,7 @@ function buildInventoryContentCandidateRows(sheetResults) {
         item.resolvedRangeAddress || item.rangeAddress || "",
         item.rowCount ?? "",
         item.columnCount ?? "",
-        getInventoryCandidateStatusLabel(item.candidateStatus),
+        getContentCandidateStatusLabel(item),
         item.previewSummary || "",
         item.candidateNotes && item.candidateNotes.length > 0 ? item.candidateNotes.join("; ") : "",
         item.warningsCount ?? 0,
@@ -3787,15 +3808,18 @@ function writeMinimalCheckContent(worksheet, inventoryResults) {
 
   worksheet.getRange("A:K").format.verticalAlignment = "Top";
 
-  const RANGE_COL_INDEX = 3;
+  const TITLE_COL_INDEX = 2;
   for (let i = 0; i < allItems.length; i++) {
     const item = allItems[i];
     const effectiveRange = item.resolvedRangeAddress || item.rangeAddress;
     const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, effectiveRange);
     if (hyperlinkTarget) {
-      const cell = worksheet.getRangeByIndexes(headerRowIndex + i, RANGE_COL_INDEX, 1, 1);
+      const displayTitle =
+        item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""));
+      const cell = worksheet.getRangeByIndexes(headerRowIndex + i, TITLE_COL_INDEX, 1, 1);
       cell.hyperlink = {
         documentReference: hyperlinkTarget,
+        textToDisplay: displayTitle || `Таблица ${i + 1}`,
         screenTip: `${item.sheetName}!${effectiveRange}`,
       };
     }
@@ -3877,7 +3901,7 @@ function buildFullCheckCandidateRows(sheetResults) {
         sheetResult.sheetName,
         item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || "")),
         item.resolvedRangeAddress || item.rangeAddress || "",
-        getInventoryCandidateStatusLabel(item.candidateStatus),
+        getContentCandidateStatusLabel(item),
         item.previewSummary || "",
         item.rowCount ?? "",
         item.columnCount ?? "",
@@ -3974,15 +3998,18 @@ function writeFullCheckContent(worksheet, inventoryResults) {
 
   worksheet.getRangeByIndexes(0, 0, candidateRows.length + headerRowIndex, colCount).format.verticalAlignment = "Top";
 
-  const RANGE_COL_INDEX = 3;
+  const TITLE_COL_INDEX = 2;
   for (let i = 0; i < allItems.length; i++) {
     const item = allItems[i];
     const effectiveRange = item.resolvedRangeAddress || item.rangeAddress;
     const hyperlinkTarget = getContentTableHyperlinkTarget(item.sheetName, effectiveRange);
     if (hyperlinkTarget) {
-      const cell = worksheet.getRangeByIndexes(headerRowIndex + i, RANGE_COL_INDEX, 1, 1);
+      const displayTitle =
+        item.resolvedTitle || (isGeneratedBacklinkRow(item.title) ? "" : (item.title || ""));
+      const cell = worksheet.getRangeByIndexes(headerRowIndex + i, TITLE_COL_INDEX, 1, 1);
       cell.hyperlink = {
         documentReference: hyperlinkTarget,
+        textToDisplay: displayTitle || `Таблица ${i + 1}`,
         screenTip: `${item.sheetName}!${effectiveRange}`,
       };
     }
