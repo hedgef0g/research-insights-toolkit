@@ -42,7 +42,7 @@
       <section class="action-panel action-panel-sticky">
         <!-- Action tabs: Run | Clear | Check | Content -->
         <div class="action-tabs" role="tablist" id="action-tabs">
-          <button class="action-tab is-active" data-action="run" role="tab" aria-selected="true">Запуск</button>
+          <button class="action-tab is-active" data-action="run" role="tab" aria-selected="true">Расчёт</button>
           <button class="action-tab" data-action="clear" role="tab" aria-selected="false">Очистка</button>
           <button class="action-tab action-tab--readonly" data-action="check" role="tab" aria-selected="false">Проверка</button>
           <button class="action-tab" data-action="content" role="tab" aria-selected="false">Оглавление</button>
@@ -59,19 +59,19 @@
 
         <div class="action-workspace" data-workspace="run-current_table">
           <div class="action-buttons-row">
-            <button id="calculate-significance" class="primary-action-button">Запустить</button>
+            <button id="calculate-significance" class="primary-action-button">Рассчитать</button>
           </div>
         </div>
 
         <div class="action-workspace" data-workspace="run-current_sheet" style="display:none">
           <div class="check-buttons-row">
-            <button id="run-sheet-tables" class="check-action-button">Запустить по листу</button>
+            <button id="run-sheet-tables" class="check-action-button">Рассчитать по листу</button>
           </div>
         </div>
 
         <div class="action-workspace" data-workspace="run-whole_workbook" style="display:none">
           <div class="check-buttons-row">
-            <button id="run-all-tables" class="check-action-button">Запустить по всей книге</button>
+            <button id="run-all-tables" class="check-action-button">Рассчитать по всей книге</button>
           </div>
         </div>
 
@@ -109,9 +109,9 @@
 
         <div class="action-workspace" data-workspace="check-whole_workbook" style="display:none">
           <div class="check-buttons-row">
-            <button id="find-tables" class="check-action-button">Найти таблицы</button>
+            <button id="find-tables" class="check-action-button">Проверить книгу</button>
           </div>
-          <p class="check-workspace-hint">Сканирует все таблицы в книге. Создаёт лист «Content» — данные таблиц не изменяются.</p>
+          <p class="check-workspace-hint">Только чтение · сканирует таблицы по всей книге. В книгу ничего не записывается.</p>
         </div>
 
         <div class="action-workspace" data-workspace="content-current_table" style="display:none">
@@ -130,8 +130,8 @@
           <div class="inventory-mode-row">
             <label for="content-output-mode">Формат оглавления</label>
             <select id="content-output-mode" class="inventory-mode-select">
-              <option value="minimal-check">С минимальной проверкой</option>
               <option value="client">Для клиента</option>
+              <option value="minimal-check">С минимальной проверкой</option>
               <option value="full-check">С полной проверкой</option>
             </select>
           </div>
@@ -163,7 +163,7 @@
       </section>
 
       <section id="inventory-panel" class="status-panel check-panel" style="display: none">
-        <h4>Инвентарь таблиц</h4>
+        <h4>Оглавление</h4>
         <pre id="inventory-result"></pre>
       </section>
 

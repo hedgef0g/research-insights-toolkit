@@ -390,7 +390,7 @@ Office.onReady((info) => {
   }
 
   if (findTablesButton) {
-    findTablesButton.addEventListener("click", runTableInventory);
+    findTablesButton.addEventListener("click", runWorkbookCheck);
   }
 
   if (runAllTablesButton) {
@@ -2230,6 +2230,94 @@ async function runCurrentSheetCheck() {
   summaryLines.push(...candidateLines);
   summaryLines.push("");
   summaryLines.push("Данные не изменены.");
+
+  setCheckMessage(summaryLines.join("\n"));
+}
+
+/**
+ * Workbook-wide check: scans all sheets and reports found table candidates.
+ *
+ * Read-only — does NOT write the Content sheet or any other Excel output.
+ * Reports the workbook scan summary to the check panel so the result is
+ * clearly a check/report rather than Content generation.
+ *
+ * Content / Оглавление remains the dedicated action for creating/updating
+ * the Content sheet.
+ */
+async function runWorkbookCheck() {
+  const calculationSettings = readCalculationSettingsFromPanel();
+
+  let inventoryResults;
+  try {
+    await Excel.run(async (context) => {
+      inventoryResults = await collectWorkbookInventoryResults(context, calculationSettings);
+      normalizeBacklinkItems(inventoryResults.sheetResults, false);
+    });
+  } catch (err) {
+    setCheckMessage(`Книга — проверка: ошибка при сканировании — ${err.message || err}`);
+    return;
+  }
+
+  const { scannedSheets, sheetResults, skippedSheets } = inventoryResults;
+  const totalCandidates = sheetResults.reduce((sum, s) => sum + s.items.length, 0);
+
+  const summaryLines = [
+    `Книга — проверка: просканировано листов: ${scannedSheets}.`,
+    `Кандидатов найдено: ${totalCandidates}.`,
+  ];
+
+  for (const sheetResult of sheetResults) {
+    summaryLines.push("");
+    summaryLines.push(`Лист: ${sheetResult.sheetName}`);
+
+    for (let i = 0; i < sheetResult.items.length; i++) {
+      const item = sheetResult.items[i];
+      const rangeAddr = item.resolvedRangeAddress || item.rangeAddress || null;
+      const displayTitle =
+        item.resolvedTitle ||
+        (item.title && !isGeneratedBacklinkRow(item.title) ? item.title : null);
+      const header = displayTitle
+        ? `  ${i + 1}. ${displayTitle} — ${rangeAddr || "?"}`
+        : `  ${i + 1}. ${rangeAddr || "?"}`;
+      summaryLines.push(header);
+
+      if (item.candidateStatus === "available") {
+        const warnParts = [];
+        if (item.criticalCount > 0) warnParts.push(`Критических: ${item.criticalCount}`);
+        if (item.warningsCount > 0) warnParts.push(`Предупреждений: ${item.warningsCount}`);
+        const warnStr = warnParts.length > 0 ? ` ${warnParts.join(". ")}.` : "";
+        summaryLines.push(`     Доступен.${warnStr}`);
+      } else if (item.candidateStatus === "uncertain") {
+        summaryLines.push("     Неопределён — граница данных неоднозначна.");
+      } else if (item.candidateStatus === "rejected") {
+        summaryLines.push("     Отклонён — не опознан как таблица ResearchSignal.");
+      } else {
+        summaryLines.push(`     Пропущено — статус «${item.candidateStatus || "unknown"}».`);
+      }
+
+      if (item.previewSummary) summaryLines.push(`     ${item.previewSummary}.`);
+      if (item.candidateNotes && item.candidateNotes.length > 0) {
+        summaryLines.push(`     [${item.candidateNotes.join("; ")}]`);
+      }
+    }
+  }
+
+  if (skippedSheets && skippedSheets.length > 0) {
+    summaryLines.push("");
+    summaryLines.push("Пропущенные листы:");
+    for (const sheet of skippedSheets) {
+      if (sheet.reason === "empty") {
+        summaryLines.push(`- ${sheet.sheetName}: пустой лист.`);
+      } else {
+        summaryLines.push(
+          `- ${sheet.sheetName}: слишком большой для сканирования (${sheet.rowCount} стр. × ${sheet.columnCount} кол.).`
+        );
+      }
+    }
+  }
+
+  summaryLines.push("");
+  summaryLines.push("Данные не изменены. Для детальной проверки используйте «Проверка → Текущий лист».");
 
   setCheckMessage(summaryLines.join("\n"));
 }
