@@ -40,51 +40,115 @@
       </section>
 
       <section class="action-panel action-panel-sticky">
-        <div class="action-panel-header">
-          <h3>Расчёт значимости</h3>
+        <!-- Action tabs: Run | Clear | Check | Content -->
+        <div class="action-tabs" role="tablist" id="action-tabs">
+          <button class="action-tab is-active" data-action="run" role="tab" aria-selected="true">Запуск</button>
+          <button class="action-tab" data-action="clear" role="tab" aria-selected="false">Очистка</button>
+          <button class="action-tab action-tab--readonly" data-action="check" role="tab" aria-selected="false">Проверка</button>
+          <button class="action-tab" data-action="content" role="tab" aria-selected="false">Оглавление</button>
         </div>
 
-        <div class="action-buttons-row">
-          <button id="calculate-significance" class="primary-action-button">Запустить</button>
-          <button id="clear-significance" class="secondary-action-button">
-            Очистить значимости
-          </button>
+        <!-- Scope selector: Current table | Current sheet | Whole workbook -->
+        <div class="scope-selector" role="group" aria-label="Область действия" id="scope-selector">
+          <button class="scope-btn is-active" data-scope="current_table">Текущая таблица</button>
+          <button class="scope-btn" data-scope="current_sheet">Текущий лист</button>
+          <button class="scope-btn" data-scope="whole_workbook">Вся книга</button>
         </div>
 
-        <div class="check-buttons-row">
-          <button id="check-table" class="check-action-button">Проверить таблицу</button>
-          <button id="find-tables" class="check-action-button">Найти таблицы</button>
+        <!-- Workspaces: one shown at a time based on action + scope -->
+
+        <div class="action-workspace" data-workspace="run-current_table">
+          <div class="action-buttons-row">
+            <button id="calculate-significance" class="primary-action-button">Запустить</button>
+          </div>
         </div>
-        <div class="check-buttons-row">
-          <button id="run-all-tables" class="check-action-button">Запустить по найденным таблицам</button>
+
+        <div class="action-workspace" data-workspace="run-current_sheet" style="display:none">
+          <div class="check-buttons-row">
+            <button id="run-sheet-tables" class="check-action-button">Запустить по листу</button>
+          </div>
         </div>
-        <div class="inventory-backlink-row">
+
+        <div class="action-workspace" data-workspace="run-whole_workbook" style="display:none">
+          <div class="check-buttons-row">
+            <button id="run-all-tables" class="check-action-button">Запустить по всей книге</button>
+          </div>
+        </div>
+
+        <div class="action-workspace" data-workspace="clear-current_table" style="display:none">
+          <div class="action-buttons-row">
+            <button id="clear-significance" class="secondary-action-button">Очистить значимости</button>
+          </div>
+        </div>
+
+        <div class="action-workspace" data-workspace="clear-current_sheet" style="display:none">
+          <div class="check-buttons-row">
+            <button id="clear-sheet-tables" class="check-action-button">Очистить по листу</button>
+          </div>
+        </div>
+
+        <div class="action-workspace" data-workspace="clear-whole_workbook" style="display:none">
+          <div class="check-buttons-row">
+            <button id="clear-all-tables" class="check-action-button">Очистить по книге</button>
+          </div>
+        </div>
+
+        <div class="action-workspace" data-workspace="check-current_table" style="display:none">
+          <div class="check-buttons-row">
+            <button id="check-table" class="check-action-button">Проверить таблицу</button>
+          </div>
+        </div>
+
+        <div class="action-workspace" data-workspace="check-current_sheet" style="display:none">
+          <div class="check-buttons-row">
+            <button id="check-sheet-tables" class="check-action-button">Проверить лист</button>
+          </div>
+        </div>
+
+        <div class="action-workspace" data-workspace="check-whole_workbook" style="display:none">
+          <div class="check-buttons-row">
+            <button id="find-tables" class="check-action-button">Найти таблицы</button>
+          </div>
+        </div>
+
+        <div class="action-workspace" data-workspace="content-current_table" style="display:none">
+          <p class="scope-note">Оглавление доступно только для всей книги.</p>
+        </div>
+
+        <div class="action-workspace" data-workspace="content-current_sheet" style="display:none">
+          <p class="scope-note">Оглавление доступно только для всей книги.</p>
+        </div>
+
+        <div class="action-workspace" data-workspace="content-whole_workbook" style="display:none">
+          <div class="check-buttons-row">
+            <button id="content-find-tables" class="check-action-button">Создать оглавление</button>
+          </div>
+        </div>
+
+        <!-- Shared run controls: shown for Run + current_sheet and Run + whole_workbook -->
+        <div id="run-report-control" class="inventory-backlink-row" style="display:none">
           <label class="inline-checkbox-label" for="run-add-report">
             <input type="checkbox" id="run-add-report" />
             <span>Добавить диагностический лист</span>
           </label>
         </div>
-        <div class="check-buttons-row">
-          <button id="clear-all-tables" class="check-action-button">Очистить по найденным таблицам</button>
-        </div>
-        <div class="check-buttons-row">
-          <button id="run-sheet-tables" class="check-action-button">Лист: Запустить</button>
-          <button id="clear-sheet-tables" class="check-action-button">Лист: Очистить</button>
-          <button id="check-sheet-tables" class="check-action-button">Лист: Проверить</button>
-        </div>
-        <div class="inventory-mode-row">
-          <label for="content-output-mode">Формат оглавления</label>
-          <select id="content-output-mode" class="inventory-mode-select">
-            <option value="minimal-check">С минимальной проверкой</option>
-            <option value="client">Для клиента</option>
-            <option value="full-check">С полной проверкой</option>
-          </select>
-        </div>
-        <div class="inventory-backlink-row">
-          <label class="inline-checkbox-label" for="content-add-backlinks">
-            <input type="checkbox" id="content-add-backlinks" />
-            <span>Ставить обратные ссылки</span>
-          </label>
+
+        <!-- Shared inventory controls: shown for Check/Content + whole_workbook -->
+        <div id="inventory-shared-controls" style="display:none">
+          <div class="inventory-mode-row">
+            <label for="content-output-mode">Формат оглавления</label>
+            <select id="content-output-mode" class="inventory-mode-select">
+              <option value="minimal-check">С минимальной проверкой</option>
+              <option value="client">Для клиента</option>
+              <option value="full-check">С полной проверкой</option>
+            </select>
+          </div>
+          <div class="inventory-backlink-row">
+            <label class="inline-checkbox-label" for="content-add-backlinks">
+              <input type="checkbox" id="content-add-backlinks" />
+              <span>Ставить обратные ссылки</span>
+            </label>
+          </div>
         </div>
       </section>
 

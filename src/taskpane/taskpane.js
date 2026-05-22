@@ -417,9 +417,96 @@ Office.onReady((info) => {
   if (checkSheetTablesButton) {
     checkSheetTablesButton.addEventListener("click", runCurrentSheetCheck);
   }
+
+  const contentFindTablesButton = document.getElementById("content-find-tables");
+
+  if (contentFindTablesButton) {
+    contentFindTablesButton.addEventListener("click", runTableInventory);
+  }
+
+  initActionScopeShell();
 });
 
+// ─── Action + Scope shell (issue #167 PR1) ───────────────────────────────────
 
+let _currentAction = "run";
+let _currentScope = "current_table";
+
+function updateActionScopeShell(action, scope) {
+  // Update action tab active states
+  document.querySelectorAll(".action-tab").forEach((tab) => {
+    const active = tab.dataset.action === action;
+    tab.classList.toggle("is-active", active);
+    tab.setAttribute("aria-selected", active ? "true" : "false");
+  });
+
+  // Content action is workbook-only: disable non-workbook scope buttons so the
+  // user can see they are unavailable, but do NOT coerce the selected scope —
+  // the content-current_table / content-current_sheet workspaces show an
+  // explanatory note for whichever scope the user currently has selected.
+  const contentSelected = action === "content";
+  document.querySelectorAll(".scope-btn").forEach((btn) => {
+    btn.disabled = contentSelected && btn.dataset.scope !== "whole_workbook";
+  });
+
+  // Update scope button active states using the actual scope (no coercion)
+  document.querySelectorAll(".scope-btn").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.scope === scope);
+  });
+
+  // Show the matching workspace, hide all others
+  const workspaceKey = `${action}-${scope}`;
+  document.querySelectorAll(".action-workspace").forEach((ws) => {
+    ws.style.display = ws.dataset.workspace === workspaceKey ? "" : "none";
+  });
+
+  // Show run-add-report for Run + current_sheet / whole_workbook
+  const runReportControl = document.getElementById("run-report-control");
+  if (runReportControl) {
+    runReportControl.style.display =
+      action === "run" && scope !== "current_table" ? "" : "none";
+  }
+
+  // Show shared inventory controls for Check/Content + whole_workbook
+  const inventoryControls = document.getElementById("inventory-shared-controls");
+  if (inventoryControls) {
+    inventoryControls.style.display =
+      (action === "check" || action === "content") && scope === "whole_workbook"
+        ? ""
+        : "none";
+  }
+}
+
+function initActionScopeShell() {
+  const tabsContainer = document.getElementById("action-tabs");
+  const scopeContainer = document.getElementById("scope-selector");
+
+  if (tabsContainer) {
+    tabsContainer.addEventListener("click", (e) => {
+      const tab = e.target.closest("[data-action]");
+      if (!tab) return;
+      const action = tab.dataset.action;
+      if (action === _currentAction) return;
+      _currentAction = action;
+      updateActionScopeShell(_currentAction, _currentScope);
+    });
+  }
+
+  if (scopeContainer) {
+    scopeContainer.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-scope]");
+      if (!btn || btn.disabled) return;
+      const scope = btn.dataset.scope;
+      if (scope === _currentScope) return;
+      _currentScope = scope;
+      updateActionScopeShell(_currentAction, _currentScope);
+    });
+  }
+
+  updateActionScopeShell(_currentAction, _currentScope);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Reads selected Excel range, detects metric blocks, calculates pairwise significance,
