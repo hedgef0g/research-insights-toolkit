@@ -445,7 +445,7 @@ function initPanelDismiss() {
 
 let _currentAction = "run";
 let _currentScope = "current_table";
-let _lastCheckRows = null; // { rows: [...], label: string } — populated by each Check action
+let _lastCheckRows = null; // { scope, rows, label } — populated by each Check action; scope guards against stale cross-scope export
 
 function updateActionScopeShell(action, scope) {
   // Update action tab active states
@@ -2277,6 +2277,7 @@ async function runCurrentSheetCheck() {
   setCheckMessage(summaryLines.join("\n"));
 
   _lastCheckRows = {
+    scope: "current_sheet",
     label: "Проверка — Текущий лист",
     rows: checkReportRows,
   };
@@ -2377,6 +2378,7 @@ async function runWorkbookCheck() {
   setCheckMessage(summaryLines.join("\n"));
 
   _lastCheckRows = {
+    scope: "whole_workbook",
     label: "Проверка — Вся книга",
     rows: checkReportRows,
   };
@@ -2720,7 +2722,11 @@ async function runMetricDetectionDiagnostics() {
  * writeRunReportSheet. Does not re-run significance or modify source data.
  */
 async function runExportCheckResult() {
-  if (!_lastCheckRows || _lastCheckRows.rows.length === 0) {
+  if (
+    !_lastCheckRows ||
+    _lastCheckRows.scope !== _currentScope ||
+    _lastCheckRows.rows.length === 0
+  ) {
     setCheckMessage("Нет результатов проверки для записи. Сначала выполните проверку.");
     return;
   }
@@ -2793,6 +2799,7 @@ async function runCheckTable() {
       const msg = `${interpretation.blockingMessage}${codes}`;
       setCheckMessage(msg);
       _lastCheckRows = {
+        scope: "current_table",
         label: "Проверка — Текущая таблица",
         rows: [{ sheetName: reportSheetName, title: "", rangeAddress: reportAddress, status: "blocked", message: msg, selectedBase: "", metricTypes: "", warnings: 0, critical: 0, warningDetails: "", blocksProcessed: 0 }],
       };
@@ -2873,6 +2880,7 @@ async function runCheckTable() {
       .map((iss) => `[${iss.severity}] ${iss.message}`)
       .join("; ");
     _lastCheckRows = {
+      scope: "current_table",
       label: "Проверка — Текущая таблица",
       rows: [{
         sheetName: reportSheetName,
