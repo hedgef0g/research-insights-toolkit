@@ -109,9 +109,9 @@
 
         <div class="action-workspace" data-workspace="check-whole_workbook" style="display:none">
           <div class="check-buttons-row">
-            <button id="find-tables" class="check-action-button">Найти таблицы</button>
+            <button id="find-tables" class="check-action-button">Проверить книгу</button>
           </div>
-          <p class="check-workspace-hint">Сканирует все таблицы в книге. Создаёт лист «Content» — данные таблиц не изменяются.</p>
+          <p class="check-workspace-hint">Только чтение · сканирует таблицы по всей книге. В книгу ничего не записывается.</p>
         </div>
 
         <div class="action-workspace" data-workspace="content-current_table" style="display:none">
@@ -130,8 +130,8 @@
           <div class="inventory-mode-row">
             <label for="content-output-mode">Формат оглавления</label>
             <select id="content-output-mode" class="inventory-mode-select">
-              <option value="minimal-check">С минимальной проверкой</option>
               <option value="client">Для клиента</option>
+              <option value="minimal-check">С минимальной проверкой</option>
               <option value="full-check">С полной проверкой</option>
             </select>
           </div>
