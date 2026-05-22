@@ -641,13 +641,29 @@ export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeCo
     const band = trimBandColumns(values, rawBand);
     if (!band) continue;
 
+    // If the first row of the band is a generated backlink marker, exclude it.
+    // Backlink rows are inserted by Content generation above detected tables and
+    // must not be treated as title rows or body rows of the candidate table.
+    // When settings.backlinkMarker is provided and matches the first content cell,
+    // the active band starts one row later so rangeAddress points to the real table.
+    // normalizeBacklinkItems detects the row above as "above-range" and updates
+    // the backlink in-place on repeated Content generation (no duplicate rows).
+    let activeBand = band;
+    if (settings?.backlinkMarker) {
+      const firstCell = (values[band.localStartRow] || [])[band.localTrimmedFirstCol];
+      if (String(firstCell ?? "").trim() === settings.backlinkMarker) {
+        activeBand = { ...band, localStartRow: band.localStartRow + 1 };
+        if (activeBand.localEndRow < activeBand.localStartRow) continue;
+      }
+    }
+
     // Detect a merged-like title in the first row of the band.
-    const firstRowTitleInfo = detectFirstRowTitle(values, band);
+    const firstRowTitleInfo = detectFirstRowTitle(values, activeBand);
 
     // bodyBand is what gets passed to the model: strip the title row if one was found.
     const bodyBand = firstRowTitleInfo
-      ? { ...band, localStartRow: band.localStartRow + 1 }
-      : band;
+      ? { ...activeBand, localStartRow: activeBand.localStartRow + 1 }
+      : activeBand;
 
     // If stripping the title row left nothing to interpret, skip.
     if (bodyBand.localEndRow < bodyBand.localStartRow) continue;
@@ -661,18 +677,18 @@ export function scanWorksheetForTables({ values, usedRangeRowOffset, usedRangeCo
 
     const model = buildTablePreviewModel({ values: dataCols, leftLabelValues: labelCols, settings });
 
-    // Range address always covers the full original band (title row included).
-    const absRowStart = band.localStartRow + usedRangeRowOffset;
-    const absRowEnd = band.localEndRow + usedRangeRowOffset;
-    const absColStart = band.localTrimmedFirstCol + usedRangeColOffset;
-    const absColEnd = band.localTrimmedLastCol + usedRangeColOffset;
+    // Range address covers the active band (backlink row excluded; title row included).
+    const absRowStart = activeBand.localStartRow + usedRangeRowOffset;
+    const absRowEnd = activeBand.localEndRow + usedRangeRowOffset;
+    const absColStart = activeBand.localTrimmedFirstCol + usedRangeColOffset;
+    const absColEnd = activeBand.localTrimmedLastCol + usedRangeColOffset;
     const rangeAddress = toA1Address(absRowStart, absRowEnd, absColStart, absColEnd);
 
     // Title: first-row detection takes priority; fall back to above-band lookback.
-    const titleInfo = firstRowTitleInfo || inferTitle(values, band);
+    const titleInfo = firstRowTitleInfo || inferTitle(values, activeBand);
 
     const item = buildTableInventoryItem({
-      band,
+      band: activeBand,
       model,
       titleInfo,
       rangeAddress,

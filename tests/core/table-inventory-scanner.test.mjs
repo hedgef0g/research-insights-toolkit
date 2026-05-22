@@ -992,3 +992,137 @@ describe("scanWorksheetForTables — hasProportions / hasMeans / hasNps fields",
     assert.strictEqual(item.hasNps, false, "no NPS row present");
   });
 });
+
+// ─── Issue #180 PR2: backlink row handling ────────────────────────────────────
+//
+// Backlink rows ("← Оглавление") are inserted above detected tables by Content
+// generation. The scanner must exclude them from rangeAddress so that
+// normalizeBacklinkItems can detect the "above-range" state and update the
+// backlink in-place rather than inserting a duplicate on repeated generation.
+
+describe("scanWorksheetForTables — backlink row exclusion (issue #180 PR2)", () => {
+  const BACKLINK_MARKER = "← Оглавление";
+  const SCAN_SETTINGS = { backlinkMarker: BACKLINK_MARKER };
+
+  it("band starting with backlink marker excludes it from rangeAddress", () => {
+    // Simulates the state after first Content generation with backlinks ON.
+    // The backlink row was inserted above the table; on the next scan the scanner
+    // must start the rangeAddress at the first real table row (A2, not A1).
+    const values = [
+      [BACKLINK_MARKER, null, null, null],        // row 0 (A1) — backlink
+      ["Category", "Total", "Male", "Female"],    // row 1 (A2) — banner/header
+      ["Agree", 40, 60, 50],
+      ["Disagree", 60, 40, 50],
+      ["Base", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: SCAN_SETTINGS });
+    assert.ok(items.length >= 1, "expected at least one item");
+    assert.ok(
+      !items[0].rangeAddress.startsWith("A1"),
+      `rangeAddress must not include the backlink row; got ${items[0].rangeAddress}`
+    );
+    assert.ok(
+      items[0].rangeAddress.startsWith("A2"),
+      `rangeAddress must start at A2 (first table row); got ${items[0].rangeAddress}`
+    );
+    assert.strictEqual(items[0].isLikelyTable, true);
+  });
+
+  it("backlink-only band (single row) produces no item", () => {
+    const values = [
+      [BACKLINK_MARKER, null, null],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: SCAN_SETTINGS });
+    assert.strictEqual(items.length, 0, "single backlink row must not produce an item");
+  });
+
+  it("backlink row + minimal 2-row table produces one item starting after the backlink", () => {
+    const values = [
+      [BACKLINK_MARKER, null, null],   // row 0 (A1)
+      ["Metric", 40, 60],              // row 1 (A2)
+      ["Base", 100, 100],              // row 2 (A3)
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: SCAN_SETTINGS });
+    assert.ok(items.length >= 1, "expected at least one item");
+    assert.ok(
+      items[0].rangeAddress.startsWith("A2"),
+      `rangeAddress must start at A2; got ${items[0].rangeAddress}`
+    );
+  });
+
+  it("second scan (backlink above, table below): rangeAddress enables above-range detection", () => {
+    // After first Content generation a backlink was inserted at row 1 (A2).
+    // On the second scan the scanner sees: empty separator, backlink, table body.
+    // rangeAddress must start at A3 (table body) so normalizeBacklinkItems
+    // checks cell A2 for the backlink ("above-range") — no new row insertion.
+    const values = [
+      [null, null, null, null],                    // row 0 (A1) — empty separator
+      [BACKLINK_MARKER, null, null, null],          // row 1 (A2) — backlink
+      ["Category", "Total", "Male", "Female"],     // row 2 (A3) — table band start
+      ["Agree", 40, 60, 50],
+      ["Base", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: SCAN_SETTINGS });
+    assert.ok(items.length >= 1, "expected at least one item");
+    assert.ok(
+      items[0].rangeAddress.startsWith("A3"),
+      `rangeAddress must start at A3; got ${items[0].rangeAddress}`
+    );
+    assert.strictEqual(items[0].isLikelyTable, true);
+  });
+
+  it("backlink row at start of band followed by in-band title — title is still detected", () => {
+    // If the original table had a title as its first row (firstRowOfBand), after
+    // backlink insertion the band is: [backlink, title, data...]. The scanner
+    // skips the backlink and detects the title from the next row.
+    const values = [
+      [BACKLINK_MARKER, null, null, null],          // row 0 — backlink
+      ["Survey Title", null, null, null],           // row 1 — in-band title
+      ["Category", "Total", "Male", "Female"],
+      ["Agree", 40, 60, 50],
+      ["Base", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: SCAN_SETTINGS });
+    assert.ok(items.length >= 1, "expected at least one item");
+    const item = items[0];
+    assert.ok(
+      item.rangeAddress.startsWith("A2"),
+      `rangeAddress must start at A2 (skip backlink); got ${item.rangeAddress}`
+    );
+    assert.strictEqual(item.title, "Survey Title", "in-band title must still be detected");
+    assert.strictEqual(item.titleSource, "firstRowOfBand");
+  });
+
+  it("without backlinkMarker setting, backlink-like text in first row is treated as title (no regression)", () => {
+    // Regression guard: omitting settings.backlinkMarker must keep the original
+    // behavior — the first row is included in rangeAddress and treated as a title.
+    const values = [
+      [BACKLINK_MARKER, null, null, null],
+      ["Category", "Total", "Male", "Female"],
+      ["Agree", 40, 60, 50],
+      ["Base", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.ok(items.length >= 1, "expected at least one item");
+    assert.ok(
+      items[0].rangeAddress.startsWith("A1"),
+      `without backlinkMarker, rangeAddress must include row 1; got ${items[0].rangeAddress}`
+    );
+  });
+
+  it("non-backlink text in first row is not skipped even when backlinkMarker is set", () => {
+    // Safety: only exact matches must be skipped, not arbitrary text.
+    const values = [
+      ["Not a backlink", null, null, null],
+      ["Category", "Total", "Male", "Female"],
+      ["Agree", 40, 60, 50],
+      ["Base", 100, 100, 100],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET, settings: SCAN_SETTINGS });
+    assert.ok(items.length >= 1, "expected at least one item");
+    assert.ok(
+      items[0].rangeAddress.startsWith("A1"),
+      `non-backlink first row must not be skipped; got ${items[0].rangeAddress}`
+    );
+  });
+});
