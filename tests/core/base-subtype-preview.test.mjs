@@ -527,3 +527,170 @@ describe("checkSelectedBaseValidity — normalizer integration (regression guard
       "non-base trailing footer must not produce BASE_NO_VALID_VALUES");
   });
 });
+
+// ─── checkPreferredBaseNotFound ───────────────────────────────────────────────
+
+describe("checkPreferredBaseNotFound — preferred base type missing warning", () => {
+  // Convenience wrapper that passes settings to makeModel.
+  function makeModelWithPref(labels, values, preferredBase) {
+    return makeModel(labels, values, { preferredBase });
+  }
+
+  // ── No warning when preference is satisfied ────────────────────────────────
+
+  it("preferredBase=effective, effective base present → no PREFERRED_BASE_NOT_FOUND", () => {
+    const model = makeModelWithPref(
+      ["Agree", "Disagree", "Base effective"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]],
+      "effective"
+    );
+    assert.ok(
+      !warningCodes(model).includes("PREFERRED_BASE_NOT_FOUND"),
+      `unexpected PREFERRED_BASE_NOT_FOUND; got: ${JSON.stringify(warningCodes(model))}`
+    );
+  });
+
+  it("preferredBase=unweighted, unweighted base present → no PREFERRED_BASE_NOT_FOUND", () => {
+    const model = makeModelWithPref(
+      ["Agree", "Disagree", "Base unweighted"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]],
+      "unweighted"
+    );
+    assert.ok(
+      !warningCodes(model).includes("PREFERRED_BASE_NOT_FOUND"),
+      `unexpected PREFERRED_BASE_NOT_FOUND; got: ${JSON.stringify(warningCodes(model))}`
+    );
+  });
+
+  it("preferredBase=weighted, weighted base present → no PREFERRED_BASE_NOT_FOUND", () => {
+    const model = makeModelWithPref(
+      ["Agree", "Disagree", "Base weighted"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]],
+      "weighted"
+    );
+    assert.ok(
+      !warningCodes(model).includes("PREFERRED_BASE_NOT_FOUND"),
+      `unexpected PREFERRED_BASE_NOT_FOUND; got: ${JSON.stringify(warningCodes(model))}`
+    );
+  });
+
+  it("preferredBase=plain, plain Base present → no PREFERRED_BASE_NOT_FOUND", () => {
+    const model = makeModelWithPref(
+      ["Agree", "Disagree", "Base"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]],
+      "plain"
+    );
+    assert.ok(
+      !warningCodes(model).includes("PREFERRED_BASE_NOT_FOUND"),
+      `unexpected PREFERRED_BASE_NOT_FOUND; got: ${JSON.stringify(warningCodes(model))}`
+    );
+  });
+
+  it("preferredBase=auto → no PREFERRED_BASE_NOT_FOUND regardless of base type", () => {
+    const model = makeModelWithPref(
+      ["Agree", "Disagree", "Base weighted"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]],
+      "auto"
+    );
+    assert.ok(
+      !warningCodes(model).includes("PREFERRED_BASE_NOT_FOUND"),
+      `unexpected PREFERRED_BASE_NOT_FOUND in auto mode; got: ${JSON.stringify(warningCodes(model))}`
+    );
+  });
+
+  it("no preferredBase setting (omitted) → no PREFERRED_BASE_NOT_FOUND", () => {
+    const model = makeModel(
+      ["Agree", "Disagree", "Base weighted"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]]
+    );
+    assert.ok(
+      !warningCodes(model).includes("PREFERRED_BASE_NOT_FOUND"),
+      `unexpected PREFERRED_BASE_NOT_FOUND when preferredBase omitted`
+    );
+  });
+
+  // ── Warning fires when preference cannot be satisfied ─────────────────────
+
+  it("preferredBase=effective, only plain Base available → PREFERRED_BASE_NOT_FOUND", () => {
+    const model = makeModelWithPref(
+      ["Agree", "Disagree", "Base"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]],
+      "effective"
+    );
+    assert.ok(
+      warningCodes(model).includes("PREFERRED_BASE_NOT_FOUND"),
+      `expected PREFERRED_BASE_NOT_FOUND; got: ${JSON.stringify(warningCodes(model))}`
+    );
+    const issue = model.dataQualityIssues.find((i) => i.code === "PREFERRED_BASE_NOT_FOUND");
+    assert.strictEqual(issue.severity, "warning");
+    assert.strictEqual(issue.evidence.preferredBase, "effective");
+    assert.strictEqual(issue.evidence.actualBaseSubtype, null); // plain Base
+  });
+
+  it("preferredBase=unweighted, only weighted Base available → PREFERRED_BASE_NOT_FOUND", () => {
+    const model = makeModelWithPref(
+      ["Agree", "Disagree", "Base weighted"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]],
+      "unweighted"
+    );
+    assert.ok(
+      warningCodes(model).includes("PREFERRED_BASE_NOT_FOUND"),
+      `expected PREFERRED_BASE_NOT_FOUND; got: ${JSON.stringify(warningCodes(model))}`
+    );
+    const issue = model.dataQualityIssues.find((i) => i.code === "PREFERRED_BASE_NOT_FOUND");
+    assert.strictEqual(issue.evidence.preferredBase, "unweighted");
+    assert.strictEqual(issue.evidence.actualBaseSubtype, "weighted");
+  });
+
+  it("preferredBase=effective, only weighted+unweighted available → PREFERRED_BASE_NOT_FOUND", () => {
+    // Auto fallback will pick unweighted (priority 1 > weighted 3).
+    const model = makeModelWithPref(
+      ["Agree", "Disagree", "Base weighted", "Base unweighted"],
+      [[0.4, 0.6], [0.6, 0.4], [200, 300], [180, 280]],
+      "effective"
+    );
+    assert.ok(
+      warningCodes(model).includes("PREFERRED_BASE_NOT_FOUND"),
+      `expected PREFERRED_BASE_NOT_FOUND; got: ${JSON.stringify(warningCodes(model))}`
+    );
+    const issue = model.dataQualityIssues.find((i) => i.code === "PREFERRED_BASE_NOT_FOUND");
+    assert.strictEqual(issue.evidence.preferredBase, "effective");
+    assert.strictEqual(issue.evidence.actualBaseSubtype, "unweighted");
+  });
+
+  it("preferredBase=weighted, only effective Base available → PREFERRED_BASE_NOT_FOUND", () => {
+    const model = makeModelWithPref(
+      ["Agree", "Disagree", "Base effective"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]],
+      "weighted"
+    );
+    assert.ok(
+      warningCodes(model).includes("PREFERRED_BASE_NOT_FOUND"),
+      `expected PREFERRED_BASE_NOT_FOUND; got: ${JSON.stringify(warningCodes(model))}`
+    );
+  });
+
+  it("PREFERRED_BASE_NOT_FOUND is advisory — does not appear in critical count", () => {
+    const model = makeModelWithPref(
+      ["Agree", "Disagree", "Base"],
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]],
+      "effective"
+    );
+    assert.ok(warningCodes(model).includes("PREFERRED_BASE_NOT_FOUND"));
+    assert.strictEqual(model.qualitySummary.criticalCount, 0, "must not count as critical");
+    assert.strictEqual(model.qualitySummary.warningCount, 1, "counts as one warning");
+  });
+
+  it("PREFERRED_BASE_NOT_FOUND deduplicates — shared base row produces one issue", () => {
+    // NPS-first: proportion + npsStructure blocks share the same base row.
+    const model = makeModelWithPref(
+      ["NPS", "Promoters", "Detractors", "Base"],
+      [[0.1, 0.2], [0.6, 0.5], [0.3, 0.3], [100, 200]],
+      "effective"
+    );
+    const notFoundIssues = model.dataQualityIssues.filter(
+      (i) => i.code === "PREFERRED_BASE_NOT_FOUND"
+    );
+    assert.strictEqual(notFoundIssues.length, 1, "shared base row must produce exactly one issue");
+  });
+});

@@ -485,6 +485,10 @@ const ADVISORY_ISSUE_CODES = new Set([
   // in qualityIssueCodes / Check / Full Check but must not downgrade an
   // otherwise valid candidate to "uncertain".
   "BASE_BELOW_THRESHOLD",
+  // PREFERRED_BASE_NOT_FOUND fires when the user requested a specific base type
+  // that was absent from the table.  The calculation still ran with the best
+  // available base, so the table remains usable — the warning is informational.
+  "PREFERRED_BASE_NOT_FOUND",
 ]);
 
 /**
