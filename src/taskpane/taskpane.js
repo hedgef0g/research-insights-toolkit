@@ -3095,7 +3095,7 @@ async function collectWorkbookInventoryResults(context, settings) {
         usedRangeRowOffset: usedRange.rowIndex,
         usedRangeColOffset: usedRange.columnIndex,
         sheetName: worksheet.name,
-        settings,
+        settings: { ...settings, backlinkMarker: BACKLINK_MARKER },
       }),
     }))
     .filter((sheetResult) => sheetResult.items.length > 0);
@@ -3163,7 +3163,7 @@ async function collectActiveSheetInventoryResults(context, settings) {
     usedRangeRowOffset: usedRange.rowIndex,
     usedRangeColOffset: usedRange.columnIndex,
     sheetName: worksheet.name,
-    settings,
+    settings: { ...settings, backlinkMarker: BACKLINK_MARKER },
   });
 
   const sheetResults = items.length > 0
