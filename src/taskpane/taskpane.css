@@ -274,17 +274,40 @@ b {
   background: var(--rs-color-bg-soft);
 }
 
-.status-panel h4 {
-  margin: 0 0 8px 0;
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
 }
 
-#significance-result {
+.panel-header h4 {
+  margin: 0;
+}
+
+.panel-dismiss {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: none;
+  background: transparent;
+  color: var(--rs-color-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.panel-dismiss:hover {
+  color: var(--rs-color-text);
+}
+
+.status-panel pre {
   width: 100%;
   box-sizing: border-box;
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+  overflow-x: hidden;
   max-height: 180px;
   overflow-y: auto;
   font-family: inherit;
