@@ -1368,9 +1368,9 @@ async function runAutoSignificance() {
   const itemMap = buildItemMetadataMap(inventoryResults);
 
   // Partition candidates: eligible to process vs. pre-skipped due to status/range.
-  // Content sheet is excluded entirely (not counted toward skipped).
+  // Generated sheets (Content, Run report) are excluded entirely (not counted toward skipped).
   const { eligible, skipped: preSkipped } = filterWorkbookCandidates(inventoryResults, {
-    contentSheetName: INVENTORY_CONTENT_SHEET_NAME,
+    generatedSheetNames: GENERATED_SHEET_NAMES,
   });
   let skipped = preSkipped.length;
   const detailLines = preSkipped.map(formatSkippedCandidateDetail);
@@ -1655,7 +1655,7 @@ async function clearAutoSignificance() {
   }
 
   const { eligible, skipped: preSkipped } = filterWorkbookCandidates(inventoryResults, {
-    contentSheetName: INVENTORY_CONTENT_SHEET_NAME,
+    generatedSheetNames: GENERATED_SHEET_NAMES,
   });
   let skipped = preSkipped.length;
   const detailLines = preSkipped.map(formatSkippedCandidateDetail);
@@ -1780,7 +1780,7 @@ async function runCurrentSheetSignificance() {
   const itemMap = buildItemMetadataMap(inventoryResults);
 
   const { eligible, skipped: preSkipped } = filterWorkbookCandidates(inventoryResults, {
-    contentSheetName: INVENTORY_CONTENT_SHEET_NAME,
+    generatedSheetNames: GENERATED_SHEET_NAMES,
   });
   let skipped = preSkipped.length;
   const detailLines = preSkipped.map(formatSkippedCandidateDetail);
@@ -1939,7 +1939,7 @@ async function clearCurrentSheetSignificance() {
   }
 
   const { eligible, skipped: preSkipped } = filterWorkbookCandidates(inventoryResults, {
-    contentSheetName: INVENTORY_CONTENT_SHEET_NAME,
+    generatedSheetNames: GENERATED_SHEET_NAMES,
   });
   let skipped = preSkipped.length;
   const detailLines = preSkipped.map(formatSkippedCandidateDetail);
@@ -3978,6 +3978,22 @@ function writeFullCheckContent(worksheet, inventoryResults) {
   }
 }
 
+/**
+ * Creates or updates the Content sheet, writes inventory content, moves the
+ * sheet to the first position (tab index 0), and returns the worksheet object.
+ *
+ * Placement uses the same two-tier strategy as writeRunReportSheet():
+ *
+ * Tier 1 — direct position assignment.
+ *   Content writes and position assignment are in separate sync batches.
+ *   A verification pass re-reads the actual server-side position. If the
+ *   sheet is already first, we return early.
+ *
+ * Tier 2 — copy / delete / rename fallback.
+ *   When Tier 1 verification shows the sheet is still not first, we fall
+ *   back to: find the first non-Content sheet, copy Content before it,
+ *   activate the copy, delete the original, rename the copy.
+ */
 async function writeInventoryContentSheet(context, inventoryResults) {
   const worksheet = await ensureInventoryContentWorksheet(context);
   const existingUsedRange = worksheet.getUsedRangeOrNullObject();
@@ -4000,11 +4016,59 @@ async function writeInventoryContentSheet(context, inventoryResults) {
     writeMinimalCheckContent(worksheet, inventoryResults);
   }
 
-  worksheet.position = 0;
-
+  // Tier 1 — flush content writes first, then attempt direct position assignment.
   await context.sync();
 
-  return worksheet;
+  const worksheets = context.workbook.worksheets;
+  worksheet.position = 0;
+  await context.sync();
+
+  // Verification: reload the sheet's actual position from the host.
+  worksheet.load("position");
+  await context.sync();
+
+  if (worksheet.position === 0) {
+    return worksheet; // Tier 1 succeeded — sheet is already first.
+  }
+
+  // Tier 2 — copy/delete/rename fallback.
+  // Direct position assignment did not take effect; use Worksheet.copy() to
+  // physically place the sheet at the start of the tab bar.
+
+  // Reload worksheet items in tab order to find the first non-Content sheet.
+  worksheets.load("items/name");
+  await context.sync();
+
+  const allSheets = worksheets.items;
+  let firstSheet = null;
+  for (let i = 0; i < allSheets.length; i++) {
+    if (allSheets[i].name !== INVENTORY_CONTENT_SHEET_NAME) {
+      firstSheet = allSheets[i];
+      break;
+    }
+  }
+
+  if (firstSheet === null) {
+    // Content is the only sheet — trivially at position 0.
+    return worksheet;
+  }
+
+  // Copy the sheet immediately before firstSheet (the true first position).
+  const copy = worksheet.copy("Before", firstSheet);
+
+  // Activate the copy before deleting the original to satisfy the host
+  // constraint that the active sheet cannot be deleted.
+  copy.activate();
+  await context.sync();
+
+  // Remove the original (now not-active) sheet and rename the copy.
+  worksheet.delete();
+  await context.sync();
+
+  copy.name = INVENTORY_CONTENT_SHEET_NAME;
+  await context.sync();
+
+  return copy;
 }
 
 async function runTableInventory() {

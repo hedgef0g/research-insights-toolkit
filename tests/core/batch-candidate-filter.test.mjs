@@ -189,6 +189,57 @@ describe("filterWorkbookCandidates — Content sheet exclusion", () => {
   });
 });
 
+// ─── filterWorkbookCandidates — generatedSheetNames option ───────────────────
+
+describe("filterWorkbookCandidates — generatedSheetNames option", () => {
+  it("excludes Run report sheet when passed in generatedSheetNames Set", () => {
+    const item = makeItem({ candidateStatus: "available", rangeAddress: "A1:D10" });
+    const { eligible, skipped } = filterWorkbookCandidates(
+      makeInventory(makeSheet("Run report", [item])),
+      { generatedSheetNames: new Set(["Content", "Run report"]) }
+    );
+    assert.strictEqual(eligible.length, 0);
+    assert.strictEqual(skipped.length, 0);
+  });
+
+  it("excludes all sheets listed in generatedSheetNames while processing others normally", () => {
+    const genItem = makeItem({ candidateStatus: "available", rangeAddress: "A1:D10" });
+    const dataItem = makeItem({ candidateStatus: "available", rangeAddress: "B2:E8" });
+    const { eligible, skipped } = filterWorkbookCandidates(
+      makeInventory(
+        makeSheet("Content", [genItem]),
+        makeSheet("Run report", [genItem]),
+        makeSheet("Data", [dataItem])
+      ),
+      { generatedSheetNames: new Set(["Content", "Run report"]) }
+    );
+    assert.strictEqual(eligible.length, 1);
+    assert.strictEqual(eligible[0].sheetName, "Data");
+    assert.strictEqual(skipped.length, 0);
+  });
+
+  it("accepts an array for generatedSheetNames", () => {
+    const item = makeItem({ candidateStatus: "available", rangeAddress: "A1:D10" });
+    const { eligible, skipped } = filterWorkbookCandidates(
+      makeInventory(makeSheet("Run report", [item])),
+      { generatedSheetNames: ["Content", "Run report"] }
+    );
+    assert.strictEqual(eligible.length, 0);
+    assert.strictEqual(skipped.length, 0);
+  });
+
+  it("generatedSheetNames overrides contentSheetName when both are provided", () => {
+    const item = makeItem({ candidateStatus: "available", rangeAddress: "A1:D10" });
+    // contentSheetName says exclude "Other" but generatedSheetNames does not include "Other"
+    const { eligible } = filterWorkbookCandidates(
+      makeInventory(makeSheet("Other", [item])),
+      { contentSheetName: "Other", generatedSheetNames: new Set(["Content"]) }
+    );
+    // "Other" is not in generatedSheetNames, so it should be included
+    assert.strictEqual(eligible.length, 1);
+  });
+});
+
 // ─── filterWorkbookCandidates — multi-sheet and mixed ────────────────────────
 
 describe("filterWorkbookCandidates — multi-sheet and mixed results", () => {

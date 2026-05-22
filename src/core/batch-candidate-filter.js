@@ -31,23 +31,30 @@ export const BATCH_SKIP_REASONS = Object.freeze({
  *
  * Eligible:  candidateStatus === "available" && canRunCheckTable && has usable range address
  * Skipped:   uncertain, rejected, or missing-range candidates (with reason code)
- * Ignored:   generated Content sheet — excluded entirely, not counted toward skipped
+ * Ignored:   generated sheets (Content, Run report, etc.) — excluded entirely, not counted toward skipped
  *
  * @param {object} inventoryResults
  * @param {Array<{ sheetName: string, items: Array }>} inventoryResults.sheetResults
  * @param {object} [options]
- * @param {string} [options.contentSheetName="Content"]  Sheet name to exclude entirely.
+ * @param {string} [options.contentSheetName="Content"]  Single sheet name to exclude (legacy; ignored when generatedSheetNames is provided).
+ * @param {Set<string>|string[]} [options.generatedSheetNames]  Set/array of all generated sheet names to exclude entirely.
  * @returns {{ eligible: Array, skipped: Array }}
  *
  * Each eligible entry: { sheetName, rangeAddress, title }
  * Each skipped entry:  { sheetName, rangeAddress, reason, status }
  */
-export function filterWorkbookCandidates(inventoryResults, { contentSheetName = "Content" } = {}) {
+export function filterWorkbookCandidates(
+  inventoryResults,
+  { contentSheetName = "Content", generatedSheetNames = null } = {}
+) {
+  const excluded =
+    generatedSheetNames != null ? new Set(generatedSheetNames) : new Set([contentSheetName]);
+
   const eligible = [];
   const skipped = [];
 
   for (const sheetResult of inventoryResults.sheetResults) {
-    if (sheetResult.sheetName === contentSheetName) {
+    if (excluded.has(sheetResult.sheetName)) {
       continue;
     }
     for (const item of sheetResult.items) {
