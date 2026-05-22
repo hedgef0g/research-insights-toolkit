@@ -450,22 +450,19 @@ function updateActionScopeShell(action, scope) {
     tab.setAttribute("aria-selected", active ? "true" : "false");
   });
 
-  // Content action is workbook-only: disable non-workbook scope buttons so the
-  // user can see they are unavailable, but do NOT coerce the selected scope —
-  // the content-current_table / content-current_sheet workspaces show an
-  // explanatory note for whichever scope the user currently has selected.
+  // Content action is workbook-only: hide the scope selector.
   const contentSelected = action === "content";
-  document.querySelectorAll(".scope-btn").forEach((btn) => {
-    btn.disabled = contentSelected && btn.dataset.scope !== "whole_workbook";
-  });
+  const scopeSelector = document.getElementById("scope-selector");
+  if (scopeSelector) scopeSelector.style.display = contentSelected ? "none" : "";
 
-  // Update scope button active states using the actual scope (no coercion)
+  // Update scope button active states (scope is preserved while selector is hidden)
   document.querySelectorAll(".scope-btn").forEach((btn) => {
     btn.classList.toggle("is-active", btn.dataset.scope === scope);
   });
 
-  // Show the matching workspace, hide all others
-  const workspaceKey = `${action}-${scope}`;
+  // Show the matching workspace: for content, always use whole_workbook
+  const effectiveScope = contentSelected ? "whole_workbook" : scope;
+  const workspaceKey = `${action}-${effectiveScope}`;
   document.querySelectorAll(".action-workspace").forEach((ws) => {
     ws.style.display = ws.dataset.workspace === workspaceKey ? "" : "none";
   });
