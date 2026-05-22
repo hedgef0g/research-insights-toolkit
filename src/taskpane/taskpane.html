@@ -115,29 +115,18 @@
         </div>
 
         <div class="action-workspace" data-workspace="content-current_table" style="display:none">
-          <p class="scope-note">Оглавление доступно только для всей книги.</p>
+          <p class="scope-note">Оглавление работает только на уровне всей книги. Переключитесь на «Вся книга».</p>
         </div>
 
         <div class="action-workspace" data-workspace="content-current_sheet" style="display:none">
-          <p class="scope-note">Оглавление доступно только для всей книги.</p>
+          <p class="scope-note">Оглавление работает только на уровне всей книги. Переключитесь на «Вся книга».</p>
         </div>
 
         <div class="action-workspace" data-workspace="content-whole_workbook" style="display:none">
           <div class="check-buttons-row">
             <button id="content-find-tables" class="check-action-button">Создать оглавление</button>
           </div>
-        </div>
-
-        <!-- Shared run controls: shown for Run + current_sheet and Run + whole_workbook -->
-        <div id="run-report-control" class="inventory-backlink-row" style="display:none">
-          <label class="inline-checkbox-label" for="run-add-report">
-            <input type="checkbox" id="run-add-report" />
-            <span>Добавить диагностический лист</span>
-          </label>
-        </div>
-
-        <!-- Shared inventory controls: shown for Check/Content + whole_workbook -->
-        <div id="inventory-shared-controls" style="display:none">
+          <p class="check-workspace-hint">Сканирует все листы книги и создаёт или обновляет лист «Content» со списком таблиц. Данные таблиц не изменяются.</p>
           <div class="inventory-mode-row">
             <label for="content-output-mode">Формат оглавления</label>
             <select id="content-output-mode" class="inventory-mode-select">
@@ -152,6 +141,14 @@
               <span>Ставить обратные ссылки</span>
             </label>
           </div>
+        </div>
+
+        <!-- Shared run controls: shown for Run + current_sheet and Run + whole_workbook -->
+        <div id="run-report-control" class="inventory-backlink-row" style="display:none">
+          <label class="inline-checkbox-label" for="run-add-report">
+            <input type="checkbox" id="run-add-report" />
+            <span>Добавить диагностический лист</span>
+          </label>
         </div>
       </section>
 

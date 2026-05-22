@@ -467,14 +467,6 @@ function updateActionScopeShell(action, scope) {
       action === "run" && scope !== "current_table" ? "" : "none";
   }
 
-  // Show shared inventory controls for Check/Content + whole_workbook
-  const inventoryControls = document.getElementById("inventory-shared-controls");
-  if (inventoryControls) {
-    inventoryControls.style.display =
-      (action === "check" || action === "content") && scope === "whole_workbook"
-        ? ""
-        : "none";
-  }
 }
 
 function initActionScopeShell() {
