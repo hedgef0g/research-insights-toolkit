@@ -1104,14 +1104,20 @@ function runReportMetricTypes(item) {
 }
 
 /**
- * Builds a compact warning-detail string from scanner-side item metadata.
- * Uses qualityIssueCodes (code identifiers) and candidateNotes (human-readable).
- * Returns an empty string when there is nothing to report.
+ * Builds a human-readable warning-detail string for the Run report Details column.
+ *
+ * Prefers userVisibleIssues (full issue objects with message and location) when
+ * available. Falls back to qualityIssueCodes (code-only) for older item shapes.
+ * candidateNotes (structural candidate diagnostics) are appended after issue lines.
  */
 function runReportWarningDetails(item) {
   if (!item) return "";
   const parts = [];
-  if (item.qualityIssueCodes && item.qualityIssueCodes.length > 0) {
+  if (item.userVisibleIssues && item.userVisibleIssues.length > 0) {
+    for (const iss of item.userVisibleIssues) {
+      parts.push(`[${iss.severity}] ${iss.message}`);
+    }
+  } else if (item.qualityIssueCodes && item.qualityIssueCodes.length > 0) {
     parts.push(item.qualityIssueCodes.map((q) => q.code).join(", "));
   }
   if (item.candidateNotes && item.candidateNotes.length > 0) {
