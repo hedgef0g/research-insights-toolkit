@@ -418,10 +418,6 @@ Office.onReady((info) => {
     checkSheetTablesButton.addEventListener("click", runCurrentSheetCheck);
   }
 
-  document.getElementById("export-check-result-table")?.addEventListener("click", runExportCheckResult);
-  document.getElementById("export-check-result-sheet")?.addEventListener("click", runExportCheckResult);
-  document.getElementById("export-check-result-workbook")?.addEventListener("click", runExportCheckResult);
-
   const contentFindTablesButton = document.getElementById("content-find-tables");
 
   if (contentFindTablesButton) {
@@ -445,7 +441,10 @@ function initPanelDismiss() {
 
 let _currentAction = "run";
 let _currentScope = "current_table";
-let _lastCheckRows = null; // { scope, rows, label } — populated by each Check action; scope guards against stale cross-scope export
+function isCheckReportEnabled() {
+  const cb = document.getElementById("check-add-report");
+  return cb ? cb.checked : false;
+}
 
 function updateActionScopeShell(action, scope) {
   // Update action tab active states
@@ -477,6 +476,12 @@ function updateActionScopeShell(action, scope) {
   if (runReportControl) {
     runReportControl.style.display =
       action === "run" && scope !== "current_table" ? "" : "none";
+  }
+
+  // Show check-add-report for all Check scopes
+  const checkReportControl = document.getElementById("check-report-control");
+  if (checkReportControl) {
+    checkReportControl.style.display = action === "check" ? "" : "none";
   }
 
 }
@@ -2109,7 +2114,6 @@ async function checkTableForRange(sheetName, rangeAddress, calculationSettings) 
  * the active sheet only.
  */
 async function runCurrentSheetCheck() {
-  _lastCheckRows = null;
   const calculationSettings = readCalculationSettingsFromPanel();
 
   let inventoryResults;
@@ -2276,11 +2280,16 @@ async function runCurrentSheetCheck() {
 
   setCheckMessage(summaryLines.join("\n"));
 
-  _lastCheckRows = {
-    scope: "current_sheet",
-    label: "Проверка — Текущий лист",
-    rows: checkReportRows,
-  };
+  if (isCheckReportEnabled() && checkReportRows.length > 0) {
+    try {
+      await Excel.run(async (context) => {
+        await writeRunReportSheet(context, checkReportRows, "Проверка — Текущий лист");
+      });
+    } catch (reportErr) {
+      const el = document.getElementById("check-result");
+      if (el) el.textContent += `\n\n[Run report: ошибка записи — ${reportErr.message || reportErr}]`;
+    }
+  }
 }
 
 /**
@@ -2294,7 +2303,6 @@ async function runCurrentSheetCheck() {
  * the Content sheet.
  */
 async function runWorkbookCheck() {
-  _lastCheckRows = null;
   const calculationSettings = readCalculationSettingsFromPanel();
 
   let inventoryResults;
@@ -2377,11 +2385,16 @@ async function runWorkbookCheck() {
 
   setCheckMessage(summaryLines.join("\n"));
 
-  _lastCheckRows = {
-    scope: "whole_workbook",
-    label: "Проверка — Вся книга",
-    rows: checkReportRows,
-  };
+  if (isCheckReportEnabled() && checkReportRows.length > 0) {
+    try {
+      await Excel.run(async (context) => {
+        await writeRunReportSheet(context, checkReportRows, "Проверка — Вся книга");
+      });
+    } catch (reportErr) {
+      const el = document.getElementById("check-result");
+      if (el) el.textContent += `\n\n[Run report: ошибка записи — ${reportErr.message || reportErr}]`;
+    }
+  }
 }
 
 /**
@@ -2717,35 +2730,6 @@ async function runMetricDetectionDiagnostics() {
 }
 
 /**
- * Exports the most recent Check result to the Run report sheet.
- * Reads from _lastCheckRows (populated by each Check action) and calls
- * writeRunReportSheet. Does not re-run significance or modify source data.
- */
-async function runExportCheckResult() {
-  if (
-    !_lastCheckRows ||
-    _lastCheckRows.scope !== _currentScope ||
-    _lastCheckRows.rows.length === 0
-  ) {
-    setCheckMessage("Нет результатов проверки для записи. Сначала выполните проверку.");
-    return;
-  }
-  try {
-    await Excel.run(async (context) => {
-      await writeRunReportSheet(context, _lastCheckRows.rows, _lastCheckRows.label);
-    });
-    const checkResult = document.getElementById("check-result");
-    if (checkResult && checkResult.textContent) {
-      checkResult.textContent += "\n\nРезультат записан в лист «Run report».";
-    } else {
-      setCheckMessage("Результат записан в лист «Run report».");
-    }
-  } catch (err) {
-    setCheckMessage(`Ошибка при записи результата: ${err.message || err}`);
-  }
-}
-
-/**
  * Reads selected range and calls buildTablePreviewModel to display a short summary.
  *
  * Read-only: does not write to Excel, does not calculate significance.
@@ -2756,7 +2740,6 @@ async function runExportCheckResult() {
  *   3. blocked       — broad selection but decomposition failed; early return with message.
  */
 async function runCheckTable() {
-  _lastCheckRows = null;
   await Excel.run(async (context) => {
     const calculationSettings = readCalculationSettingsFromPanel();
     const selectedRange = context.workbook.getSelectedRange();
@@ -2798,11 +2781,9 @@ async function runCheckTable() {
           : "";
       const msg = `${interpretation.blockingMessage}${codes}`;
       setCheckMessage(msg);
-      _lastCheckRows = {
-        scope: "current_table",
-        label: "Проверка — Текущая таблица",
-        rows: [{ sheetName: reportSheetName, title: "", rangeAddress: reportAddress, status: "blocked", message: msg, selectedBase: "", metricTypes: "", warnings: 0, critical: 0, warningDetails: "", blocksProcessed: 0 }],
-      };
+      if (isCheckReportEnabled()) {
+        await writeRunReportSheet(context, [{ sheetName: reportSheetName, title: "", rangeAddress: reportAddress, status: "blocked", message: msg, selectedBase: "", metricTypes: "", warnings: 0, critical: 0, warningDetails: "", blocksProcessed: 0 }], "Проверка — Текущая таблица");
+      }
       return;
     }
 
@@ -2876,13 +2857,11 @@ async function runCheckTable() {
 
     setCheckMessage(lines.join("\n"));
 
-    const warningDetails = (userVisibleIssues || [])
-      .map((iss) => `[${iss.severity}] ${iss.message}`)
-      .join("; ");
-    _lastCheckRows = {
-      scope: "current_table",
-      label: "Проверка — Текущая таблица",
-      rows: [{
+    if (isCheckReportEnabled()) {
+      const warningDetails = (userVisibleIssues || [])
+        .map((iss) => `[${iss.severity}] ${iss.message}`)
+        .join("; ");
+      await writeRunReportSheet(context, [{
         sheetName: reportSheetName,
         title: "",
         rangeAddress: reportAddress,
@@ -2894,8 +2873,8 @@ async function runCheckTable() {
         critical: qualitySummary.criticalCount,
         warningDetails,
         blocksProcessed: summary.detectedBlocks,
-      }],
-    };
+      }], "Проверка — Текущая таблица");
+    }
   });
 }
 
