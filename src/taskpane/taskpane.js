@@ -2180,6 +2180,7 @@ async function runCurrentSheetCheck() {
     const displayTitle =
       item.resolvedTitle ||
       (item.title && !isGeneratedBacklinkRow(item.title) ? item.title : null);
+    const reportTitle = resolveContentDisplayTitle(item, i + 1);
     const header = displayTitle
       ? `${i + 1}. ${displayTitle} — ${rangeAddr || "?"}`
       : `${i + 1}. ${rangeAddr || "?"}`;
@@ -2190,7 +2191,7 @@ async function runCurrentSheetCheck() {
     if (!rangeAddr) {
       missingCount++;
       candidateLines.push("   Пропущено — нет диапазона.");
-      checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: "", status: "skipped", message: "Нет диапазона", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
+      checkReportRows.push({ sheetName: activeSheetName, title: reportTitle, rangeAddress: "", status: "skipped", message: "Нет диапазона", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       continue;
     }
 
@@ -2201,7 +2202,7 @@ async function runCurrentSheetCheck() {
       if (item.candidateNotes && item.candidateNotes.length > 0) {
         candidateLines.push(`   [${item.candidateNotes.join("; ")}]`);
       }
-      checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "skipped", message: "Не опознан как таблица", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
+      checkReportRows.push({ sheetName: activeSheetName, title: reportTitle, rangeAddress: rangeAddr, status: "skipped", message: "Не опознан как таблица", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       continue;
     }
 
@@ -2212,7 +2213,7 @@ async function runCurrentSheetCheck() {
       if (item.candidateNotes && item.candidateNotes.length > 0) {
         candidateLines.push(`   [${item.candidateNotes.join("; ")}]`);
       }
-      checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "skipped", message: "Граница данных неоднозначна", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
+      checkReportRows.push({ sheetName: activeSheetName, title: reportTitle, rangeAddress: rangeAddr, status: "skipped", message: "Граница данных неоднозначна", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       continue;
     }
 
@@ -2240,21 +2241,21 @@ async function runCurrentSheetCheck() {
             warnParts.push(`Предупреждений: ${qualitySummary.warningCount}`);
           if (warnParts.length > 0) candidateLines.push(`   ${warnParts.join(". ")}.`);
           const issueDetails = (userVisibleIssues || []).map((iss) => `[${iss.severity}] ${iss.message}`).join("; ");
-          checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "checked", message: `Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}.`, selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: checkMetricTypesFromBlocks(calculationBlocks), warnings: qualitySummary.warningCount, critical: qualitySummary.criticalCount, warningDetails: issueDetails, blocksProcessed: summary.detectedBlocks });
+          checkReportRows.push({ sheetName: activeSheetName, title: reportTitle, rangeAddress: rangeAddr, status: "checked", message: `Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}.`, selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: checkMetricTypesFromBlocks(calculationBlocks), warnings: qualitySummary.warningCount, critical: qualitySummary.criticalCount, warningDetails: issueDetails, blocksProcessed: summary.detectedBlocks });
         } else if (checkResult.status === "blocked") {
           candidateLines.push(`   Доступен — проверка заблокирована: ${checkResult.message}`);
-          checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "blocked", message: checkResult.message || "", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: 0 });
+          checkReportRows.push({ sheetName: activeSheetName, title: reportTitle, rangeAddress: rangeAddr, status: "blocked", message: checkResult.message || "", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: 0 });
         } else {
           candidateLines.push(
             `   Доступен — проверка пропущена: ${checkResult.message || "неизвестная причина"}`
           );
-          checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "skipped", message: checkResult.message || "Пропущено", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
+          checkReportRows.push({ sheetName: activeSheetName, title: reportTitle, rangeAddress: rangeAddr, status: "skipped", message: checkResult.message || "Пропущено", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
         }
       } catch (err) {
         candidateLines.push(
           `   Доступен — ошибка при проверке: ${err.message || "неизвестная ошибка"}`
         );
-        checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "error", message: err.message || "неизвестная ошибка", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
+        checkReportRows.push({ sheetName: activeSheetName, title: reportTitle, rangeAddress: rangeAddr, status: "error", message: err.message || "неизвестная ошибка", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       }
 
       if (item.previewSummary) candidateLines.push(`   ${item.previewSummary}.`);
@@ -2265,7 +2266,7 @@ async function runCurrentSheetCheck() {
       // Unknown / future status — report without attempting check.
       missingCount++;
       candidateLines.push(`   Пропущено — статус «${item.candidateStatus || "unknown"}».`);
-      checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "skipped", message: `Статус «${item.candidateStatus || "unknown"}»`, selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
+      checkReportRows.push({ sheetName: activeSheetName, title: reportTitle, rangeAddress: rangeAddr, status: "skipped", message: `Статус «${item.candidateStatus || "unknown"}»`, selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
     }
   }
 
@@ -2325,17 +2326,20 @@ async function runWorkbookCheck() {
   ];
 
   const checkReportRows = [];
+  let globalItemIndex = 0;
 
   for (const sheetResult of sheetResults) {
     summaryLines.push("");
     summaryLines.push(`Лист: ${sheetResult.sheetName}`);
 
     for (let i = 0; i < sheetResult.items.length; i++) {
+      globalItemIndex++;
       const item = sheetResult.items[i];
       const rangeAddr = item.resolvedRangeAddress || item.rangeAddress || null;
       const displayTitle =
         item.resolvedTitle ||
         (item.title && !isGeneratedBacklinkRow(item.title) ? item.title : null);
+      const reportTitle = resolveContentDisplayTitle(item, globalItemIndex);
       const header = displayTitle
         ? `  ${i + 1}. ${displayTitle} — ${rangeAddr || "?"}`
         : `  ${i + 1}. ${rangeAddr || "?"}`;
@@ -2347,16 +2351,16 @@ async function runWorkbookCheck() {
         if (item.warningsCount > 0) warnParts.push(`Предупреждений: ${item.warningsCount}`);
         const warnStr = warnParts.length > 0 ? ` ${warnParts.join(". ")}.` : "";
         summaryLines.push(`     Доступен.${warnStr}`);
-        checkReportRows.push({ sheetName: sheetResult.sheetName, title: displayTitle || "", rangeAddress: rangeAddr || "", status: "checked", message: "Кандидат найден (сканирование книги).", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
+        checkReportRows.push({ sheetName: sheetResult.sheetName, title: reportTitle, rangeAddress: rangeAddr || "", status: "checked", message: "Кандидат найден (сканирование книги).", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       } else if (item.candidateStatus === "uncertain") {
         summaryLines.push("     Неопределён — граница данных неоднозначна.");
-        checkReportRows.push({ sheetName: sheetResult.sheetName, title: displayTitle || "", rangeAddress: rangeAddr || "", status: "skipped", message: "Граница данных неоднозначна", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
+        checkReportRows.push({ sheetName: sheetResult.sheetName, title: reportTitle, rangeAddress: rangeAddr || "", status: "skipped", message: "Граница данных неоднозначна", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       } else if (item.candidateStatus === "rejected") {
         summaryLines.push("     Отклонён — не опознан как таблица ResearchSignal.");
-        checkReportRows.push({ sheetName: sheetResult.sheetName, title: displayTitle || "", rangeAddress: rangeAddr || "", status: "skipped", message: "Не опознан как таблица", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
+        checkReportRows.push({ sheetName: sheetResult.sheetName, title: reportTitle, rangeAddress: rangeAddr || "", status: "skipped", message: "Не опознан как таблица", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       } else {
         summaryLines.push(`     Пропущено — статус «${item.candidateStatus || "unknown"}».`);
-        checkReportRows.push({ sheetName: sheetResult.sheetName, title: displayTitle || "", rangeAddress: rangeAddr || "", status: "skipped", message: `Статус «${item.candidateStatus || "unknown"}»`, selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
+        checkReportRows.push({ sheetName: sheetResult.sheetName, title: reportTitle, rangeAddress: rangeAddr || "", status: "skipped", message: `Статус «${item.candidateStatus || "unknown"}»`, selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       }
 
       if (item.previewSummary) summaryLines.push(`     ${item.previewSummary}.`);
