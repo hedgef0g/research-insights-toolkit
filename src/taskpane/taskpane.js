@@ -4448,6 +4448,7 @@ function initializeSettingsPanel() {
   initializePreviousColumnComparisonSettings();
   initializeSettingsResetButton();
   initializeSettingsToggle();
+  initializeDesignToggle();
   initializeBannerStructureSettings();
 
   const helpLink = document.getElementById("help-link");
@@ -4563,6 +4564,22 @@ function initializeSettingsToggle() {
     const isCollapsed = settingsContent.classList.toggle("collapsed");
 
     settingsToggleIcon.textContent = isCollapsed ? "▸" : "▾";
+  });
+}
+
+function initializeDesignToggle() {
+  const designToggle = document.getElementById("design-toggle");
+  const designContent = document.getElementById("design-content");
+  const designToggleIcon = document.getElementById("design-toggle-icon");
+
+  if (!designToggle || !designContent || !designToggleIcon) {
+    return;
+  }
+
+  designToggle.addEventListener("click", () => {
+    const isCollapsed = designContent.classList.toggle("collapsed");
+
+    designToggleIcon.textContent = isCollapsed ? "▸" : "▾";
   });
 }
 
