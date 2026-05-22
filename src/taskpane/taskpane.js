@@ -425,7 +425,17 @@ Office.onReady((info) => {
   }
 
   initActionScopeShell();
+  initPanelDismiss();
 });
+
+function initPanelDismiss() {
+  document.querySelectorAll(".panel-dismiss").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const panel = document.getElementById(btn.dataset.dismiss);
+      if (panel) panel.style.display = "none";
+    });
+  });
+}
 
 // ─── Action + Scope shell (issue #167 PR1) ───────────────────────────────────
 
