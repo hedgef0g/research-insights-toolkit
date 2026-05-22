@@ -192,23 +192,6 @@
             </select>
           </div>
 
-          <div class="settings-group">
-            <label for="settings-storage-mode">Сохранять настройки...</label>
-            <div class="settings-storage-row">
-              <select id="settings-storage-mode">
-                <option value="none" selected>Не сохранять</option>
-                <option value="local">Локально</option>
-                <option value="cloud" disabled>В облаке</option>
-              </select>
-              <button type="button" id="reset-settings" class="settings-reset-button">Сброс</button>
-            </div>
-          </div>
-
-          <a
-            href="https://hedgef0g.github.io/research-insights-toolkit/assets/rit-help-ru.html"
-            id="help-link"
-            >Справка об использовании</a
-          >
         </div>
 
         <!-- Сравнения -->
@@ -326,6 +309,26 @@
             <label for="small-base-fill-color">Заливка маленькой базы</label>
             <input type="color" id="small-base-fill-color" value="#D0D0D0" />
           </div>
+        </div>
+
+        <!-- Persistence and help — always visible, outside tab panels -->
+        <div class="settings-footer">
+          <div class="settings-group">
+            <label for="settings-storage-mode">Сохранять настройки...</label>
+            <div class="settings-storage-row">
+              <select id="settings-storage-mode">
+                <option value="none" selected>Не сохранять</option>
+                <option value="local">Локально</option>
+                <option value="cloud" disabled>В облаке</option>
+              </select>
+              <button type="button" id="reset-settings" class="settings-reset-button">Сброс</button>
+            </div>
+          </div>
+          <a
+            href="https://hedgef0g.github.io/research-insights-toolkit/assets/rit-help-ru.html"
+            id="help-link"
+            >Справка об использовании</a
+          >
         </div>
       </section>
     </main>
