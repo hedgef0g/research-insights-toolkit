@@ -418,6 +418,10 @@ Office.onReady((info) => {
     checkSheetTablesButton.addEventListener("click", runCurrentSheetCheck);
   }
 
+  document.getElementById("export-check-result-table")?.addEventListener("click", runExportCheckResult);
+  document.getElementById("export-check-result-sheet")?.addEventListener("click", runExportCheckResult);
+  document.getElementById("export-check-result-workbook")?.addEventListener("click", runExportCheckResult);
+
   const contentFindTablesButton = document.getElementById("content-find-tables");
 
   if (contentFindTablesButton) {
@@ -441,6 +445,7 @@ function initPanelDismiss() {
 
 let _currentAction = "run";
 let _currentScope = "current_table";
+let _lastCheckRows = null; // { rows: [...], label: string } — populated by each Check action
 
 function updateActionScopeShell(action, scope) {
   // Update action tab active states
@@ -1065,6 +1070,7 @@ function runReportSkipReasonLabel(reason) {
 function runReportStatusLabel(status) {
   switch (status) {
     case "processed": return "Обработано";
+    case "checked":   return "Проверено";
     case "skipped":   return "Пропущено";
     case "blocked":   return "Пропущено";
     case "error":     return "Ошибка";
@@ -1096,6 +1102,21 @@ function runReportWarningDetails(item) {
     parts.push(...item.candidateNotes);
   }
   return parts.join("; ");
+}
+
+function checkMetricTypesFromBlocks(calculationBlocks) {
+  if (!calculationBlocks || calculationBlocks.length === 0) return "";
+  let hasProportions = false, hasMeans = false, hasNps = false;
+  for (const block of calculationBlocks) {
+    if (block.metricType === "proportion") hasProportions = true;
+    else if (block.metricType === "mean") hasMeans = true;
+    else if (block.metricType === "nps") hasNps = true;
+  }
+  const parts = [];
+  if (hasProportions) parts.push("Пропорции");
+  if (hasMeans) parts.push("Средние");
+  if (hasNps) parts.push("NPS");
+  return parts.join(", ");
 }
 
 const RUN_REPORT_COLUMNS = [
@@ -2088,6 +2109,7 @@ async function checkTableForRange(sheetName, rangeAddress, calculationSettings) 
  * the active sheet only.
  */
 async function runCurrentSheetCheck() {
+  _lastCheckRows = null;
   const calculationSettings = readCalculationSettingsFromPanel();
 
   let inventoryResults;
@@ -2146,6 +2168,7 @@ async function runCurrentSheetCheck() {
   let missingCount = 0;
 
   const candidateLines = [];
+  const checkReportRows = [];
 
   for (let i = 0; i < allItems.length; i++) {
     const item = allItems[i];
@@ -2163,6 +2186,7 @@ async function runCurrentSheetCheck() {
     if (!rangeAddr) {
       missingCount++;
       candidateLines.push("   Пропущено — нет диапазона.");
+      checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: "", status: "skipped", message: "Нет диапазона", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       continue;
     }
 
@@ -2173,6 +2197,7 @@ async function runCurrentSheetCheck() {
       if (item.candidateNotes && item.candidateNotes.length > 0) {
         candidateLines.push(`   [${item.candidateNotes.join("; ")}]`);
       }
+      checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "skipped", message: "Не опознан как таблица", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       continue;
     }
 
@@ -2183,6 +2208,7 @@ async function runCurrentSheetCheck() {
       if (item.candidateNotes && item.candidateNotes.length > 0) {
         candidateLines.push(`   [${item.candidateNotes.join("; ")}]`);
       }
+      checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "skipped", message: "Граница данных неоднозначна", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       continue;
     }
 
@@ -2197,7 +2223,7 @@ async function runCurrentSheetCheck() {
         );
 
         if (checkResult.status === "checked") {
-          const { summary, qualitySummary } = checkResult.model;
+          const { summary, qualitySummary, userVisibleIssues, calculationBlocks } = checkResult.model;
           candidateLines.push("   Доступен.");
           candidateLines.push(
             `   ${item.rowCount ?? summary.rowCount} строк, ${item.columnCount ?? ""} колонок.` +
@@ -2209,17 +2235,22 @@ async function runCurrentSheetCheck() {
           if (qualitySummary.warningCount > 0)
             warnParts.push(`Предупреждений: ${qualitySummary.warningCount}`);
           if (warnParts.length > 0) candidateLines.push(`   ${warnParts.join(". ")}.`);
+          const issueDetails = (userVisibleIssues || []).map((iss) => `[${iss.severity}] ${iss.message}`).join("; ");
+          checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "checked", message: `Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}.`, selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: checkMetricTypesFromBlocks(calculationBlocks), warnings: qualitySummary.warningCount, critical: qualitySummary.criticalCount, warningDetails: issueDetails, blocksProcessed: summary.detectedBlocks });
         } else if (checkResult.status === "blocked") {
           candidateLines.push(`   Доступен — проверка заблокирована: ${checkResult.message}`);
+          checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "blocked", message: checkResult.message || "", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: 0 });
         } else {
           candidateLines.push(
             `   Доступен — проверка пропущена: ${checkResult.message || "неизвестная причина"}`
           );
+          checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "skipped", message: checkResult.message || "Пропущено", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
         }
       } catch (err) {
         candidateLines.push(
           `   Доступен — ошибка при проверке: ${err.message || "неизвестная ошибка"}`
         );
+        checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "error", message: err.message || "неизвестная ошибка", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       }
 
       if (item.previewSummary) candidateLines.push(`   ${item.previewSummary}.`);
@@ -2230,6 +2261,7 @@ async function runCurrentSheetCheck() {
       // Unknown / future status — report without attempting check.
       missingCount++;
       candidateLines.push(`   Пропущено — статус «${item.candidateStatus || "unknown"}».`);
+      checkReportRows.push({ sheetName: activeSheetName, title: displayTitle || "", rangeAddress: rangeAddr, status: "skipped", message: `Статус «${item.candidateStatus || "unknown"}»`, selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
     }
   }
 
@@ -2243,6 +2275,11 @@ async function runCurrentSheetCheck() {
   summaryLines.push("Данные не изменены.");
 
   setCheckMessage(summaryLines.join("\n"));
+
+  _lastCheckRows = {
+    label: "Проверка — Текущий лист",
+    rows: checkReportRows,
+  };
 }
 
 /**
@@ -2256,6 +2293,7 @@ async function runCurrentSheetCheck() {
  * the Content sheet.
  */
 async function runWorkbookCheck() {
+  _lastCheckRows = null;
   const calculationSettings = readCalculationSettingsFromPanel();
 
   let inventoryResults;
@@ -2276,6 +2314,8 @@ async function runWorkbookCheck() {
     `Книга — проверка: просканировано листов: ${scannedSheets}.`,
     `Кандидатов найдено: ${totalCandidates}.`,
   ];
+
+  const checkReportRows = [];
 
   for (const sheetResult of sheetResults) {
     summaryLines.push("");
@@ -2298,12 +2338,16 @@ async function runWorkbookCheck() {
         if (item.warningsCount > 0) warnParts.push(`Предупреждений: ${item.warningsCount}`);
         const warnStr = warnParts.length > 0 ? ` ${warnParts.join(". ")}.` : "";
         summaryLines.push(`     Доступен.${warnStr}`);
+        checkReportRows.push({ sheetName: sheetResult.sheetName, title: displayTitle || "", rangeAddress: rangeAddr || "", status: "checked", message: "Кандидат найден (сканирование книги).", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       } else if (item.candidateStatus === "uncertain") {
         summaryLines.push("     Неопределён — граница данных неоднозначна.");
+        checkReportRows.push({ sheetName: sheetResult.sheetName, title: displayTitle || "", rangeAddress: rangeAddr || "", status: "skipped", message: "Граница данных неоднозначна", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       } else if (item.candidateStatus === "rejected") {
         summaryLines.push("     Отклонён — не опознан как таблица ResearchSignal.");
+        checkReportRows.push({ sheetName: sheetResult.sheetName, title: displayTitle || "", rangeAddress: rangeAddr || "", status: "skipped", message: "Не опознан как таблица", selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       } else {
         summaryLines.push(`     Пропущено — статус «${item.candidateStatus || "unknown"}».`);
+        checkReportRows.push({ sheetName: sheetResult.sheetName, title: displayTitle || "", rangeAddress: rangeAddr || "", status: "skipped", message: `Статус «${item.candidateStatus || "unknown"}»`, selectedBase: item.selectedBaseSubtypeLabel || "", metricTypes: runReportMetricTypes(item), warnings: item.warningsCount ?? "", critical: item.criticalCount ?? "", warningDetails: runReportWarningDetails(item), blocksProcessed: "" });
       }
 
       if (item.previewSummary) summaryLines.push(`     ${item.previewSummary}.`);
@@ -2331,6 +2375,11 @@ async function runWorkbookCheck() {
   summaryLines.push("Данные не изменены. Для детальной проверки используйте «Проверка → Текущий лист».");
 
   setCheckMessage(summaryLines.join("\n"));
+
+  _lastCheckRows = {
+    label: "Проверка — Вся книга",
+    rows: checkReportRows,
+  };
 }
 
 /**
@@ -2666,6 +2715,31 @@ async function runMetricDetectionDiagnostics() {
 }
 
 /**
+ * Exports the most recent Check result to the Run report sheet.
+ * Reads from _lastCheckRows (populated by each Check action) and calls
+ * writeRunReportSheet. Does not re-run significance or modify source data.
+ */
+async function runExportCheckResult() {
+  if (!_lastCheckRows || _lastCheckRows.rows.length === 0) {
+    setCheckMessage("Нет результатов проверки для записи. Сначала выполните проверку.");
+    return;
+  }
+  try {
+    await Excel.run(async (context) => {
+      await writeRunReportSheet(context, _lastCheckRows.rows, _lastCheckRows.label);
+    });
+    const checkResult = document.getElementById("check-result");
+    if (checkResult && checkResult.textContent) {
+      checkResult.textContent += "\n\nРезультат записан в лист «Run report».";
+    } else {
+      setCheckMessage("Результат записан в лист «Run report».");
+    }
+  } catch (err) {
+    setCheckMessage(`Ошибка при записи результата: ${err.message || err}`);
+  }
+}
+
+/**
  * Reads selected range and calls buildTablePreviewModel to display a short summary.
  *
  * Read-only: does not write to Excel, does not calculate significance.
@@ -2676,13 +2750,19 @@ async function runMetricDetectionDiagnostics() {
  *   3. blocked       — broad selection but decomposition failed; early return with message.
  */
 async function runCheckTable() {
+  _lastCheckRows = null;
   await Excel.run(async (context) => {
     const calculationSettings = readCalculationSettingsFromPanel();
     const selectedRange = context.workbook.getSelectedRange();
 
-    selectedRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    selectedRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount", "address"]);
+    selectedRange.worksheet.load("name");
 
     await context.sync();
+
+    const reportSheetName = selectedRange.worksheet.name;
+    const rawAddress = selectedRange.address;
+    const reportAddress = rawAddress.includes("!") ? rawAddress.split("!")[1] : rawAddress;
 
     const selectedValues = selectedRange.values;
     const selectedText = selectedRange.text;
@@ -2710,7 +2790,12 @@ async function runCheckTable() {
         interpretation.blockingReasons.length > 0
           ? ` [${interpretation.blockingReasons.join(", ")}]`
           : "";
-      setCheckMessage(`${interpretation.blockingMessage}${codes}`);
+      const msg = `${interpretation.blockingMessage}${codes}`;
+      setCheckMessage(msg);
+      _lastCheckRows = {
+        label: "Проверка — Текущая таблица",
+        rows: [{ sheetName: reportSheetName, title: "", rangeAddress: reportAddress, status: "blocked", message: msg, selectedBase: "", metricTypes: "", warnings: 0, critical: 0, warningDetails: "", blocksProcessed: 0 }],
+      };
       return;
     }
 
@@ -2783,6 +2868,26 @@ async function runCheckTable() {
     }
 
     setCheckMessage(lines.join("\n"));
+
+    const warningDetails = (userVisibleIssues || [])
+      .map((iss) => `[${iss.severity}] ${iss.message}`)
+      .join("; ");
+    _lastCheckRows = {
+      label: "Проверка — Текущая таблица",
+      rows: [{
+        sheetName: reportSheetName,
+        title: "",
+        rangeAddress: reportAddress,
+        status: "checked",
+        message: `Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}.`,
+        selectedBase: "",
+        metricTypes: checkMetricTypesFromBlocks(calculationBlocks),
+        warnings: qualitySummary.warningCount,
+        critical: qualitySummary.criticalCount,
+        warningDetails,
+        blocksProcessed: summary.detectedBlocks,
+      }],
+    };
   });
 }
 
