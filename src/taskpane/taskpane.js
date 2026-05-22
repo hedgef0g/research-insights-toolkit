@@ -424,6 +424,8 @@ Office.onReady((info) => {
     contentFindTablesButton.addEventListener("click", runTableInventory);
   }
 
+  document.getElementById("check-add-report")?.addEventListener("change", updateCheckHints);
+
   initActionScopeShell();
   initPanelDismiss();
 });
@@ -444,6 +446,13 @@ let _currentScope = "current_table";
 function isCheckReportEnabled() {
   const cb = document.getElementById("check-add-report");
   return cb ? cb.checked : false;
+}
+
+function updateCheckHints() {
+  const modeText = isCheckReportEnabled() ? " С записью на лист." : " Только чтение.";
+  document.querySelectorAll(".check-workspace-hint[data-hint-base]").forEach((el) => {
+    el.textContent = el.dataset.hintBase + modeText;
+  });
 }
 
 function updateActionScopeShell(action, scope) {
@@ -483,6 +492,8 @@ function updateActionScopeShell(action, scope) {
   if (checkReportControl) {
     checkReportControl.style.display = action === "check" ? "" : "none";
   }
+
+  updateCheckHints();
 
 }
 
@@ -2177,13 +2188,8 @@ async function runCurrentSheetCheck() {
   for (let i = 0; i < allItems.length; i++) {
     const item = allItems[i];
     const rangeAddr = item.resolvedRangeAddress || item.rangeAddress || null;
-    const displayTitle =
-      item.resolvedTitle ||
-      (item.title && !isGeneratedBacklinkRow(item.title) ? item.title : null);
     const reportTitle = resolveContentDisplayTitle(item, i + 1);
-    const header = displayTitle
-      ? `${i + 1}. ${displayTitle} — ${rangeAddr || "?"}`
-      : `${i + 1}. ${rangeAddr || "?"}`;
+    const header = `${i + 1}. ${reportTitle} — ${rangeAddr || "?"}`;
 
     candidateLines.push("");
     candidateLines.push(header);
@@ -2336,13 +2342,8 @@ async function runWorkbookCheck() {
       globalItemIndex++;
       const item = sheetResult.items[i];
       const rangeAddr = item.resolvedRangeAddress || item.rangeAddress || null;
-      const displayTitle =
-        item.resolvedTitle ||
-        (item.title && !isGeneratedBacklinkRow(item.title) ? item.title : null);
       const reportTitle = resolveContentDisplayTitle(item, globalItemIndex);
-      const header = displayTitle
-        ? `  ${i + 1}. ${displayTitle} — ${rangeAddr || "?"}`
-        : `  ${i + 1}. ${rangeAddr || "?"}`;
+      const header = `  ${i + 1}. ${reportTitle} — ${rangeAddr || "?"}`;
       summaryLines.push(header);
 
       if (item.candidateStatus === "available") {
