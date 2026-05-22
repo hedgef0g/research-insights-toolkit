@@ -440,23 +440,22 @@ function updateActionScopeShell(action, scope) {
     tab.setAttribute("aria-selected", active ? "true" : "false");
   });
 
-  // Content action is workbook-only: disable other scope buttons
+  // Content action is workbook-only: disable non-workbook scope buttons so the
+  // user can see they are unavailable, but do NOT coerce the selected scope —
+  // the content-current_table / content-current_sheet workspaces show an
+  // explanatory note for whichever scope the user currently has selected.
   const contentSelected = action === "content";
   document.querySelectorAll(".scope-btn").forEach((btn) => {
     btn.disabled = contentSelected && btn.dataset.scope !== "whole_workbook";
   });
 
-  // Force whole_workbook effective scope when content is selected
-  const effectiveScope =
-    contentSelected && scope !== "whole_workbook" ? "whole_workbook" : scope;
-
-  // Update scope button active states
+  // Update scope button active states using the actual scope (no coercion)
   document.querySelectorAll(".scope-btn").forEach((btn) => {
-    btn.classList.toggle("is-active", btn.dataset.scope === effectiveScope);
+    btn.classList.toggle("is-active", btn.dataset.scope === scope);
   });
 
   // Show the matching workspace, hide all others
-  const workspaceKey = `${action}-${effectiveScope}`;
+  const workspaceKey = `${action}-${scope}`;
   document.querySelectorAll(".action-workspace").forEach((ws) => {
     ws.style.display = ws.dataset.workspace === workspaceKey ? "" : "none";
   });
@@ -465,14 +464,14 @@ function updateActionScopeShell(action, scope) {
   const runReportControl = document.getElementById("run-report-control");
   if (runReportControl) {
     runReportControl.style.display =
-      action === "run" && effectiveScope !== "current_table" ? "" : "none";
+      action === "run" && scope !== "current_table" ? "" : "none";
   }
 
   // Show shared inventory controls for Check/Content + whole_workbook
   const inventoryControls = document.getElementById("inventory-shared-controls");
   if (inventoryControls) {
     inventoryControls.style.display =
-      (action === "check" || action === "content") && effectiveScope === "whole_workbook"
+      (action === "check" || action === "content") && scope === "whole_workbook"
         ? ""
         : "none";
   }
@@ -489,9 +488,6 @@ function initActionScopeShell() {
       const action = tab.dataset.action;
       if (action === _currentAction) return;
       _currentAction = action;
-      if (action === "content" && _currentScope !== "whole_workbook") {
-        _currentScope = "whole_workbook";
-      }
       updateActionScopeShell(_currentAction, _currentScope);
     });
   }
