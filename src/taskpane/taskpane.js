@@ -450,12 +450,10 @@ function updateActionScopeShell(action, scope) {
     tab.setAttribute("aria-selected", active ? "true" : "false");
   });
 
-  // Content action is workbook-only: hide scope selector and show a static label.
+  // Content action is workbook-only: hide the scope selector.
   const contentSelected = action === "content";
   const scopeSelector = document.getElementById("scope-selector");
-  const contentScopeLabel = document.getElementById("content-scope-label");
   if (scopeSelector) scopeSelector.style.display = contentSelected ? "none" : "";
-  if (contentScopeLabel) contentScopeLabel.style.display = contentSelected ? "" : "none";
 
   // Update scope button active states (scope is preserved while selector is hidden)
   document.querySelectorAll(".scope-btn").forEach((btn) => {

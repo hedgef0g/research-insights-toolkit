@@ -54,9 +54,6 @@
           <button class="scope-btn" data-scope="whole_workbook">Вся книга</button>
         </div>
 
-        <!-- Static scope label shown when Content action is active -->
-        <div id="content-scope-label" class="content-scope-label" style="display:none">Область: вся книга</div>
-
         <!-- Workspaces: one shown at a time based on action + scope -->
 
         <div class="action-workspace" data-workspace="run-current_table">
@@ -67,16 +64,16 @@
         </div>
 
         <div class="action-workspace" data-workspace="run-current_sheet" style="display:none">
-          <div class="check-buttons-row">
-            <button id="run-sheet-tables" class="check-action-button">Рассчитать по листу</button>
-            <button id="clear-sheet-tables" class="check-action-button">Очистить по листу</button>
+          <div class="action-buttons-row">
+            <button id="run-sheet-tables" class="primary-action-button">Рассчитать</button>
+            <button id="clear-sheet-tables" class="secondary-action-button">Очистить значимости</button>
           </div>
         </div>
 
         <div class="action-workspace" data-workspace="run-whole_workbook" style="display:none">
-          <div class="check-buttons-row">
-            <button id="run-all-tables" class="check-action-button">Рассчитать по всей книге</button>
-            <button id="clear-all-tables" class="check-action-button">Очистить по книге</button>
+          <div class="action-buttons-row">
+            <button id="run-all-tables" class="primary-action-button">Рассчитать</button>
+            <button id="clear-all-tables" class="secondary-action-button">Очистить значимости</button>
           </div>
         </div>
 

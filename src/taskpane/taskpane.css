@@ -636,17 +636,6 @@ b {
   color: var(--rs-color-muted);
 }
 
-.content-scope-label {
-  margin-bottom: 8px;
-  padding: 4px 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--rs-color-muted);
-  background: var(--rs-color-bg-soft);
-  border: 1px solid var(--rs-color-border);
-  border-radius: var(--rs-radius-sm);
-}
-
 .check-workspace-hint {
   margin: 4px 0 2px 0;
   font-size: 11px;
