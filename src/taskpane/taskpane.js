@@ -528,11 +528,12 @@ async function runSignificanceFromSelection() {
   await Excel.run(async (context) => {
     let selectedRange = context.workbook.getSelectedRange();
 
-    const outputElement = document.getElementById("significance-result");
     const calculationSettings = readCalculationSettingsFromPanel();
     if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
-      outputElement.textContent =
-        "Режим “Сравнение с предыдущей колонкой” несовместим с режимом “Сравнивать только с Тотал”.";
+      setStatusMessage(
+        // eslint-disable-next-line quotes
+        'Режим "Сравнение с предыдущей колонкой" несовместим с режимом "Сравнивать только с Тотал".'
+      );
 
       return;
     }
@@ -569,8 +570,10 @@ async function runSignificanceFromSelection() {
       calculationSettings.compareWithPreviousColumn &&
       calculationSettings.fillOnlyTotalComparisons
     ) {
-      outputElement.textContent =
-        "Режим “Сравнение с предыдущей колонкой” несовместим с настройкой “Заливка только для Тотала”.";
+      setStatusMessage(
+        // eslint-disable-next-line quotes
+        'Режим "Сравнение с предыдущей колонкой" несовместим с настройкой "Заливка только для Тотала".'
+      );
 
       return;
     }
@@ -632,8 +635,9 @@ async function runSignificanceFromSelection() {
     const targetStartRowIndex = writeTargetRange.rowIndex;
 
     if (calculationSettings.writeBannerLetters && targetStartRowIndex === 0) {
-      outputElement.textContent =
-        "Данные расположены в первой строке. Добавьте строку над выделенным массивом и запустите расчёт повторно.";
+      setStatusMessage(
+        "Данные расположены в первой строке. Добавьте строку над выделенным массивом и запустите расчёт повторно."
+      );
 
       return;
     }
