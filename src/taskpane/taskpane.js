@@ -3836,6 +3836,8 @@ async function writeInventoryContentSheet(context, inventoryResults) {
   worksheet.position = 0;
 
   await context.sync();
+
+  return worksheet;
 }
 
 async function runTableInventory() {
@@ -3854,13 +3856,17 @@ async function runTableInventory() {
       : null;
 
     // Write Content first (hyperlinks use resolvedRangeAddress when available).
-    await writeInventoryContentSheet(context, inventoryResults);
+    const contentWorksheet = await writeInventoryContentSheet(context, inventoryResults);
 
     // Insert/update backlink rows after Content is written so the Content sheet
     // is not affected by row insertions in source sheets.
     if (addBacklinks && contentRowMap) {
       await ensureBacklinkRows(context, inventoryResults.sheetResults, contentRowMap);
     }
+
+    // Switch to the Content sheet after all writes are done.
+    contentWorksheet.activate();
+    await context.sync();
 
     setInventoryMessage(
       formatWorkbookInventoryMessage({
