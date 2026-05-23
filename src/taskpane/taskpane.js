@@ -2775,12 +2775,110 @@ async function runMetricDetectionDiagnostics() {
 }
 
 /**
+ * Read-only check pipeline for a named range inside an existing Excel.run context.
+ *
+ * Loads the range, runs interpretSelectedRange + buildTablePreviewModel, and
+ * returns a structured result. Callers handle display and Run report writing.
+ *
+ * Must be called inside an Excel.run callback — uses the shared context directly
+ * so no nested Excel.run is created.
+ *
+ * Reserved for future manual pre-run check (Расчёт → Проверить выделение).
+ * Not wired into any public UI path yet.
+ *
+ * @param {Excel.RequestContext} context
+ * @param {string} sheetName
+ * @param {string} rangeAddress  Local A1 address, e.g. "B3:F15".
+ * @param {object} settings      Calculation settings (same shape as the rest of the pipeline).
+ * @returns {Promise<{
+ *   status: "checked" | "blocked" | "empty" | "no-data",
+ *   sheetName: string,
+ *   rangeAddress: string,
+ *   model?: object,
+ *   normalizationLines?: string[],
+ *   message?: string
+ * }>}
+ */
+async function checkSelectedRangePreview(context, sheetName, rangeAddress, settings) {
+  const worksheet = context.workbook.worksheets.getItem(sheetName);
+  const sourceRange = worksheet.getRange(rangeAddress);
+  sourceRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+
+  await context.sync();
+
+  const selectedValues = sourceRange.values;
+  const selectedText = sourceRange.text;
+
+  if (
+    !selectedValues ||
+    selectedValues.length < 1 ||
+    !selectedValues[0] ||
+    selectedValues[0].length < 1
+  ) {
+    return { status: "no-data", sheetName, rangeAddress, message: "Нет данных в диапазоне." };
+  }
+
+  const interpretation = await interpretSelectedRange(
+    context,
+    sourceRange,
+    selectedValues,
+    selectedText,
+    settings
+  );
+
+  if (interpretation.state === "blocked") {
+    const codes =
+      interpretation.blockingReasons.length > 0
+        ? ` [${interpretation.blockingReasons.join(", ")}]`
+        : "";
+    return {
+      status: "blocked",
+      sheetName,
+      rangeAddress,
+      message: `${interpretation.blockingMessage}${codes}`,
+    };
+  }
+
+  const { valuesForCalculation, leftLabelValues, bannerContext, normalized } = interpretation;
+
+  const normalizationLines = [];
+
+  if (interpretation.state === "normalized") {
+    normalizationLines.push("Диапазон нормализован: заголовки/лейблы/баннер отделены от данных.");
+
+    const parts = [];
+    if (normalized.titleRows.length > 0) parts.push(`заголовков: ${normalized.titleRows.length}`);
+    if (normalized.subtitleRows.length > 0)
+      parts.push(`подзаголовков: ${normalized.subtitleRows.length}`);
+    if (normalized.bannerRows.length > 0)
+      parts.push(`строк баннера: ${normalized.bannerRows.length}`);
+    if (normalized.labelColumns.length > 0)
+      parts.push(`колонок меток: ${normalized.labelColumns.length}`);
+    if (parts.length > 0) normalizationLines.push(`Отделено: ${parts.join(", ")}.`);
+  }
+
+  const model = buildTablePreviewModel({
+    values: valuesForCalculation,
+    leftLabelValues,
+    bannerContext,
+    settings,
+    trailingBodyRows: normalized?.trailingBodyRows,
+  });
+
+  if (model.summary.rowCount === 0) {
+    return { status: "empty", sheetName, rangeAddress, normalizationLines, model, message: "Диапазон пуст." };
+  }
+
+  return { status: "checked", sheetName, rangeAddress, normalizationLines, model };
+}
+
+/**
  * Check Текущая таблица: resolves the detected table under the active cell
  * and runs the read-only check pipeline on it.
  *
- * Uses resolveCurrentTableFromActiveCell (#208) to find the candidate range.
- * For ok status: runs interpretation + preview-model and displays results.
- * For non-ok status: shows a user-facing message explaining why no table was found.
+ * Uses resolveCurrentTableFromActiveCell (#208) to find the candidate range,
+ * then delegates the data pipeline to checkSelectedRangePreview.
+ * For non-ok resolver status: shows a user-facing message.
  *
  * Does not modify the Excel workbook unless "Записать результат" is enabled,
  * in which case it writes a single row to the Run report sheet.
@@ -2815,40 +2913,20 @@ async function runCheckTable() {
 
     const { sheetName, rangeAddress } = resolverResult;
 
-    // Inline check pipeline — shares the existing Excel.run context to avoid nesting.
-    const worksheet = context.workbook.worksheets.getItem(sheetName);
-    const sourceRange = worksheet.getRange(rangeAddress);
-    sourceRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
-
-    await context.sync();
-
-    const selectedValues = sourceRange.values;
-    const selectedText = sourceRange.text;
-
-    if (
-      !selectedValues ||
-      selectedValues.length < 1 ||
-      !selectedValues[0] ||
-      selectedValues[0].length < 1
-    ) {
-      setCheckMessage("Нет данных в диапазоне таблицы.");
-      return;
-    }
-
-    const interpretation = await interpretSelectedRange(
+    const checkResult = await checkSelectedRangePreview(
       context,
-      sourceRange,
-      selectedValues,
-      selectedText,
+      sheetName,
+      rangeAddress,
       calculationSettings
     );
 
-    if (interpretation.state === "blocked") {
-      const codes =
-        interpretation.blockingReasons.length > 0
-          ? ` [${interpretation.blockingReasons.join(", ")}]`
-          : "";
-      const msg = `${interpretation.blockingMessage}${codes}`;
+    if (checkResult.status === "no-data") {
+      setCheckMessage(checkResult.message);
+      return;
+    }
+
+    if (checkResult.status === "blocked") {
+      const msg = checkResult.message;
       setCheckMessage(msg);
       if (isCheckReportEnabled()) {
         await writeRunReportSheet(context, [{
@@ -2868,33 +2946,13 @@ async function runCheckTable() {
       return;
     }
 
-    const { valuesForCalculation, leftLabelValues, bannerContext, normalized } = interpretation;
-
-    const normalizationLines = [];
-
-    if (interpretation.state === "normalized") {
-      normalizationLines.push("Диапазон нормализован: заголовки/лейблы/баннер отделены от данных.");
-
-      const parts = [];
-      if (normalized.titleRows.length > 0) parts.push(`заголовков: ${normalized.titleRows.length}`);
-      if (normalized.subtitleRows.length > 0)
-        parts.push(`подзаголовков: ${normalized.subtitleRows.length}`);
-      if (normalized.bannerRows.length > 0)
-        parts.push(`строк баннера: ${normalized.bannerRows.length}`);
-      if (normalized.labelColumns.length > 0)
-        parts.push(`колонок меток: ${normalized.labelColumns.length}`);
-      if (parts.length > 0) normalizationLines.push(`Отделено: ${parts.join(", ")}.`);
+    if (checkResult.status === "empty") {
+      setCheckMessage(checkResult.message);
+      return;
     }
 
-    const modelInput = {
-      values: valuesForCalculation,
-      leftLabelValues,
-      bannerContext,
-      settings: calculationSettings,
-      trailingBodyRows: normalized?.trailingBodyRows,
-    };
-
-    const model = buildTablePreviewModel(modelInput);
+    // status === "checked"
+    const { model, normalizationLines } = checkResult;
     const {
       summary,
       qualitySummary,
@@ -2903,11 +2961,6 @@ async function runCheckTable() {
       calculationBlocks,
       rowDiagnostics,
     } = model;
-
-    if (summary.rowCount === 0) {
-      setCheckMessage("Диапазон таблицы пуст.");
-      return;
-    }
 
     const lines = [
       `Проверка завершена. ${sheetName}!${rangeAddress}. Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}. Предупреждений: ${qualitySummary.warningCount}. Критических: ${qualitySummary.criticalCount}.`,
