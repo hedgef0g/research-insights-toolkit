@@ -463,28 +463,43 @@ function updateActionScopeShell(action, scope) {
     tab.setAttribute("aria-selected", active ? "true" : "false");
   });
 
-  // Content action is workbook-only: hide the scope selector.
+  // Расчёт and Оглавление hide the scope selector; Автозапуск and Проверка show it.
+  const runSelected = action === "run";
   const contentSelected = action === "content";
+  const autorunSelected = action === "autorun";
   const scopeSelector = document.getElementById("scope-selector");
-  if (scopeSelector) scopeSelector.style.display = contentSelected ? "none" : "";
+  if (scopeSelector) scopeSelector.style.display = (runSelected || contentSelected) ? "none" : "";
 
-  // Update scope button active states (scope is preserved while selector is hidden)
+  // Автозапуск does not support current_table scope yet: hide that button.
   document.querySelectorAll(".scope-btn").forEach((btn) => {
-    btn.classList.toggle("is-active", btn.dataset.scope === scope);
+    const isCurrentTable = btn.dataset.scope === "current_table";
+    if (autorunSelected && isCurrentTable) {
+      btn.style.display = "none";
+    } else {
+      btn.style.display = "";
+      btn.classList.toggle("is-active", btn.dataset.scope === scope);
+    }
   });
 
-  // Show the matching workspace: for content, always use whole_workbook
-  const effectiveScope = contentSelected ? "whole_workbook" : scope;
+  // Determine the effective workspace key.
+  // Расчёт is always selected-range (current_table); Оглавление always workbook.
+  let effectiveScope;
+  if (runSelected) {
+    effectiveScope = "current_table";
+  } else if (contentSelected) {
+    effectiveScope = "whole_workbook";
+  } else {
+    effectiveScope = scope;
+  }
   const workspaceKey = `${action}-${effectiveScope}`;
   document.querySelectorAll(".action-workspace").forEach((ws) => {
     ws.style.display = ws.dataset.workspace === workspaceKey ? "" : "none";
   });
 
-  // Show run-add-report for Run + current_sheet / whole_workbook
+  // Show run-add-report for Автозапуск (sheet/workbook detected-table flows)
   const runReportControl = document.getElementById("run-report-control");
   if (runReportControl) {
-    runReportControl.style.display =
-      action === "run" && scope !== "current_table" ? "" : "none";
+    runReportControl.style.display = autorunSelected ? "" : "none";
   }
 
   // Show check-add-report for all Check scopes
@@ -494,7 +509,6 @@ function updateActionScopeShell(action, scope) {
   }
 
   updateCheckHints();
-
 }
 
 function initActionScopeShell() {
@@ -508,6 +522,10 @@ function initActionScopeShell() {
       const action = tab.dataset.action;
       if (action === _currentAction) return;
       _currentAction = action;
+      // Автозапуск does not support current_table yet: fall back to current_sheet
+      if (_currentAction === "autorun" && _currentScope === "current_table") {
+        _currentScope = "current_sheet";
+      }
       updateActionScopeShell(_currentAction, _currentScope);
     });
   }

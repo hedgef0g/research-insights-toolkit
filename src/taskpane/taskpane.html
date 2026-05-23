@@ -40,9 +40,10 @@
       </section>
 
       <section class="action-panel action-panel-sticky">
-        <!-- Action tabs: Run | Check | Content -->
+        <!-- Action tabs: Расчёт | Автозапуск | Проверка | Оглавление -->
         <div class="action-tabs" role="tablist" id="action-tabs">
           <button class="action-tab is-active" data-action="run" role="tab" aria-selected="true">Расчёт</button>
+          <button class="action-tab" data-action="autorun" role="tab" aria-selected="false">Автозапуск</button>
           <button class="action-tab action-tab--readonly" data-action="check" role="tab" aria-selected="false">Проверка</button>
           <button class="action-tab" data-action="content" role="tab" aria-selected="false">Оглавление</button>
         </div>
@@ -57,20 +58,21 @@
         <!-- Workspaces: one shown at a time based on action + scope -->
 
         <div class="action-workspace" data-workspace="run-current_table">
+          <p class="run-scope-fixed">Область: выделенный диапазон</p>
           <div class="action-buttons-row">
             <button id="calculate-significance" class="primary-action-button">Рассчитать</button>
             <button id="clear-significance" class="secondary-action-button">Очистить значимости</button>
           </div>
         </div>
 
-        <div class="action-workspace" data-workspace="run-current_sheet" style="display:none">
+        <div class="action-workspace" data-workspace="autorun-current_sheet" style="display:none">
           <div class="action-buttons-row">
             <button id="run-sheet-tables" class="primary-action-button">Рассчитать</button>
             <button id="clear-sheet-tables" class="secondary-action-button">Очистить значимости</button>
           </div>
         </div>
 
-        <div class="action-workspace" data-workspace="run-whole_workbook" style="display:none">
+        <div class="action-workspace" data-workspace="autorun-whole_workbook" style="display:none">
           <div class="action-buttons-row">
             <button id="run-all-tables" class="primary-action-button">Рассчитать</button>
             <button id="clear-all-tables" class="secondary-action-button">Очистить значимости</button>
