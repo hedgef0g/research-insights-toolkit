@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeSelectedRange } from "../../src/core/range-normalizer.js";
+import { normalizeSelectedRange, hasEmptyDataRowGap } from "../../src/core/range-normalizer.js";
 
 function makeRunCleanedValues(rawText, bodyRowIndexes) {
   return rawText.map((row, rowIndex) =>
@@ -980,5 +980,89 @@ describe("normalizeSelectedRange", () => {
     // col[1] is not uniform ("0%" and "10%" differ), so only col[0] is stripped.
     assert.strictEqual(result.dataColOffset, 1, "non-uniform col[1] must not be treated as unit column");
     assert.deepStrictEqual(result.labelColumns, [0]);
+  });
+});
+
+describe("hasEmptyDataRowGap", () => {
+  it("returns false for a clean numeric grid with no empty rows", () => {
+    const values = [
+      [10, 20, 30],
+      [40, 50, 60],
+      [100, 200, 300],
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), false);
+  });
+
+  it("returns true when one row is all-null", () => {
+    const values = [
+      [10, 20, 30],
+      [null, null, null],
+      [40, 50, 60],
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), true);
+  });
+
+  it("returns true when one row is all-empty-string", () => {
+    const values = [
+      [10, 20, 30],
+      ["", "", ""],
+      [40, 50, 60],
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), true);
+  });
+
+  it("returns true when one row is all-undefined", () => {
+    const values = [
+      [10, 20, 30],
+      [undefined, undefined, undefined],
+      [40, 50, 60],
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), true);
+  });
+
+  it("returns true when gap row is mixed null and empty-string", () => {
+    const values = [
+      [10, 20],
+      [null, ""],
+      [40, 50],
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), true);
+  });
+
+  it("returns false when a row has at least one non-blank cell", () => {
+    const values = [
+      [10, 20, 30],
+      [0, null, null],
+      [40, 50, 60],
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), false, "numeric 0 is non-blank");
+  });
+
+  it("returns false for a single-row grid", () => {
+    assert.strictEqual(hasEmptyDataRowGap([[10, 20, 30]]), false);
+  });
+
+  it("returns false for an empty array", () => {
+    assert.strictEqual(hasEmptyDataRowGap([]), false);
+  });
+
+  it("returns false for a non-array input", () => {
+    assert.strictEqual(hasEmptyDataRowGap(null), false);
+    assert.strictEqual(hasEmptyDataRowGap(undefined), false);
+  });
+
+  it("returns true for two-table pass-through scenario: numeric tables separated by an empty row", () => {
+    // Mirrors the smoke scenario: two purely numeric tables that both pass
+    // isNormalizationNeeded=false, joined by an empty row.
+    // normalizeSelectedRange's validateBody would catch this for normalized ranges;
+    // hasEmptyDataRowGap catches it for pass-through valuesForCalculation.
+    const values = [
+      [30, 40, 50],   // table A row 1
+      [100, 200, 300], // table A base
+      ["", "", ""],    // empty separator
+      [20, 30, 10],   // table B row 1
+      [80, 150, 180], // table B base
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), true);
   });
 });

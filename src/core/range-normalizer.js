@@ -1108,3 +1108,28 @@ export function normalizeSelectedRange(rawValues, rawText, options = {}) {
     bodyEndRow   // full pre-trim end row — used only for trailingBodyRows
   );
 }
+
+/**
+ * Returns true when any row of the values grid is entirely empty (all cells blank).
+ *
+ * An all-empty row inside a data body indicates the range likely spans multiple
+ * tables. Used by checkSelectedRangePreview as a guard for pass-through ranges
+ * that bypass normalizeSelectedRange's validateBody (which emits
+ * BODY_APPEARS_MULTI_TABLE for normalized ranges only).
+ *
+ * @param {Array} values  2D values grid (e.g. valuesForCalculation).
+ * @returns {boolean}
+ */
+export function hasEmptyDataRowGap(values) {
+  if (!Array.isArray(values)) return false;
+  for (const row of values) {
+    if (
+      Array.isArray(row) &&
+      row.length > 0 &&
+      row.every((cell) => cell === "" || cell === null || cell === undefined)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}

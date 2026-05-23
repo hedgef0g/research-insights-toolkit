@@ -34,7 +34,7 @@ import { scanWorksheetForTables } from "../core/table-inventory-scanner";
 
 import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core/banner-detector";
 
-import { normalizeSelectedRange } from "../core/range-normalizer";
+import { normalizeSelectedRange, hasEmptyDataRowGap } from "../core/range-normalizer";
 
 import { filterWorkbookCandidates, BATCH_SKIP_REASONS } from "../core/batch-candidate-filter";
 
@@ -2840,6 +2840,21 @@ async function checkSelectedRangePreview(context, sheetName, rangeAddress, setti
   }
 
   const { valuesForCalculation, leftLabelValues, bannerContext, normalized } = interpretation;
+
+  // Guard: empty-row gap inside the data body → multiple tables in one candidate.
+  // normalizeSelectedRange's validateBody (BODY_APPEARS_MULTI_TABLE) catches this
+  // for broad/normalized ranges, but pass-through ranges bypass validateBody.
+  // This guard closes that gap uniformly for all interpretation states.
+  if (hasEmptyDataRowGap(valuesForCalculation)) {
+    return {
+      status: "blocked",
+      sheetName,
+      rangeAddress,
+      message:
+        "В диапазоне обнаружено несколько блоков данных, разделённых пустыми строками. " +
+        "Перейдите в ячейку внутри одной таблицы или используйте «Проверить лист».",
+    };
+  }
 
   const normalizationLines = [];
 
