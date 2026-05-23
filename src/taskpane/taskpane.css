@@ -630,6 +630,12 @@ b {
   margin-top: 4px;
 }
 
+.run-scope-fixed {
+  margin: 4px 0 4px;
+  font-size: 11px;
+  color: var(--rs-color-text-muted, #6b7280);
+}
+
 .scope-note {
   margin: 6px 0 2px 0;
   font-size: 12px;
