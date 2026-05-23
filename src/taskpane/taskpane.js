@@ -90,7 +90,7 @@ const INVENTORY_FULL_CHECK_COLUMNS = [
   "Metric types",
   "Warnings",
   "Critical",
-  "Issue codes",
+  "Issue details",
   "Notes",
   "Label split",
   "Label cols",
@@ -1104,16 +1104,36 @@ function runReportMetricTypes(item) {
 }
 
 /**
- * Builds a compact warning-detail string from scanner-side item metadata.
- * Uses qualityIssueCodes (code identifiers) and candidateNotes (human-readable).
- * Returns an empty string when there is nothing to report.
+ * Formats issue details from an inventory item into a human-readable string.
+ *
+ * Prefers userVisibleIssues (full issue objects with message and location) when
+ * available. Falls back to qualityIssueCodes (code-only identifiers) for
+ * backward compatibility.
+ *
+ * Does NOT include candidateNotes — callers that need them append separately.
+ */
+function formatIssueDetailsForReport(item) {
+  if (!item) return "";
+  if (item.userVisibleIssues && item.userVisibleIssues.length > 0) {
+    return item.userVisibleIssues.map((iss) => `[${iss.severity}] ${iss.message}`).join("; ");
+  }
+  if (item.qualityIssueCodes && item.qualityIssueCodes.length > 0) {
+    return item.qualityIssueCodes.map((q) => q.code).join(", ");
+  }
+  return "";
+}
+
+/**
+ * Builds a human-readable warning-detail string for the Run report Details column.
+ *
+ * Uses formatIssueDetailsForReport() for issue messages, then appends
+ * candidateNotes (structural candidate diagnostics).
  */
 function runReportWarningDetails(item) {
   if (!item) return "";
   const parts = [];
-  if (item.qualityIssueCodes && item.qualityIssueCodes.length > 0) {
-    parts.push(item.qualityIssueCodes.map((q) => q.code).join(", "));
-  }
+  const issueDetails = formatIssueDetailsForReport(item);
+  if (issueDetails) parts.push(issueDetails);
   if (item.candidateNotes && item.candidateNotes.length > 0) {
     parts.push(...item.candidateNotes);
   }
@@ -4079,7 +4099,7 @@ function buildFullCheckCandidateRows(sheetResults) {
         metricTypes.join(", "),
         item.warningsCount ?? 0,
         item.criticalCount ?? 0,
-        (item.qualityIssueCodes || []).map((q) => q.code).join(", "),
+        formatIssueDetailsForReport(item),
         item.candidateNotes && item.candidateNotes.length > 0 ? item.candidateNotes.join("; ") : "",
         item.labelSplitConfidence || "",
         item.labelColCount ?? "",

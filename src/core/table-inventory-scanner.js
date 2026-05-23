@@ -588,6 +588,19 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     ? (dataQualityIssues || []).map((i) => ({ code: i.code, severity: i.severity }))
     : [];
 
+  // Full issue objects (critical + warning) sorted by severity then rowIndex.
+  // Used for human-readable diagnostic details in Run report and Content check.
+  const userVisibleIssues = isLikelyTable
+    ? (dataQualityIssues || [])
+        .filter((i) => i.severity === "critical" || i.severity === "warning")
+        .sort((a, b) => {
+          const rank = { critical: 0, warning: 1 };
+          const sd = (rank[a.severity] ?? 99) - (rank[b.severity] ?? 99);
+          if (sd !== 0) return sd;
+          return (a.rowIndex ?? Number.MAX_SAFE_INTEGER) - (b.rowIndex ?? Number.MAX_SAFE_INTEGER);
+        })
+    : [];
+
   return {
     tableId,
     sheetName,
@@ -607,6 +620,7 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
     warningsCount: isLikelyTable ? qualitySummary.warningCount : 0,
     criticalCount: isLikelyTable ? qualitySummary.criticalCount : 0,
     qualityIssueCodes,
+    userVisibleIssues,
     availabilityWarningCount,
     hasBlockingIssues: qualitySummary.hasBlockingIssues,
     detectedMetricRows: summary.detectedMetricRows ?? 0,
