@@ -44,6 +44,8 @@ import {
   detectLeadingEmptyColumns,
 } from "./selected-range-interpreter";
 
+import { resolveCurrentTableFromActiveCell } from "./active-cell-resolver";
+
 const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
   "GLOBAL_TOTAL_USED",
   "BANNER_AUTO_PREVIOUS_COLUMN_APPLIED",
@@ -2773,31 +2775,55 @@ async function runMetricDetectionDiagnostics() {
 }
 
 /**
- * Reads selected range and calls buildTablePreviewModel to display a short summary.
+ * Check Текущая таблица: resolves the detected table under the active cell
+ * and runs the read-only check pipeline on it.
  *
- * Read-only: does not write to Excel, does not calculate significance.
+ * Uses resolveCurrentTableFromActiveCell (#208) to find the candidate range.
+ * For ok status: runs interpretation + preview-model and displays results.
+ * For non-ok status: shows a user-facing message explaining why no table was found.
  *
- * Three normalizer states:
- *   1. pass-through  — selection is numeric-only; existing flow runs unchanged.
- *   2. normalized    — broad/full-table selection decomposed; normalized values used.
- *   3. blocked       — broad selection but decomposition failed; early return with message.
+ * Does not modify the Excel workbook unless "Записать результат" is enabled,
+ * in which case it writes a single row to the Run report sheet.
  */
 async function runCheckTable() {
   await Excel.run(async (context) => {
     const calculationSettings = readCalculationSettingsFromPanel();
-    const selectedRange = context.workbook.getSelectedRange();
 
-    selectedRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount", "address"]);
-    selectedRange.worksheet.load("name");
+    // Resolve active cell → detected table (read-only, no selected-range dependency).
+    const resolverResult = await resolveCurrentTableFromActiveCell(context, calculationSettings);
+
+    if (resolverResult.status !== "ok") {
+      const msg = buildCheckResolverMessage(resolverResult);
+      setCheckMessage(msg);
+      if (isCheckReportEnabled()) {
+        await writeRunReportSheet(context, [{
+          sheetName: resolverResult.sheetName || "",
+          title: "",
+          rangeAddress: "",
+          status: "skipped",
+          message: msg,
+          selectedBase: "",
+          metricTypes: "",
+          warnings: 0,
+          critical: 0,
+          warningDetails: "",
+          blocksProcessed: 0,
+        }], "Проверка — Текущая таблица");
+      }
+      return;
+    }
+
+    const { sheetName, rangeAddress } = resolverResult;
+
+    // Inline check pipeline — shares the existing Excel.run context to avoid nesting.
+    const worksheet = context.workbook.worksheets.getItem(sheetName);
+    const sourceRange = worksheet.getRange(rangeAddress);
+    sourceRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
     await context.sync();
 
-    const reportSheetName = selectedRange.worksheet.name;
-    const rawAddress = selectedRange.address;
-    const reportAddress = rawAddress.includes("!") ? rawAddress.split("!")[1] : rawAddress;
-
-    const selectedValues = selectedRange.values;
-    const selectedText = selectedRange.text;
+    const selectedValues = sourceRange.values;
+    const selectedText = sourceRange.text;
 
     if (
       !selectedValues ||
@@ -2805,13 +2831,13 @@ async function runCheckTable() {
       !selectedValues[0] ||
       selectedValues[0].length < 1
     ) {
-      setCheckMessage("Нет данных в выделенном диапазоне.");
+      setCheckMessage("Нет данных в диапазоне таблицы.");
       return;
     }
 
     const interpretation = await interpretSelectedRange(
       context,
-      selectedRange,
+      sourceRange,
       selectedValues,
       selectedText,
       calculationSettings
@@ -2825,7 +2851,19 @@ async function runCheckTable() {
       const msg = `${interpretation.blockingMessage}${codes}`;
       setCheckMessage(msg);
       if (isCheckReportEnabled()) {
-        await writeRunReportSheet(context, [{ sheetName: reportSheetName, title: "", rangeAddress: reportAddress, status: "blocked", message: msg, selectedBase: "", metricTypes: "", warnings: 0, critical: 0, warningDetails: "", blocksProcessed: 0 }], "Проверка — Текущая таблица");
+        await writeRunReportSheet(context, [{
+          sheetName,
+          title: "",
+          rangeAddress,
+          status: "blocked",
+          message: msg,
+          selectedBase: "",
+          metricTypes: "",
+          warnings: 0,
+          critical: 0,
+          warningDetails: "",
+          blocksProcessed: 0,
+        }], "Проверка — Текущая таблица");
       }
       return;
     }
@@ -2867,12 +2905,12 @@ async function runCheckTable() {
     } = model;
 
     if (summary.rowCount === 0) {
-      setCheckMessage("Выделенный диапазон пуст.");
+      setCheckMessage("Диапазон таблицы пуст.");
       return;
     }
 
     const lines = [
-      `Проверка завершена. Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}. Предупреждений: ${qualitySummary.warningCount}. Критических: ${qualitySummary.criticalCount}.`,
+      `Проверка завершена. ${sheetName}!${rangeAddress}. Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}. Предупреждений: ${qualitySummary.warningCount}. Критических: ${qualitySummary.criticalCount}.`,
     ];
 
     if (normalizationLines.length > 0) {
@@ -2905,9 +2943,9 @@ async function runCheckTable() {
         .map((iss) => `[${iss.severity}] ${iss.message}`)
         .join("; ");
       await writeRunReportSheet(context, [{
-        sheetName: reportSheetName,
+        sheetName,
         title: "",
-        rangeAddress: reportAddress,
+        rangeAddress,
         status: "checked",
         message: `Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}.`,
         selectedBase: "",
@@ -2919,6 +2957,28 @@ async function runCheckTable() {
       }], "Проверка — Текущая таблица");
     }
   });
+}
+
+/**
+ * Converts a non-ok resolver result into a user-facing message for the Check panel.
+ *
+ * Falls back to the resolver's own message where available; provides a generic
+ * fallback for unexpected statuses.
+ */
+function buildCheckResolverMessage(resolverResult) {
+  if (resolverResult.message) return resolverResult.message;
+  switch (resolverResult.status) {
+    case "no-table":
+      return "Активная ячейка не находится внутри ни одного кандидата. Перейдите в ячейку внутри таблицы.";
+    case "generated-sheet":
+      return "Лист создан надстройкой и не содержит исследовательских таблиц.";
+    case "ambiguous-boundary":
+      return "Активная ячейка входит в несколько перекрывающихся кандидатов. Уточните позицию курсора.";
+    case "blocked":
+      return "Лист слишком большой для сканирования.";
+    default:
+      return "Не удалось определить таблицу под активной ячейкой.";
+  }
 }
 
 function formatCheckUserVisibleIssues(issues) {
