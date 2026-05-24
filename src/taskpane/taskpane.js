@@ -438,6 +438,11 @@ Office.onReady((info) => {
 
   document.getElementById("check-add-report")?.addEventListener("change", updateCheckHints);
 
+  const checkSelectedRangeButton = document.getElementById("check-selected-range");
+  if (checkSelectedRangeButton) {
+    checkSelectedRangeButton.addEventListener("click", runCheckSelectedRange);
+  }
+
   initActionScopeShell();
   initPanelDismiss();
 });
@@ -3334,6 +3339,87 @@ async function runCheckTable() {
         blocksProcessed: summary.detectedBlocks,
       }], "Проверка — Текущая таблица");
     }
+  });
+}
+
+/**
+ * Расчёт → Проверить выделение: runs a read-only selected-range check directly
+ * on the current Excel selection — does NOT use the active-cell resolver.
+ *
+ * Reads the selected range address, calls checkSelectedRangePreview with the
+ * exact selection, and renders the result in the check panel. Nothing is written
+ * to the workbook.
+ */
+async function runCheckSelectedRange() {
+  await Excel.run(async (context) => {
+    const calculationSettings = readCalculationSettingsFromPanel();
+
+    const selectedRange = context.workbook.getSelectedRange();
+    selectedRange.load(["address"]);
+    const worksheet = selectedRange.worksheet;
+    worksheet.load(["name"]);
+    await context.sync();
+
+    const sheetName = worksheet.name;
+    const fullAddress = selectedRange.address;
+    const exclamationIndex = fullAddress.lastIndexOf("!");
+    const rangeAddress =
+      exclamationIndex >= 0 ? fullAddress.substring(exclamationIndex + 1) : fullAddress;
+
+    const checkResult = await checkSelectedRangePreview(
+      context,
+      sheetName,
+      rangeAddress,
+      calculationSettings
+    );
+
+    if (checkResult.status === "no-data") {
+      setCheckMessage(checkResult.message);
+      return;
+    }
+
+    if (checkResult.status === "blocked") {
+      setCheckMessage(checkResult.message);
+      return;
+    }
+
+    if (checkResult.status === "empty") {
+      setCheckMessage(checkResult.message);
+      return;
+    }
+
+    // status === "checked"
+    const { model, normalizationLines } = checkResult;
+    const { summary, qualitySummary, userVisibleIssues, bannerStructure, calculationBlocks, rowDiagnostics } = model;
+
+    const lines = [
+      `Проверка выделения завершена. ${sheetName}!${rangeAddress}. Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}. Предупреждений: ${qualitySummary.warningCount}. Критических: ${qualitySummary.criticalCount}.`,
+    ];
+
+    if (normalizationLines.length > 0) {
+      lines.push("");
+      lines.push(...normalizationLines);
+    }
+
+    const bannerLines = formatCheckBannerSummary(bannerStructure);
+    if (bannerLines.length > 0) {
+      lines.push("");
+      lines.push(...bannerLines);
+    }
+
+    const issueLines = formatCheckUserVisibleIssues(userVisibleIssues);
+    if (issueLines.length > 0) {
+      lines.push("");
+      lines.push(...issueLines);
+    }
+
+    const blockLines = formatCheckCalculationBlocks(calculationBlocks, rowDiagnostics);
+    if (blockLines.length > 0) {
+      lines.push("");
+      lines.push(...blockLines);
+    }
+
+    setCheckMessage(lines.join("\n"));
   });
 }
 
