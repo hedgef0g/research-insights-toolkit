@@ -4,7 +4,9 @@ import assert from "node:assert/strict";
 import {
   parseA1Range,
   findCandidateForActiveCell,
+  extractCandidateSlice,
 } from "../../src/core/active-cell-table-finder.js";
+import { hasEmptyDataRowGap } from "../../src/core/range-normalizer.js";
 
 // ─── parseA1Range ─────────────────────────────────────────────────────────────
 
@@ -191,5 +193,105 @@ describe("findCandidateForActiveCell — ambiguous", () => {
     const titles = result.candidates.map((c) => c.title);
     assert.ok(titles.includes("First"), "should include First");
     assert.ok(titles.includes("Second"), "should include Second");
+  });
+});
+
+// ─── extractCandidateSlice ────────────────────────────────────────────────────
+
+describe("extractCandidateSlice", () => {
+  // usedRange starts at A1 (rowIndex=0, colIndex=0)
+  const values0 = [
+    [10, 20, 30, 40],
+    [11, 21, 31, 41],
+    [12, 22, 32, 42],
+    [13, 23, 33, 43],
+  ];
+
+  it("extracts the full range when candidate matches usedRange exactly", () => {
+    // A1:D4 → entire 4×4 grid
+    const slice = extractCandidateSlice(values0, 0, 0, "A1:D4");
+    assert.deepStrictEqual(slice, values0);
+  });
+
+  it("extracts a sub-range with zero row/col offsets", () => {
+    // B2:C3 → rows 1..2 (0-based), cols 1..2 → [[21,31],[22,32]]
+    const slice = extractCandidateSlice(values0, 0, 0, "B2:C3");
+    assert.deepStrictEqual(slice, [
+      [21, 31],
+      [22, 32],
+    ]);
+  });
+
+  it("applies row and column offsets correctly (usedRange starts at B3)", () => {
+    // usedRange starts at B3 → rowIndex=2, colIndex=1
+    // candidate C4:D5 → startRow=3,endRow=4, startCol=2,endCol=3
+    // relStartRow=1, relEndRow=2, relStartCol=1, relEndCol=2
+    const usedValues = [
+      [10, 20, 30],   // B3:D3
+      [11, 21, 31],   // B4:D4
+      [12, 22, 32],   // B5:D5
+    ];
+    const slice = extractCandidateSlice(usedValues, 2, 1, "C4:D5");
+    assert.deepStrictEqual(slice, [
+      [21, 31],
+      [22, 32],
+    ]);
+  });
+
+  it("returns null for empty usedRangeValues", () => {
+    assert.strictEqual(extractCandidateSlice([], 0, 0, "A1:B2"), null);
+  });
+
+  it("returns null for non-array usedRangeValues", () => {
+    assert.strictEqual(extractCandidateSlice(null, 0, 0, "A1:B2"), null);
+    assert.strictEqual(extractCandidateSlice(undefined, 0, 0, "A1:B2"), null);
+  });
+
+  it("returns null for unparseable candidateRangeAddress", () => {
+    assert.strictEqual(extractCandidateSlice(values0, 0, 0, "Sheet1!A1:B2"), null);
+    assert.strictEqual(extractCandidateSlice(values0, 0, 0, ""), null);
+    assert.strictEqual(extractCandidateSlice(values0, 0, 0, null), null);
+  });
+
+  it("returns null when candidate starts before usedRange top edge", () => {
+    // usedRange starts at row 5; candidate starts at row 3 → relStartRow = -2
+    const slice = extractCandidateSlice(values0, 5, 0, "A4:D7");
+    assert.strictEqual(slice, null);
+  });
+
+  it("returns null when candidate starts before usedRange left edge", () => {
+    // usedRange starts at col 3; candidate starts at col 1 → relStartCol = -2
+    const slice = extractCandidateSlice(values0, 0, 3, "B1:D4");
+    assert.strictEqual(slice, null);
+  });
+
+  it("clamps endRow to usedRange boundary when candidate extends beyond", () => {
+    // usedRange has 4 rows (0-based 0..3); candidate asks for rows 2..10 (A3:D11)
+    // relEndRow = 10 → clamped to 3 → last two rows of values0
+    const slice = extractCandidateSlice(values0, 0, 0, "A3:D11");
+    assert.deepStrictEqual(slice, [
+      [12, 22, 32, 42],
+      [13, 23, 33, 43],
+    ]);
+  });
+
+  it("detects empty-row gap in candidate slice (resolver smoke scenario)", () => {
+    // Two numeric tables with an all-empty separator row between them,
+    // all within a single 'usedRange'. The resolver extracts the candidate slice
+    // and hasEmptyDataRowGap must fire.
+    const usedValues = [
+      [1,  2,  3],   // Table 1 base (row 0)
+      [10, 20, 30],  // Table 1 data (row 1)
+      ["", "", ""],  // gap row (row 2)
+      [4,  5,  6],   // Table 2 base (row 3)
+      [40, 50, 60],  // Table 2 data (row 4)
+    ];
+    // candidate spans the full usedRange: A1:C5
+    const slice = extractCandidateSlice(usedValues, 0, 0, "A1:C5");
+    // Verify slice is correct (all 5 rows, all 3 cols)
+    assert.strictEqual(slice.length, 5);
+    assert.deepStrictEqual(slice[2], ["", "", ""]);
+    // Verify the gap is detected
+    assert.strictEqual(hasEmptyDataRowGap(slice), true);
   });
 });

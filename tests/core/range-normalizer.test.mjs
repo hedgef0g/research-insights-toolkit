@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeSelectedRange } from "../../src/core/range-normalizer.js";
+import { normalizeSelectedRange, hasEmptyDataRowGap, selectionHasMultiTableGap } from "../../src/core/range-normalizer.js";
 
 function makeRunCleanedValues(rawText, bodyRowIndexes) {
   return rawText.map((row, rowIndex) =>
@@ -980,5 +980,203 @@ describe("normalizeSelectedRange", () => {
     // col[1] is not uniform ("0%" and "10%" differ), so only col[0] is stripped.
     assert.strictEqual(result.dataColOffset, 1, "non-uniform col[1] must not be treated as unit column");
     assert.deepStrictEqual(result.labelColumns, [0]);
+  });
+});
+
+describe("hasEmptyDataRowGap", () => {
+  it("returns false for a clean numeric grid with no empty rows", () => {
+    const values = [
+      [10, 20, 30],
+      [40, 50, 60],
+      [100, 200, 300],
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), false);
+  });
+
+  it("returns true when one row is all-null", () => {
+    const values = [
+      [10, 20, 30],
+      [null, null, null],
+      [40, 50, 60],
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), true);
+  });
+
+  it("returns true when one row is all-empty-string", () => {
+    const values = [
+      [10, 20, 30],
+      ["", "", ""],
+      [40, 50, 60],
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), true);
+  });
+
+  it("returns true when one row is all-undefined", () => {
+    const values = [
+      [10, 20, 30],
+      [undefined, undefined, undefined],
+      [40, 50, 60],
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), true);
+  });
+
+  it("returns true when gap row is mixed null and empty-string", () => {
+    const values = [
+      [10, 20],
+      [null, ""],
+      [40, 50],
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), true);
+  });
+
+  it("returns false when a row has at least one non-blank cell", () => {
+    const values = [
+      [10, 20, 30],
+      [0, null, null],
+      [40, 50, 60],
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), false, "numeric 0 is non-blank");
+  });
+
+  it("returns false for a single-row grid", () => {
+    assert.strictEqual(hasEmptyDataRowGap([[10, 20, 30]]), false);
+  });
+
+  it("returns false for an empty array", () => {
+    assert.strictEqual(hasEmptyDataRowGap([]), false);
+  });
+
+  it("returns false for a non-array input", () => {
+    assert.strictEqual(hasEmptyDataRowGap(null), false);
+    assert.strictEqual(hasEmptyDataRowGap(undefined), false);
+  });
+
+  it("returns true for two-table pass-through scenario: numeric tables separated by an empty row", () => {
+    // Mirrors the smoke scenario: two purely numeric tables that both pass
+    // isNormalizationNeeded=false, joined by an empty row.
+    // normalizeSelectedRange's validateBody would catch this for normalized ranges;
+    // hasEmptyDataRowGap catches it for pass-through valuesForCalculation.
+    const values = [
+      [30, 40, 50],   // table A row 1
+      [100, 200, 300], // table A base
+      ["", "", ""],    // empty separator
+      [20, 30, 10],   // table B row 1
+      [80, 150, 180], // table B base
+    ];
+    assert.strictEqual(hasEmptyDataRowGap(values), true);
+  });
+});
+
+// ─── selectionHasMultiTableGap ────────────────────────────────────────────────
+
+describe("selectionHasMultiTableGap", () => {
+  it("returns false for a clean single-table grid (no gap)", () => {
+    const values = [
+      [100, 200, 300],
+      [10, 20, 30],
+      [11, 21, 31],
+    ];
+    assert.strictEqual(selectionHasMultiTableGap(values), false);
+  });
+
+  it("returns false for a single non-blank row", () => {
+    assert.strictEqual(selectionHasMultiTableGap([[10, 20, 30]]), false);
+  });
+
+  it("returns false for a single blank row", () => {
+    assert.strictEqual(selectionHasMultiTableGap([["", "", ""]]), false);
+  });
+
+  it("returns false for an empty array", () => {
+    assert.strictEqual(selectionHasMultiTableGap([]), false);
+  });
+
+  it("returns false for non-array input", () => {
+    assert.strictEqual(selectionHasMultiTableGap(null), false);
+    assert.strictEqual(selectionHasMultiTableGap(undefined), false);
+  });
+
+  it("returns true for two non-blank groups separated by one blank row", () => {
+    const values = [
+      [100, 200],    // table A base
+      [10, 20],      // table A data
+      ["", ""],      // gap
+      [80, 150],     // table B base
+      [8, 15],       // table B data
+    ];
+    assert.strictEqual(selectionHasMultiTableGap(values), true);
+  });
+
+  it("returns true for two groups separated by multiple blank rows", () => {
+    const values = [
+      [100, 200],
+      ["", ""],
+      ["", ""],
+      ["", ""],
+      [80, 150],
+    ];
+    assert.strictEqual(selectionHasMultiTableGap(values), true);
+  });
+
+  it("returns false when blank rows are only trailing (first group then blanks only)", () => {
+    const values = [
+      [100, 200],
+      [10, 20],
+      ["", ""],
+      ["", ""],
+    ];
+    assert.strictEqual(selectionHasMultiTableGap(values), false);
+  });
+
+  it("returns false when blank rows are only leading (blanks then one group)", () => {
+    const values = [
+      ["", ""],
+      ["", ""],
+      [100, 200],
+      [10, 20],
+    ];
+    assert.strictEqual(selectionHasMultiTableGap(values), false);
+  });
+
+  it("returns true even with leading blank rows before the first group", () => {
+    const values = [
+      ["", ""],      // leading blank — ignored
+      [100, 200],    // table A
+      ["", ""],      // gap
+      [80, 150],     // table B
+    ];
+    assert.strictEqual(selectionHasMultiTableGap(values), true);
+  });
+
+  it("returns true even with trailing blank rows after the second group", () => {
+    const values = [
+      [100, 200],
+      ["", ""],
+      [80, 150],
+      ["", ""],      // trailing blank — does not prevent detection
+    ];
+    assert.strictEqual(selectionHasMultiTableGap(values), true);
+  });
+
+  it("returns false when the gap row has at least one non-blank cell", () => {
+    const values = [
+      [100, 200],
+      ["Примечание", ""],  // one non-blank cell — not a gap row
+      [80, 150],
+    ];
+    assert.strictEqual(selectionHasMultiTableGap(values), false);
+  });
+
+  it("smoke: two selected tables with empty row between — matches the failing smoke case", () => {
+    // User selects a range spanning two numeric tables with an empty separator row.
+    const values = [
+      [500, 600, 700],   // table A base
+      [50, 60, 70],      // table A data row 1
+      [45, 55, 65],      // table A data row 2
+      ["", "", ""],      // empty separator between tables
+      [400, 500, 600],   // table B base
+      [40, 50, 60],      // table B data row 1
+    ];
+    assert.strictEqual(selectionHasMultiTableGap(values), true);
   });
 });
