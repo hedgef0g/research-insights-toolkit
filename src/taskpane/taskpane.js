@@ -813,6 +813,16 @@ async function runSignificanceFromSelection() {
         writeTargetRange.columnIndex
       );
 
+      // Pre-clear all existing banner markers above the write range before
+      // writing fresh ones.  Without this, stale markers survive in vertically
+      // merged banner cells: the write helpers only update cells they target on
+      // this run, so any cell targeted by a previous run (possibly in a higher
+      // banner row due to a vertical merge) that is not targeted this run keeps
+      // its old marker.  clearBannerMarkersAboveRange reads .text (which returns
+      // text from the top-left of each merge) and removes any trailing RIT marker
+      // from every banner row above the data range.
+      await clearBannerMarkersAboveRange(context, writeTargetRange);
+
       if (calculationSettings.respectBannerStructure && bannerStructure) {
         await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
           context,
@@ -1027,6 +1037,12 @@ async function runSignificanceForRange(sheetName, rangeAddress, calculationSetti
         writeTargetRange.rowIndex,
         writeTargetRange.columnIndex
       );
+
+      // Pre-clear all existing banner markers above the write range before
+      // writing fresh ones.  Same reason as in runSignificanceFromSelection:
+      // vertically merged banner cells retain stale markers when re-run with
+      // different banner/wave settings.
+      await clearBannerMarkersAboveRange(context, writeTargetRange);
 
       if (calculationSettings.respectBannerStructure && bannerStructure) {
         await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
