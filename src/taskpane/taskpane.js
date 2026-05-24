@@ -1734,6 +1734,7 @@ async function runAutoCurrentTableSignificance() {
   }
 
   const { sheetName, rangeAddress } = resolverResult;
+  const resolvedTableTitle = resolveContentDisplayTitle(resolverResult.candidateMeta, 1);
 
   let result;
   try {
@@ -1747,7 +1748,7 @@ async function runAutoCurrentTableSignificance() {
         await Excel.run(async (context) => {
           const sheet = await writeRunReportSheet(context, [{
             sheetName,
-            title: "",
+            title: resolvedTableTitle,
             rangeAddress,
             status: "error",
             message: errMsg,
@@ -1778,7 +1779,7 @@ async function runAutoCurrentTableSignificance() {
       await Excel.run(async (context) => {
         const sheet = await writeRunReportSheet(context, [{
           sheetName,
-          title: "",
+          title: resolvedTableTitle,
           rangeAddress,
           status: result.status,
           message: result.message || "",
@@ -3235,6 +3236,7 @@ async function runCheckTable() {
     }
 
     const { sheetName, rangeAddress } = resolverResult;
+    const resolvedTableTitle = resolveContentDisplayTitle(resolverResult.candidateMeta, 1);
 
     const checkResult = await checkSelectedRangePreview(
       context,
@@ -3254,7 +3256,7 @@ async function runCheckTable() {
       if (isCheckReportEnabled()) {
         await writeRunReportSheet(context, [{
           sheetName,
-          title: "",
+          title: resolvedTableTitle,
           rangeAddress,
           status: "blocked",
           message: msg,
@@ -3320,7 +3322,7 @@ async function runCheckTable() {
         .join("; ");
       await writeRunReportSheet(context, [{
         sheetName,
-        title: "",
+        title: resolvedTableTitle,
         rangeAddress,
         status: "checked",
         message: `Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}.`,
