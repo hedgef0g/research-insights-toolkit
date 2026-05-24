@@ -31,7 +31,8 @@
  */
 
 import { scanWorksheetForTables } from "../core/table-inventory-scanner";
-import { findCandidateForActiveCell } from "../core/active-cell-table-finder";
+import { findCandidateForActiveCell, extractCandidateSlice } from "../core/active-cell-table-finder";
+import { hasEmptyDataRowGap } from "../core/range-normalizer";
 
 const RESOLVER_GENERATED_SHEET_NAMES = new Set(["Content", "Run report"]);
 const RESOLVER_SCAN_CELL_LIMIT = 250000;
@@ -163,6 +164,33 @@ export async function resolveCurrentTableFromActiveCell(context, settings) {
     }
 
     const candidate = findResult.candidate;
+
+    // Guard: before committing to "ok", extract the candidate slice from the
+    // already-loaded usedRange.values and inspect it for all-empty row gaps.
+    // This must happen at the resolver layer — before checkSelectedRangePreview
+    // is called — because a candidate whose rangeAddress contains multiple
+    // table-like blocks can still lead to a normal one-table diagnostic once the
+    // later normalization pipeline reduces it to a single body.
+    const candidateSlice = extractCandidateSlice(
+      usedRange.values,
+      usedRange.rowIndex,
+      usedRange.columnIndex,
+      candidate.rangeAddress
+    );
+    if (candidateSlice !== null && hasEmptyDataRowGap(candidateSlice)) {
+      return {
+        status: "ambiguous-boundary",
+        sheetName,
+        message:
+          "В диапазоне кандидата обнаружено несколько блоков данных, разделённых пустыми строками. " +
+          "Перейдите в ячейку внутри одной таблицы или используйте «Проверить лист».",
+        details: {
+          activeCellRow,
+          activeCellCol,
+          candidateRangeAddress: candidate.rangeAddress,
+        },
+      };
+    }
 
     return {
       status: "ok",

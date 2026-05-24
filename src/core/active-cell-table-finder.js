@@ -51,6 +51,63 @@ export function parseA1Range(address) {
   return { startRow, endRow, startCol, endCol };
 }
 
+// ─── Candidate slice extraction ──────────────────────────────────────────────
+
+/**
+ * Extracts a 2D values slice from usedRange.values that covers the candidate's
+ * rangeAddress bounds.
+ *
+ * The candidate's rangeAddress uses absolute A1 sheet coordinates, as produced
+ * by scanWorksheetForTables. usedRangeRowOffset and usedRangeColOffset are the
+ * absolute sheet position of the top-left cell of usedRange.values (i.e.
+ * usedRange.rowIndex and usedRange.columnIndex from Office.js).
+ *
+ * Returns null when:
+ *   - usedRangeValues is not a non-empty array;
+ *   - candidateRangeAddress cannot be parsed;
+ *   - the candidate's start position falls outside usedRange.values.
+ *
+ * When the candidate extends beyond the usedRange edge it is clamped silently,
+ * because the scanner already operates on usedRange data and out-of-range
+ * indices would only arise from rounding / edge-row handling.
+ *
+ * @param {Array}  usedRangeValues       - 2D array from usedRange.values
+ * @param {number} usedRangeRowOffset    - usedRange.rowIndex (zero-based absolute)
+ * @param {number} usedRangeColOffset    - usedRange.columnIndex (zero-based absolute)
+ * @param {string} candidateRangeAddress - A1 notation (absolute sheet coordinates)
+ * @returns {Array|null}
+ */
+export function extractCandidateSlice(
+  usedRangeValues,
+  usedRangeRowOffset,
+  usedRangeColOffset,
+  candidateRangeAddress
+) {
+  if (!Array.isArray(usedRangeValues) || usedRangeValues.length === 0) return null;
+  const bounds = parseA1Range(candidateRangeAddress);
+  if (!bounds) return null;
+
+  const rowCount = usedRangeValues.length;
+  const colCount = Array.isArray(usedRangeValues[0]) ? usedRangeValues[0].length : 0;
+
+  const relStartRow = bounds.startRow - usedRangeRowOffset;
+  const relEndRow   = bounds.endRow   - usedRangeRowOffset;
+  const relStartCol = bounds.startCol - usedRangeColOffset;
+  const relEndCol   = bounds.endCol   - usedRangeColOffset;
+
+  // Reject when the candidate starts before or beyond the usedRange.
+  if (relStartRow < 0 || relStartRow >= rowCount) return null;
+  if (relStartCol < 0 || relStartCol >= colCount) return null;
+  if (relEndRow < relStartRow || relEndCol < relStartCol) return null;
+
+  const endRow = Math.min(relEndRow, rowCount - 1);
+  const endCol = Math.min(relEndCol, colCount - 1);
+
+  return usedRangeValues
+    .slice(relStartRow, endRow + 1)
+    .map((row) => (Array.isArray(row) ? row.slice(relStartCol, endCol + 1) : []));
+}
+
 // ─── Candidate containment check ─────────────────────────────────────────────
 
 /**
