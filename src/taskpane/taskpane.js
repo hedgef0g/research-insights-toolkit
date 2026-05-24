@@ -34,7 +34,7 @@ import { scanWorksheetForTables } from "../core/table-inventory-scanner";
 
 import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core/banner-detector";
 
-import { normalizeSelectedRange, hasEmptyDataRowGap } from "../core/range-normalizer";
+import { normalizeSelectedRange, hasEmptyDataRowGap, selectionHasMultiTableGap } from "../core/range-normalizer";
 
 import { filterWorkbookCandidates, BATCH_SKIP_REASONS } from "../core/batch-candidate-filter";
 
@@ -2895,12 +2895,51 @@ async function checkSelectedRangePreview(context, sheetName, rangeAddress, setti
  * then delegates the data pipeline to checkSelectedRangePreview.
  * For non-ok resolver status: shows a user-facing message.
  *
+ * Pre-resolver selection guard: if the user currently has a broad multi-table
+ * selection active (non-empty row gap between non-empty row groups), we block
+ * before the resolver runs to avoid a misleading one-table diagnostic. This is
+ * NOT a return to selected-range Check semantics — a normal single-cell or
+ * single-table selection proceeds to the active-cell resolver as usual.
+ *
  * Does not modify the Excel workbook unless "Записать результат" is enabled,
  * in which case it writes a single row to the Run report sheet.
  */
 async function runCheckTable() {
   await Excel.run(async (context) => {
     const calculationSettings = readCalculationSettingsFromPanel();
+
+    // Pre-resolver selection sanity guard.
+    // Load the current selected range and check for a multi-table gap BEFORE
+    // calling the active-cell resolver. If the selection spans multiple table-like
+    // blocks separated by empty rows, block immediately with a clear message.
+    // A single-cell selection or a normal single-table selection passes through.
+    const selectionForGuard = context.workbook.getSelectedRange();
+    selectionForGuard.load(["values"]);
+    await context.sync();
+
+    if (selectionHasMultiTableGap(selectionForGuard.values)) {
+      const msg =
+        "Выделение содержит несколько блоков данных, разделённых пустыми строками. " +
+        "Перейдите в ячейку внутри одной таблицы для проверки «Текущая таблица», " +
+        "или используйте «Проверить лист» для нескольких таблиц.";
+      setCheckMessage(msg);
+      if (isCheckReportEnabled()) {
+        await writeRunReportSheet(context, [{
+          sheetName: "",
+          title: "",
+          rangeAddress: "",
+          status: "blocked",
+          message: msg,
+          selectedBase: "",
+          metricTypes: "",
+          warnings: 0,
+          critical: 0,
+          warningDetails: "",
+          blocksProcessed: 0,
+        }], "Проверка — Текущая таблица");
+      }
+      return;
+    }
 
     // Resolve active cell → detected table (read-only, no selected-range dependency).
     const resolverResult = await resolveCurrentTableFromActiveCell(context, calculationSettings);

@@ -1110,6 +1110,48 @@ export function normalizeSelectedRange(rawValues, rawText, options = {}) {
 }
 
 /**
+ * Returns true when the values grid contains at least one group of non-empty rows,
+ * followed by one or more all-empty rows, followed by at least one more non-empty row.
+ *
+ * Leading and trailing all-empty rows are ignored, so a single-cell selection, a
+ * normal single-table selection, or a table with blank edge rows does not trigger
+ * the guard.
+ *
+ * Used as a pre-resolver sanity guard in runCheckTable() to detect a broad
+ * multi-table selection before the active-cell resolver runs.
+ *
+ * @param {Array} values - 2D array from selectedRange.values
+ * @returns {boolean}
+ */
+export function selectionHasMultiTableGap(values) {
+  if (!Array.isArray(values) || values.length === 0) return false;
+
+  function isRowBlank(row) {
+    return (
+      Array.isArray(row) &&
+      row.length > 0 &&
+      row.every((cell) => cell === "" || cell === null || cell === undefined)
+    );
+  }
+
+  let i = 0;
+
+  // Skip leading blank rows.
+  while (i < values.length && isRowBlank(values[i])) i++;
+
+  // Advance through the first non-blank group.
+  while (i < values.length && !isRowBlank(values[i])) i++;
+
+  if (i >= values.length) return false; // no gap follows the first group
+
+  // Advance through the gap (one or more blank rows).
+  while (i < values.length && isRowBlank(values[i])) i++;
+
+  // Multi-table gap detected if another non-blank row exists after the gap.
+  return i < values.length;
+}
+
+/**
  * Returns true when any row of the values grid is entirely empty (all cells blank).
  *
  * An all-empty row inside a data body indicates the range likely spans multiple
