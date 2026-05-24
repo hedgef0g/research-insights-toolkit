@@ -403,8 +403,13 @@ Office.onReady((info) => {
     clearAllTablesButton.addEventListener("click", clearAutoSignificance);
   }
 
+  const autorunCurrentTableButton = document.getElementById("autorun-current-table");
   const runSheetTablesButton = document.getElementById("run-sheet-tables");
   const clearSheetTablesButton = document.getElementById("clear-sheet-tables");
+
+  if (autorunCurrentTableButton) {
+    autorunCurrentTableButton.addEventListener("click", runAutoCurrentTableSignificance);
+  }
 
   if (runSheetTablesButton) {
     runSheetTablesButton.addEventListener("click", runCurrentSheetSignificance);
@@ -472,15 +477,9 @@ function updateActionScopeShell(action, scope) {
   const scopeSelector = document.getElementById("scope-selector");
   if (scopeSelector) scopeSelector.style.display = (runSelected || contentSelected) ? "none" : "";
 
-  // Автозапуск does not support current_table scope yet: hide that button.
   document.querySelectorAll(".scope-btn").forEach((btn) => {
-    const isCurrentTable = btn.dataset.scope === "current_table";
-    if (autorunSelected && isCurrentTable) {
-      btn.style.display = "none";
-    } else {
-      btn.style.display = "";
-      btn.classList.toggle("is-active", btn.dataset.scope === scope);
-    }
+    btn.style.display = "";
+    btn.classList.toggle("is-active", btn.dataset.scope === scope);
   });
 
   // Determine the effective workspace key.
@@ -524,10 +523,6 @@ function initActionScopeShell() {
       const action = tab.dataset.action;
       if (action === _currentAction) return;
       _currentAction = action;
-      // Автозапуск does not support current_table yet: fall back to current_sheet
-      if (_currentAction === "autorun" && _currentScope === "current_table") {
-        _currentScope = "current_sheet";
-      }
       updateActionScopeShell(_currentAction, _currentScope);
     });
   }
@@ -1594,6 +1589,193 @@ async function runAutoSignificance() {
         summaryLines.join("\n") +
         `\n[Отчёт: ошибка записи — ${reportErr.message || reportErr}]`
       );
+    }
+  }
+}
+
+/**
+ * Autorun current-table: resolves the detected table under the active cell
+ * and runs the full significance pipeline on it.
+ *
+ * Uses the same pre-resolver selection guard as runCheckTable (#210) to block
+ * broad multi-table selections before the active-cell resolver is called.
+ * Delegates the significance pipeline to runSignificanceForRange.
+ *
+ * Clear is deferred for this scope — safely targeting only the resolved
+ * active-cell table requires a separate implementation.
+ */
+async function runAutoCurrentTableSignificance() {
+  const calculationSettings = readCalculationSettingsFromPanel();
+
+  if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
+    setStatusMessage(
+      // eslint-disable-next-line quotes
+      'Режим "Сравнение с предыдущей колонкой" несовместим с режимом "Сравнивать только с Тотал".'
+    );
+    return;
+  }
+
+  if (
+    calculationSettings.excludeTotalFromComparisons &&
+    !calculationSettings.firstColumnIsTotal &&
+    !calculationSettings.respectBannerStructure
+  ) {
+    setStatusMessage(
+      'Для режима "Не сравнивать с Тотал" нужно указать расположение Тотала. Сейчас поддерживается вариант "Первая колонка — Тотал" или режим "Учитывать структуру баннера".'
+    );
+    return;
+  }
+
+  if (
+    calculationSettings.compareOnlyWithTotal &&
+    !calculationSettings.firstColumnIsTotal &&
+    !calculationSettings.respectBannerStructure
+  ) {
+    setStatusMessage(
+      'Для режима "Сравнивать только с Тотал" нужно указать расположение Тотала. Сейчас поддерживается вариант "Первая колонка — Тотал" или режим "Учитывать структуру баннера".'
+    );
+    return;
+  }
+
+  if (
+    calculationSettings.compareWithPreviousColumn &&
+    calculationSettings.fillOnlyTotalComparisons
+  ) {
+    setStatusMessage(
+      'Режим "Сравнение с предыдущей колонкой" несовместим с настройкой "Заливка только для Тотала".'
+    );
+    return;
+  }
+
+  let resolverResult = null;
+
+  try {
+    await Excel.run(async (context) => {
+      // Pre-resolver selection guard (mirrors runCheckTable from #210).
+      // A broad selection spanning multiple table-like blocks (separated by
+      // empty rows) is blocked before the active-cell resolver runs.
+      const selectionForGuard = context.workbook.getSelectedRange();
+      selectionForGuard.load(["values"]);
+      await context.sync();
+
+      if (selectionHasMultiTableGap(selectionForGuard.values)) {
+        resolverResult = {
+          status: "blocked",
+          sheetName: "",
+          message:
+            "Выделение содержит несколько таблиц или блоков данных, разделённых пустыми строками. " +
+            "Для «Текущей таблицы» поставьте курсор в одну таблицу или используйте «Автозапуск → Текущий лист».",
+        };
+        return;
+      }
+
+      resolverResult = await resolveCurrentTableFromActiveCell(context, calculationSettings);
+    });
+  } catch (err) {
+    setStatusMessage(
+      `Автозапуск — Текущая таблица: ошибка при определении таблицы — ${err.message || err}`
+    );
+    return;
+  }
+
+  if (!resolverResult) {
+    setStatusMessage("Автозапуск — Текущая таблица: не удалось определить таблицу.");
+    return;
+  }
+
+  const addReport = getCheckboxValue("run-add-report");
+
+  if (resolverResult.status !== "ok") {
+    const msg = resolverResult.message || "Не удалось определить таблицу под активной ячейкой.";
+    setStatusMessage(msg);
+
+    if (addReport) {
+      try {
+        await Excel.run(async (context) => {
+          const sheet = await writeRunReportSheet(context, [{
+            sheetName: resolverResult.sheetName || "",
+            title: "",
+            rangeAddress: "",
+            status: "skipped",
+            message: msg,
+            selectedBase: "",
+            metricTypes: "",
+            warnings: 0,
+            critical: 0,
+            warningDetails: "",
+            blocksProcessed: 0,
+          }], "Автозапуск — Текущая таблица");
+          sheet.activate();
+          await context.sync();
+        });
+      } catch (reportErr) {
+        setStatusMessage(msg + `\n[Отчёт: ошибка записи — ${reportErr.message || reportErr}]`);
+      }
+    }
+    return;
+  }
+
+  const { sheetName, rangeAddress } = resolverResult;
+
+  let result;
+  try {
+    result = await runSignificanceForRange(sheetName, rangeAddress, calculationSettings);
+  } catch (err) {
+    const errMsg = err.message || "неизвестная ошибка";
+    setStatusMessage(`Автозапуск — Текущая таблица: ошибка расчёта — ${errMsg}`);
+
+    if (addReport) {
+      try {
+        await Excel.run(async (context) => {
+          const sheet = await writeRunReportSheet(context, [{
+            sheetName,
+            title: "",
+            rangeAddress,
+            status: "error",
+            message: errMsg,
+            selectedBase: "",
+            metricTypes: "",
+            warnings: 0,
+            critical: 0,
+            warningDetails: "",
+            blocksProcessed: 0,
+          }], "Автозапуск — Текущая таблица");
+          sheet.activate();
+          await context.sync();
+        });
+      } catch (_) { /* non-fatal — primary error already shown */ }
+    }
+    return;
+  }
+
+  const statusMsg =
+    result.status === "processed"
+      ? `Автозапуск — Текущая таблица: выполнен. ${sheetName}!${rangeAddress}. Блоков: ${result.blocksProcessed}.`
+      : `Автозапуск — Текущая таблица: ${result.message || "пропущено"}.`;
+
+  setStatusMessage(statusMsg);
+
+  if (addReport) {
+    try {
+      await Excel.run(async (context) => {
+        const sheet = await writeRunReportSheet(context, [{
+          sheetName,
+          title: "",
+          rangeAddress,
+          status: result.status,
+          message: result.message || "",
+          selectedBase: "",
+          metricTypes: "",
+          warnings: 0,
+          critical: 0,
+          warningDetails: "",
+          blocksProcessed: result.blocksProcessed != null ? result.blocksProcessed : "",
+        }], "Автозапуск — Текущая таблица");
+        sheet.activate();
+        await context.sync();
+      });
+    } catch (reportErr) {
+      setStatusMessage(statusMsg + `\n[Отчёт: ошибка записи — ${reportErr.message || reportErr}]`);
     }
   }
 }
