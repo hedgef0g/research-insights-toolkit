@@ -2818,6 +2818,21 @@ async function checkSelectedRangePreview(context, sheetName, rangeAddress, setti
     return { status: "no-data", sheetName, rangeAddress, message: "Нет данных в диапазоне." };
   }
 
+  // Pre-normalization guard: check the raw loaded range for all-empty row gaps
+  // BEFORE interpretSelectedRange is called. Must run here because normalization
+  // can reduce a multi-table range to a single-table body, silently masking the
+  // presence of additional tables and producing a misleading one-table diagnostic.
+  if (hasEmptyDataRowGap(selectedValues)) {
+    return {
+      status: "blocked",
+      sheetName,
+      rangeAddress,
+      message:
+        "В диапазоне обнаружено несколько блоков данных, разделённых пустыми строками. " +
+        "Перейдите в ячейку внутри одной таблицы или используйте «Проверить лист».",
+    };
+  }
+
   const interpretation = await interpretSelectedRange(
     context,
     sourceRange,
@@ -2840,21 +2855,6 @@ async function checkSelectedRangePreview(context, sheetName, rangeAddress, setti
   }
 
   const { valuesForCalculation, leftLabelValues, bannerContext, normalized } = interpretation;
-
-  // Guard: empty-row gap inside the data body → multiple tables in one candidate.
-  // normalizeSelectedRange's validateBody (BODY_APPEARS_MULTI_TABLE) catches this
-  // for broad/normalized ranges, but pass-through ranges bypass validateBody.
-  // This guard closes that gap uniformly for all interpretation states.
-  if (hasEmptyDataRowGap(valuesForCalculation)) {
-    return {
-      status: "blocked",
-      sheetName,
-      rangeAddress,
-      message:
-        "В диапазоне обнаружено несколько блоков данных, разделённых пустыми строками. " +
-        "Перейдите в ячейку внутри одной таблицы или используйте «Проверить лист».",
-    };
-  }
 
   const normalizationLines = [];
 
