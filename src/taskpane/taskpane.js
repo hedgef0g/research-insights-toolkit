@@ -404,11 +404,16 @@ Office.onReady((info) => {
   }
 
   const autorunCurrentTableButton = document.getElementById("autorun-current-table");
+  const clearCurrentTableButton = document.getElementById("clear-current-table");
   const runSheetTablesButton = document.getElementById("run-sheet-tables");
   const clearSheetTablesButton = document.getElementById("clear-sheet-tables");
 
   if (autorunCurrentTableButton) {
     autorunCurrentTableButton.addEventListener("click", runAutoCurrentTableSignificance);
+  }
+
+  if (clearCurrentTableButton) {
+    clearCurrentTableButton.addEventListener("click", clearAutoCurrentTableSignificance);
   }
 
   if (runSheetTablesButton) {
@@ -1600,9 +1605,6 @@ async function runAutoSignificance() {
  * Uses the same pre-resolver selection guard as runCheckTable (#210) to block
  * broad multi-table selections before the active-cell resolver is called.
  * Delegates the significance pipeline to runSignificanceForRange.
- *
- * Clear is deferred for this scope — safely targeting only the resolved
- * active-cell table requires a separate implementation.
  */
 async function runAutoCurrentTableSignificance() {
   const calculationSettings = readCalculationSettingsFromPanel();
@@ -1777,6 +1779,76 @@ async function runAutoCurrentTableSignificance() {
     } catch (reportErr) {
       setStatusMessage(statusMsg + `\n[Отчёт: ошибка записи — ${reportErr.message || reportErr}]`);
     }
+  }
+}
+
+/**
+ * Autorun current-table Clear: resolves the table under the active cell and
+ * clears significance markers only from that resolved range.
+ *
+ * Applies the same pre-resolver selection guard as runAutoCurrentTableSignificance
+ * to block broad multi-table selections before the resolver runs. Does not touch
+ * the arbitrary selected range — the clear target is always the resolver result.
+ */
+async function clearAutoCurrentTableSignificance() {
+  let resolverResult = null;
+
+  try {
+    await Excel.run(async (context) => {
+      const selectionForGuard = context.workbook.getSelectedRange();
+      selectionForGuard.load(["values"]);
+      await context.sync();
+
+      if (selectionHasMultiTableGap(selectionForGuard.values)) {
+        resolverResult = {
+          status: "blocked",
+          sheetName: "",
+          message:
+            "Выделение содержит несколько таблиц или блоков данных, разделённых пустыми строками. " +
+            "Для «Текущей таблицы» поставьте курсор в одну таблицу или используйте «Автозапуск → Текущий лист».",
+        };
+        return;
+      }
+
+      resolverResult = await resolveCurrentTableFromActiveCell(context, readCalculationSettingsFromPanel());
+    });
+  } catch (err) {
+    setStatusMessage(
+      `Автозапуск — Текущая таблица: ошибка при определении таблицы — ${err.message || err}`
+    );
+    return;
+  }
+
+  if (!resolverResult) {
+    setStatusMessage("Автозапуск — Текущая таблица: не удалось определить таблицу.");
+    return;
+  }
+
+  if (resolverResult.status !== "ok") {
+    setStatusMessage(resolverResult.message || "Не удалось определить таблицу под активной ячейкой.");
+    return;
+  }
+
+  const { sheetName, rangeAddress } = resolverResult;
+
+  let result;
+  try {
+    result = await clearSignificanceForRange(sheetName, rangeAddress);
+  } catch (err) {
+    setStatusMessage(
+      `Автозапуск — Текущая таблица: ошибка очистки — ${err.message || err}`
+    );
+    return;
+  }
+
+  if (result.status === "cleared") {
+    setStatusMessage(
+      `Автозапуск — Текущая таблица: очищено. ${sheetName}!${rangeAddress}.`
+    );
+  } else {
+    setStatusMessage(
+      `Автозапуск — Текущая таблица: очистка пропущена — ${result.message || "нет данных"}.`
+    );
   }
 }
 
