@@ -800,8 +800,7 @@ b {
 }
 
 .settings-tab-nav {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  display: flex;
   gap: 2px;
   margin-bottom: 8px;
   padding: 3px;
@@ -811,19 +810,20 @@ b {
 }
 
 .settings-tab {
+  flex: 1 1 0;
   min-width: 0;
-  padding: 4px 4px;
+  padding: 4px 2px;
   border: none;
   border-radius: 4px;
   background: transparent;
   color: var(--rs-color-muted);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   text-align: center;
+  text-overflow: ellipsis;
 }
 
 .settings-tab:hover {
@@ -831,13 +831,17 @@ b {
   color: var(--rs-color-text);
 }
 
-/* Active tab: white bg + green underline, grid handles sizing. */
+/* Active tab: expanded just enough for the full label; other tabs share the remaining width. */
 .settings-tab.is-active {
-  padding: 4px 4px;
+  flex: 1.65 0 max-content;
+  min-width: max-content;
+  padding: 4px 6px;
   background: var(--rs-color-bg);
   color: var(--rs-color-primary-dark);
   border: 1px solid var(--rs-color-border);
   border-bottom: 2px solid var(--rs-color-primary);
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .settings-footer {
