@@ -484,7 +484,9 @@ b {
   overflow-wrap: normal;
   max-width: 160px;
   line-height: 1.2;
-  transition: color 0.15s ease, background-color 0.15s ease;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .secondary-action-button > span {
@@ -833,9 +835,9 @@ b {
 
 /* Active tab: expanded just enough for the full label; other tabs share the remaining width. */
 .settings-tab.is-active {
-  flex: 1.65 0 max-content;
+  flex: 0.2 0 max-content;
   min-width: max-content;
-  padding: 4px 6px;
+  padding: 4px 0px;
   background: var(--rs-color-bg);
   color: var(--rs-color-primary-dark);
   border: 1px solid var(--rs-color-border);
