@@ -3403,6 +3403,7 @@ async function runCheckSelectedRange() {
     try {
       const selectedRange = context.workbook.getSelectedRange();
       selectedRange.load(["address"]);
+      await context.sync();
       const worksheet = selectedRange.worksheet;
       worksheet.load(["name"]);
       await context.sync();
