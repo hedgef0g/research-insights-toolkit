@@ -64,8 +64,8 @@ const STRINGS = {
     "settings.tab.bases": "Базы",
     "settings.tab.design": "Дизайн",
 
-    "settings.tab.basic.short": "Осн.",
-    "settings.tab.comparisons.short": "Сравн.",
+    "settings.tab.basic.short": "Основные",
+    "settings.tab.comparisons.short": "Сравнения",
     "settings.tab.banner.short": "Баннер",
     "settings.tab.bases.short": "Базы",
     "settings.tab.design.short": "Дизайн",
@@ -210,7 +210,7 @@ const STRINGS = {
     "settings.tab.design": "Design",
 
     "settings.tab.basic.short": "General",
-    "settings.tab.comparisons.short": "Compare",
+    "settings.tab.comparisons.short": "Comparisons",
     "settings.tab.banner.short": "Banner",
     "settings.tab.bases.short": "Bases",
     "settings.tab.design.short": "Design",
