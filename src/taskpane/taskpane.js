@@ -470,13 +470,13 @@ function initPanelDismiss() {
 }
 
 function initLanguageSelector() {
-  const langSelector = document.getElementById("language-selector");
-  if (!langSelector) return;
-  langSelector.addEventListener("change", () => {
-    // setLanguage() calls applyI18n() internally; updateCheckHints() then
-    // re-applies the mode-suffix in the new language.
-    setLanguage(langSelector.value);
-    updateCheckHints();
+  document.querySelectorAll(".lang-btn[data-lang]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      // setLanguage() calls applyI18n() internally; updateCheckHints() then
+      // re-applies the mode-suffix in the new language.
+      setLanguage(btn.dataset.lang);
+      updateCheckHints();
+    });
   });
 }
 
@@ -877,7 +877,7 @@ async function runSignificanceFromSelection() {
 
     await context.sync();
 
-    const statusMessages = [`Расчёт выполнен. Обработано блоков: ${calculationBlocks.length}.`];
+    const statusMessages = [t("status.runDone", { count: calculationBlocks.length })];
 
     if (normalizationStatusLines.length > 0) {
       statusMessages.push("");
@@ -1716,9 +1716,7 @@ async function runAutoCurrentTableSignificance() {
         resolverResult = {
           status: "blocked",
           sheetName: "",
-          message:
-            "Выделение содержит несколько таблиц или блоков данных, разделённых пустыми строками. " +
-            "Для «Текущей таблицы» поставьте курсор в одну таблицу или используйте «Автозапуск → Текущий лист».",
+          message: t("status.multiTableGapAutorun"),
         };
         return;
       }
@@ -1726,14 +1724,12 @@ async function runAutoCurrentTableSignificance() {
       resolverResult = await resolveCurrentTableFromActiveCell(context, calculationSettings);
     });
   } catch (err) {
-    setStatusMessage(
-      `Автозапуск — Текущая таблица: ошибка при определении таблицы — ${err.message || err}`
-    );
+    setStatusMessage(t("status.autorunTableDetectError", { msg: err.message || err }));
     return;
   }
 
   if (!resolverResult) {
-    setStatusMessage("Автозапуск — Текущая таблица: не удалось определить таблицу.");
+    setStatusMessage(t("status.autorunTableNotResolved"));
     return;
   }
 
@@ -1777,7 +1773,7 @@ async function runAutoCurrentTableSignificance() {
     result = await runSignificanceForRange(sheetName, rangeAddress, calculationSettings);
   } catch (err) {
     const errMsg = err.message || "неизвестная ошибка";
-    setStatusMessage(`Автозапуск — Текущая таблица: ошибка расчёта — ${errMsg}`);
+    setStatusMessage(t("status.autorunCalcError", { msg: errMsg }));
 
     if (addReport) {
       try {
@@ -1805,8 +1801,8 @@ async function runAutoCurrentTableSignificance() {
 
   const statusMsg =
     result.status === "processed"
-      ? `Автозапуск — Текущая таблица: выполнен. ${sheetName}!${rangeAddress}. Блоков: ${result.blocksProcessed}.`
-      : `Автозапуск — Текущая таблица: ${result.message || "пропущено"}.`;
+      ? t("status.autorunProcessed", { sheet: sheetName, range: rangeAddress, count: result.blocksProcessed })
+      : t("status.autorunSkipped", { msg: result.message || t("status.resolverFallback") });
 
   setStatusMessage(statusMsg);
 
@@ -1830,7 +1826,7 @@ async function runAutoCurrentTableSignificance() {
         await context.sync();
       });
     } catch (reportErr) {
-      setStatusMessage(statusMsg + `\n[Отчёт: ошибка записи — ${reportErr.message || reportErr}]`);
+      setStatusMessage(statusMsg + "\n" + t("status.autorunReportWriteError", { msg: reportErr.message || reportErr }));
     }
   }
 }
@@ -1856,9 +1852,7 @@ async function clearAutoCurrentTableSignificance() {
         resolverResult = {
           status: "blocked",
           sheetName: "",
-          message:
-            "Выделение содержит несколько таблиц или блоков данных, разделённых пустыми строками. " +
-            "Для «Текущей таблицы» поставьте курсор в одну таблицу или используйте «Автозапуск → Текущий лист».",
+          message: t("status.multiTableGapAutorun"),
         };
         return;
       }
@@ -1866,19 +1860,17 @@ async function clearAutoCurrentTableSignificance() {
       resolverResult = await resolveCurrentTableFromActiveCell(context, readCalculationSettingsFromPanel());
     });
   } catch (err) {
-    setStatusMessage(
-      `Автозапуск — Текущая таблица: ошибка при определении таблицы — ${err.message || err}`
-    );
+    setStatusMessage(t("status.autorunTableDetectError", { msg: err.message || err }));
     return;
   }
 
   if (!resolverResult) {
-    setStatusMessage("Автозапуск — Текущая таблица: не удалось определить таблицу.");
+    setStatusMessage(t("status.autorunTableNotResolved"));
     return;
   }
 
   if (resolverResult.status !== "ok") {
-    setStatusMessage(resolverResult.message || "Не удалось определить таблицу под активной ячейкой.");
+    setStatusMessage(resolverResult.message || t("status.resolverFallback"));
     return;
   }
 
@@ -1888,20 +1880,14 @@ async function clearAutoCurrentTableSignificance() {
   try {
     result = await clearSignificanceForRange(sheetName, rangeAddress);
   } catch (err) {
-    setStatusMessage(
-      `Автозапуск — Текущая таблица: ошибка очистки — ${err.message || err}`
-    );
+    setStatusMessage(t("status.autorunClearError", { msg: err.message || err }));
     return;
   }
 
   if (result.status === "cleared") {
-    setStatusMessage(
-      `Автозапуск — Текущая таблица: очищено. ${sheetName}!${rangeAddress}.`
-    );
+    setStatusMessage(t("status.autorunCleared", { sheet: sheetName, range: rangeAddress }));
   } else {
-    setStatusMessage(
-      `Автозапуск — Текущая таблица: очистка пропущена — ${result.message || "нет данных"}.`
-    );
+    setStatusMessage(t("status.autorunClearSkipped", { msg: result.message || t("status.noDataInRange") }));
   }
 }
 
@@ -2953,7 +2939,7 @@ async function clearSignificanceFromSelection() {
 
     await clearBannerMarkersAboveRange(context, clearTargetRange);
 
-    setStatusMessage("Significance markers removed.");
+    setStatusMessage(t("status.clearDone"));
   });
 }
 
@@ -3129,7 +3115,7 @@ async function checkSelectedRangePreview(context, sheetName, rangeAddress, setti
     !selectedValues[0] ||
     selectedValues[0].length < 1
   ) {
-    return { status: "no-data", sheetName, rangeAddress, message: "Нет данных в диапазоне." };
+    return { status: "no-data", sheetName, rangeAddress, message: t("status.noDataInRange") };
   }
 
   // Pre-normalization guard: check the raw loaded range for all-empty row gaps
@@ -3142,8 +3128,7 @@ async function checkSelectedRangePreview(context, sheetName, rangeAddress, setti
       sheetName,
       rangeAddress,
       message:
-        "В диапазоне обнаружено несколько блоков данных, разделённых пустыми строками. " +
-        "Перейдите в ячейку внутри одной таблицы или используйте «Проверить лист».",
+        t("status.multiTableGapCheckSelection"),
     };
   }
 
@@ -3243,9 +3228,7 @@ async function runCheckTable() {
     }
 
     if (selectionHasMultiTableGap(guardValues)) {
-      const msg =
-        "Выделение содержит несколько таблиц или блоков данных, разделённых пустыми строками. " +
-        "Для «Текущей таблицы» поставьте курсор в одну таблицу или используйте «Проверить лист».";
+      const msg = t("status.multiTableGapCheck");
       setCheckMessage(msg);
       if (isCheckReportEnabled()) {
         await writeRunReportSheet(context, [{
@@ -3342,7 +3325,15 @@ async function runCheckTable() {
     } = model;
 
     const lines = [
-      `Проверка завершена. ${sheetName}!${rangeAddress}. Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}. Предупреждений: ${qualitySummary.warningCount}. Критических: ${qualitySummary.criticalCount}.`,
+      t("status.checkDone", {
+        sheet: sheetName,
+        range: rangeAddress,
+        rows: summary.rowCount,
+        blocks: summary.detectedBlocks,
+        bases: summary.baseRows,
+        warnings: qualitySummary.warningCount,
+        critical: qualitySummary.criticalCount,
+      }),
     ];
 
     if (normalizationLines.length > 0) {
@@ -3452,7 +3443,15 @@ async function runCheckSelectedRange() {
     const { summary, qualitySummary, userVisibleIssues, bannerStructure, calculationBlocks, rowDiagnostics } = model;
 
     const lines = [
-      `Проверка выделения завершена. ${sheetName}!${rangeAddress}. Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}. Предупреждений: ${qualitySummary.warningCount}. Критических: ${qualitySummary.criticalCount}.`,
+      t("status.checkSelectionDone", {
+        sheet: sheetName,
+        range: rangeAddress,
+        rows: summary.rowCount,
+        blocks: summary.detectedBlocks,
+        bases: summary.baseRows,
+        warnings: qualitySummary.warningCount,
+        critical: qualitySummary.criticalCount,
+      }),
     ];
 
     if (normalizationLines.length > 0) {
@@ -3492,15 +3491,15 @@ function buildCheckResolverMessage(resolverResult) {
   if (resolverResult.message) return resolverResult.message;
   switch (resolverResult.status) {
     case "no-table":
-      return "Активная ячейка не находится внутри ни одного кандидата. Перейдите в ячейку внутри таблицы.";
+      return t("status.resolverNoTable");
     case "generated-sheet":
-      return "Лист создан надстройкой и не содержит исследовательских таблиц.";
+      return t("status.resolverGeneratedSheet");
     case "ambiguous-boundary":
-      return "Активная ячейка входит в несколько перекрывающихся кандидатов. Уточните позицию курсора.";
+      return t("status.resolverAmbiguousBoundary");
     case "blocked":
-      return "Лист слишком большой для сканирования.";
+      return t("status.resolverBlocked");
     default:
-      return "Не удалось определить таблицу под активной ячейкой.";
+      return t("status.resolverFallback");
   }
 }
 

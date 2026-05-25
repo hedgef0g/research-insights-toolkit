@@ -124,27 +124,32 @@ b {
 
 .lang-selector-row {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
+  flex-direction: row;
+  align-items: center;
+  gap: 3px;
   flex: 0 0 auto;
 }
 
-.lang-selector-label {
-  font-size: 10px;
-  color: var(--rs-color-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.lang-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--rs-radius-sm);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 4px;
+  opacity: 0.45;
+  transition: opacity 0.15s;
 }
 
-.lang-selector-select {
-  font-size: 12px;
-  padding: 2px 4px;
-  border: 1px solid var(--rs-color-border);
-  border-radius: var(--rs-radius-sm);
+.lang-btn:hover {
+  opacity: 0.85;
+}
+
+.lang-btn.is-active {
+  border-color: var(--rs-color-border);
+  opacity: 1;
   background: var(--rs-color-bg);
-  color: var(--rs-color-text);
-  cursor: pointer;
 }
 
 .settings-panel {

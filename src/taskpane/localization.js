@@ -74,6 +74,78 @@ const STRINGS = {
     "status.nonContiguousSelection":
       "Выделение состоит из нескольких несмежных областей. " +
       "Для этой операции выберите один непрерывный диапазон или поставьте курсор внутри одной таблицы.",
+
+    "status.multiTableGapAutorun":
+      "Выделение содержит несколько таблиц или блоков данных, разделённых пустыми строками. " +
+      "Для «Текущей таблицы» поставьте курсор в одну таблицу или используйте «Автозапуск → Текущий лист».",
+    "status.multiTableGapCheck":
+      "Выделение содержит несколько таблиц или блоков данных, разделённых пустыми строками. " +
+      "Для «Текущей таблицы» поставьте курсор в одну таблицу или используйте «Проверить лист».",
+    "status.multiTableGapCheckSelection":
+      "В диапазоне обнаружено несколько блоков данных, разделённых пустыми строками. " +
+      "Перейдите в ячейку внутри одной таблицы или используйте «Проверить лист».",
+    "status.noDataInRange": "Нет данных в диапазоне.",
+
+    "status.autorunTableNotResolved": "Автозапуск — Текущая таблица: не удалось определить таблицу.",
+    "status.autorunCalcError": "Автозапуск — Текущая таблица: ошибка расчёта — {msg}",
+    "status.autorunTableDetectError": "Автозапуск — Текущая таблица: ошибка при определении таблицы — {msg}",
+    "status.autorunProcessed": "Автозапуск — Текущая таблица: выполнен. {sheet}!{range}. Блоков: {count}.",
+    "status.autorunSkipped": "Автозапуск — Текущая таблица: {msg}.",
+    "status.autorunClearError": "Автозапуск — Текущая таблица: ошибка очистки — {msg}",
+    "status.autorunCleared": "Автозапуск — Текущая таблица: очищено. {sheet}!{range}.",
+    "status.autorunClearSkipped": "Автозапуск — Текущая таблица: очистка пропущена — {msg}.",
+    "status.autorunReportWriteError": "[Отчёт: ошибка записи — {msg}]",
+
+    "status.runDone": "Расчёт выполнен. Обработано блоков: {count}.",
+    "status.clearDone": "Значимости очищены.",
+
+    "status.checkDone":
+      "Проверка завершена. {sheet}!{range}. Строк: {rows}. Блоков: {blocks}. Баз: {bases}. Предупреждений: {warnings}. Критических: {critical}.",
+    "status.checkSelectionDone":
+      "Проверка выделения завершена. {sheet}!{range}. Строк: {rows}. Блоков: {blocks}. Баз: {bases}. Предупреждений: {warnings}. Критических: {critical}.",
+
+    "status.resolverNoTable":
+      "Активная ячейка не находится внутри ни одного кандидата. Перейдите в ячейку внутри таблицы.",
+    "status.resolverGeneratedSheet":
+      "Лист создан надстройкой и не содержит исследовательских таблиц.",
+    "status.resolverAmbiguousBoundary":
+      "Активная ячейка входит в несколько перекрывающихся кандидатов. Уточните позицию курсора.",
+    "status.resolverBlocked": "Лист слишком большой для сканирования.",
+    "status.resolverFallback": "Не удалось определить таблицу под активной ячейкой.",
+
+    "settings.comparePrevCol": "Сравнение с предыдущей колонкой",
+    "settings.applyPrevColFill": "Применить заливку",
+    "settings.compareWithTotal": "Сравнение с Тоталом",
+    "settings.legendCompareMode": "Режим сравнения с Тоталом",
+    "settings.compareOnlyWithTotal": "Сравнивать только с Тотал",
+    "settings.excludeTotalFromComparisons": "Не сравнивать с Тотал",
+    "settings.legendTotalPosition": "Расположение Тотала",
+    "settings.firstColumnIsTotal": "Первая колонка — Тотал",
+    "settings.warningTotalPreviousCol":
+      "WARNING: При выбранных настройках Тотал будет обрабатываться как обычная предыдущая " +
+      "колонка, если не включить «Не сравнивать с Тотал»",
+    "settings.totalInEachBanner": "Тотал в каждом баннере",
+
+    "settings.writeBannerLetters": "Проставлять буквы в баннере",
+    "settings.respectBannerStructure": "Учитывать структуру баннера",
+    "settings.autoDetectWaveBanners": "Автоматически определять волны",
+    "settings.labelsOnLeftSide": "Лейблы значений слева листа",
+
+    "settings.smallBases": "Маленькие базы",
+    "settings.excludeSmallBases": "Не сравнивать маленькие базы",
+    "settings.smallBaseThreshold": "База <",
+
+    "settings.roundCellValues": "Округлять значения в ячейках",
+    "settings.fillsGroup": "Заливки",
+    "settings.significantFillColor": "Обычная значимость",
+    "settings.lowerThanTotalFillColor": "Заливка < Тотал",
+    "settings.fillOnlyTotalComparisons": "Заливка только для Тотала",
+    "settings.smallBaseFillColor": "Заливка маленькой базы",
+
+    "settings.oneTailedTest": "Односторонний тест",
+    "settings.preferredBaseAuto": "Авто",
+
+    "help.link": "Справка об использовании",
   },
 
   en: {
@@ -137,6 +209,78 @@ const STRINGS = {
     "status.nonContiguousSelection":
       "Selection contains multiple non-contiguous areas. " +
       "For this operation, select a single continuous range or place the cursor inside one table.",
+
+    "status.multiTableGapAutorun":
+      "Selection contains multiple tables or data blocks separated by empty rows. " +
+      "For Current Table, place the cursor inside one table or use Autorun → Current sheet.",
+    "status.multiTableGapCheck":
+      "Selection contains multiple tables or data blocks separated by empty rows. " +
+      "For Current Table, place the cursor inside one table or use Check sheet.",
+    "status.multiTableGapCheckSelection":
+      "Multiple data blocks separated by empty rows detected in the range. " +
+      "Navigate to a cell inside a single table or use Check sheet.",
+    "status.noDataInRange": "No data in range.",
+
+    "status.autorunTableNotResolved": "Autorun — Current table: could not identify the table.",
+    "status.autorunCalcError": "Autorun — Current table: calculation error — {msg}",
+    "status.autorunTableDetectError": "Autorun — Current table: error detecting table — {msg}",
+    "status.autorunProcessed": "Autorun — Current table: done. {sheet}!{range}. Blocks: {count}.",
+    "status.autorunSkipped": "Autorun — Current table: {msg}.",
+    "status.autorunClearError": "Autorun — Current table: clear error — {msg}",
+    "status.autorunCleared": "Autorun — Current table: cleared. {sheet}!{range}.",
+    "status.autorunClearSkipped": "Autorun — Current table: clear skipped — {msg}.",
+    "status.autorunReportWriteError": "[Report: write error — {msg}]",
+
+    "status.runDone": "Calculation complete. Blocks processed: {count}.",
+    "status.clearDone": "Significance markers removed.",
+
+    "status.checkDone":
+      "Check complete. {sheet}!{range}. Rows: {rows}. Blocks: {blocks}. Bases: {bases}. Warnings: {warnings}. Critical: {critical}.",
+    "status.checkSelectionDone":
+      "Selection check complete. {sheet}!{range}. Rows: {rows}. Blocks: {blocks}. Bases: {bases}. Warnings: {warnings}. Critical: {critical}.",
+
+    "status.resolverNoTable":
+      "Active cell is not inside any candidate table. Navigate to a cell inside a table.",
+    "status.resolverGeneratedSheet":
+      "This sheet was created by the add-in and does not contain research tables.",
+    "status.resolverAmbiguousBoundary":
+      "Active cell falls within multiple overlapping candidates. Refine the cursor position.",
+    "status.resolverBlocked": "Sheet is too large to scan.",
+    "status.resolverFallback": "Could not identify the table under the active cell.",
+
+    "settings.comparePrevCol": "Compare with previous column",
+    "settings.applyPrevColFill": "Apply fill",
+    "settings.compareWithTotal": "Compare with Total",
+    "settings.legendCompareMode": "Total comparison mode",
+    "settings.compareOnlyWithTotal": "Compare only with Total",
+    "settings.excludeTotalFromComparisons": "Exclude Total from comparisons",
+    "settings.legendTotalPosition": "Total position",
+    "settings.firstColumnIsTotal": "First column is Total",
+    "settings.warningTotalPreviousCol":
+      "WARNING: With the current settings Total will be treated as a regular previous column " +
+      "unless you enable 'Exclude Total from comparisons'",
+    "settings.totalInEachBanner": "Total in each banner",
+
+    "settings.writeBannerLetters": "Write letters in banner",
+    "settings.respectBannerStructure": "Respect banner structure",
+    "settings.autoDetectWaveBanners": "Auto-detect wave banners",
+    "settings.labelsOnLeftSide": "Value labels on sheet left",
+
+    "settings.smallBases": "Small bases",
+    "settings.excludeSmallBases": "Exclude small bases",
+    "settings.smallBaseThreshold": "Base <",
+
+    "settings.roundCellValues": "Round cell values",
+    "settings.fillsGroup": "Fills",
+    "settings.significantFillColor": "Regular significance",
+    "settings.lowerThanTotalFillColor": "Fill < Total",
+    "settings.fillOnlyTotalComparisons": "Fill only for Total comparisons",
+    "settings.smallBaseFillColor": "Small base fill",
+
+    "settings.oneTailedTest": "One-tailed test",
+    "settings.preferredBaseAuto": "Auto",
+
+    "help.link": "User guide",
   },
 };
 
@@ -224,9 +368,8 @@ export function applyI18n() {
     el.dataset.hintBase = t(el.dataset.hintI18n);
   });
 
-  // Keep the language selector in sync with the current language.
-  const langSelect = document.getElementById("language-selector");
-  if (langSelect && langSelect.value !== _currentLanguage) {
-    langSelect.value = _currentLanguage;
-  }
+  // Keep flag buttons in sync with the current language.
+  document.querySelectorAll(".lang-btn[data-lang]").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.lang === _currentLanguage);
+  });
 }

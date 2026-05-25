@@ -38,11 +38,8 @@
           <p class="taskpane-brand-subtitle">Research table intelligence</p>
         </div>
         <div class="lang-selector-row">
-          <label for="language-selector" class="lang-selector-label" data-i18n="lang.label">Язык</label>
-          <select id="language-selector" class="lang-selector-select">
-            <option value="ru">Русский</option>
-            <option value="en">English</option>
-          </select>
+          <button class="lang-btn is-active" data-lang="ru" aria-label="Русский" title="Русский">🇷🇺</button>
+          <button class="lang-btn" data-lang="en" aria-label="English" title="English">🇬🇧</button>
         </div>
       </section>
 
@@ -204,7 +201,7 @@
               </select>
               <label class="inline-checkbox-label" for="one-tailed-test">
                 <input type="checkbox" id="one-tailed-test" />
-                <span>Односторонний тест</span>
+                <span data-i18n="settings.oneTailedTest">Односторонний тест</span>
               </label>
             </div>
           </div>
@@ -212,7 +209,7 @@
           <div class="settings-group">
             <label for="preferred-base" data-i18n="settings.preferredBase">База для расчёта</label>
             <select id="preferred-base">
-              <option value="auto" selected>Авто</option>
+              <option value="auto" selected data-i18n="settings.preferredBaseAuto">Авто</option>
               <option value="effective">Effective Base</option>
               <option value="unweighted">Unweighted Base</option>
               <option value="plain">Base</option>
@@ -225,48 +222,49 @@
         <!-- Сравнения -->
         <div class="settings-tab-panel" data-settings-panel="sravneniya" style="display:none">
           <div class="settings-group">
-            <label>
+            <label class="inline-checkbox-label" for="compare-with-previous-column">
               <input type="checkbox" id="compare-with-previous-column" />
-              Сравнение с предыдущей колонкой
+              <span data-i18n="settings.comparePrevCol">Сравнение с предыдущей колонкой</span>
             </label>
             <div id="previous-column-fill-wrapper" style="display: none; margin-left: 18px">
-              <label>
+              <label class="inline-checkbox-label" for="apply-previous-column-fill">
                 <input type="checkbox" id="apply-previous-column-fill" />
-                Применить заливку
+                <span data-i18n="settings.applyPrevColFill">Применить заливку</span>
               </label>
             </div>
           </div>
 
           <div class="settings-group">
-            <h4>Сравнение с Тоталом</h4>
+            <h4 data-i18n="settings.compareWithTotal">Сравнение с Тоталом</h4>
             <fieldset class="exclusive-options">
-              <legend>Режим сравнения с Тоталом</legend>
-              <label
-                ><input type="checkbox" id="compare-only-with-total" /> Сравнивать только с
-                Тотал</label
+              <legend data-i18n="settings.legendCompareMode">Режим сравнения с Тоталом</legend>
+              <label class="inline-checkbox-label" for="compare-only-with-total"
+                ><input type="checkbox" id="compare-only-with-total" />
+                <span data-i18n="settings.compareOnlyWithTotal">Сравнивать только с Тотал</span></label
               >
-              <label
-                ><input type="checkbox" id="exclude-total-from-comparisons" /> Не сравнивать с
-                Тотал</label
+              <label class="inline-checkbox-label" for="exclude-total-from-comparisons"
+                ><input type="checkbox" id="exclude-total-from-comparisons" />
+                <span data-i18n="settings.excludeTotalFromComparisons">Не сравнивать с Тотал</span></label
               >
             </fieldset>
 
             <fieldset class="exclusive-options">
-              <legend>Расположение Тотала</legend>
-              <label
-                ><input type="checkbox" id="first-column-is-total" /> Первая колонка — Тотал</label
+              <legend data-i18n="settings.legendTotalPosition">Расположение Тотала</legend>
+              <label class="inline-checkbox-label" for="first-column-is-total"
+                ><input type="checkbox" id="first-column-is-total" />
+                <span data-i18n="settings.firstColumnIsTotal">Первая колонка — Тотал</span></label
               >
               <div
                 id="previous-column-total-warning"
                 class="settings-warning"
                 style="display: none"
               >
-                WARNING: При выбранных настройках Тотал будет обрабатываться как обычная предыдущая
-                колонка, если не включить "Не сравнивать с Тотал"
+                <span data-i18n="settings.warningTotalPreviousCol">WARNING: При выбранных настройках Тотал будет обрабатываться как обычная предыдущая
+                колонка, если не включить "Не сравнивать с Тотал"</span>
               </div>
-              <label
-                ><input type="checkbox" id="total-in-each-banner" disabled /> Тотал в каждом
-                баннере</label
+              <label class="inline-checkbox-label" for="total-in-each-banner"
+                ><input type="checkbox" id="total-in-each-banner" disabled />
+                <span data-i18n="settings.totalInEachBanner">Тотал в каждом баннере</span></label
               >
             </fieldset>
           </div>
@@ -275,22 +273,23 @@
         <!-- Баннер -->
         <div class="settings-tab-panel" data-settings-panel="banner" style="display:none">
           <div class="settings-group">
-            <label
-              ><input type="checkbox" id="write-banner-letters" /> Проставлять буквы в
-              баннере</label
+            <label class="inline-checkbox-label" for="write-banner-letters"
+              ><input type="checkbox" id="write-banner-letters" />
+              <span data-i18n="settings.writeBannerLetters">Проставлять буквы в баннере</span></label
             >
-            <label
-              ><input type="checkbox" id="respect-banner-structure" /> Учитывать структуру
-              баннера</label
+            <label class="inline-checkbox-label" for="respect-banner-structure"
+              ><input type="checkbox" id="respect-banner-structure" />
+              <span data-i18n="settings.respectBannerStructure">Учитывать структуру баннера</span></label
             >
             <div id="auto-detect-wave-banners-wrapper">
-              <label class="checkbox-label" for="auto-detect-wave-banners">
+              <label class="inline-checkbox-label" for="auto-detect-wave-banners">
                 <input type="checkbox" id="auto-detect-wave-banners" />
-                <span>Автоматически определять волны</span>
+                <span data-i18n="settings.autoDetectWaveBanners">Автоматически определять волны</span>
               </label>
             </div>
-            <label
-              ><input type="checkbox" id="labels-on-left-side" /> Лейблы значений слева листа</label
+            <label class="inline-checkbox-label" for="labels-on-left-side"
+              ><input type="checkbox" id="labels-on-left-side" />
+              <span data-i18n="settings.labelsOnLeftSide">Лейблы значений слева листа</span></label
             >
           </div>
         </div>
@@ -298,13 +297,13 @@
         <!-- Базы -->
         <div class="settings-tab-panel" data-settings-panel="bazy" style="display:none">
           <div class="settings-group">
-            <h4>Маленькие базы</h4>
-            <label
-              ><input type="checkbox" id="exclude-small-bases" /> Не сравнивать маленькие
-              базы</label
+            <h4 data-i18n="settings.smallBases">Маленькие базы</h4>
+            <label class="inline-checkbox-label" for="exclude-small-bases"
+              ><input type="checkbox" id="exclude-small-bases" />
+              <span data-i18n="settings.excludeSmallBases">Не сравнивать маленькие базы</span></label
             >
             <div class="inline-number-setting">
-              <label for="small-base-threshold">База &lt;</label>
+              <label for="small-base-threshold" data-i18n="settings.smallBaseThreshold">База &lt;</label>
               <input type="number" id="small-base-threshold" value="50" min="0" step="1" />
             </div>
           </div>
@@ -313,28 +312,28 @@
         <!-- Дизайн -->
         <div class="settings-tab-panel" data-settings-panel="dizain" style="display:none">
           <div class="settings-group">
-            <label>
+            <label class="inline-checkbox-label" for="round-cell-values">
               <input type="checkbox" id="round-cell-values" />
-              Округлять значения в ячейках
+              <span data-i18n="settings.roundCellValues">Округлять значения в ячейках</span>
             </label>
           </div>
 
           <div class="settings-group">
-            <h4>Заливки</h4>
-            <label for="significant-fill-color">Обычная значимость</label>
+            <h4 data-i18n="settings.fillsGroup">Заливки</h4>
+            <label for="significant-fill-color" data-i18n="settings.significantFillColor">Обычная значимость</label>
             <input type="color" id="significant-fill-color" value="#E2F0D9" />
 
-            <label for="lower-than-total-fill-color">Заливка &lt; Тотал</label>
+            <label for="lower-than-total-fill-color" data-i18n="settings.lowerThanTotalFillColor">Заливка &lt; Тотал</label>
             <input type="color" id="lower-than-total-fill-color" value="#FCE4D6" />
 
-            <label
-              ><input type="checkbox" id="fill-only-total-comparisons" /> Заливка только для
-              Тотала</label
+            <label class="inline-checkbox-label" for="fill-only-total-comparisons"
+              ><input type="checkbox" id="fill-only-total-comparisons" />
+              <span data-i18n="settings.fillOnlyTotalComparisons">Заливка только для Тотала</span></label
             >
           </div>
 
           <div class="settings-group">
-            <label for="small-base-fill-color">Заливка маленькой базы</label>
+            <label for="small-base-fill-color" data-i18n="settings.smallBaseFillColor">Заливка маленькой базы</label>
             <input type="color" id="small-base-fill-color" value="#D0D0D0" />
           </div>
         </div>
@@ -355,6 +354,7 @@
           <a
             href="https://hedgef0g.github.io/research-insights-toolkit/assets/rit-help-ru.html"
             id="help-link"
+            data-i18n="help.link"
             >Справка об использовании</a
           >
         </div>
