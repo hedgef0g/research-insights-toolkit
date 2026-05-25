@@ -131,25 +131,84 @@ b {
 }
 
 .lang-btn {
-  background: none;
+  position: relative;
+  width: 28px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.72);
   border: 1px solid transparent;
   border-radius: var(--rs-radius-sm);
   cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
-  padding: 2px 4px;
-  opacity: 0.45;
-  transition: opacity 0.15s;
+  font-size: 0;
+  line-height: 0;
+  padding: 0;
+  color: transparent;
+  opacity: 0.72;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(17, 24, 39, 0.05);
+  transition:
+    opacity 0.15s,
+    border-color 0.15s,
+    background-color 0.15s,
+    box-shadow 0.15s,
+    transform 0.15s;
+}
+
+.lang-btn::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 14px;
+  border-radius: 3px;
+  box-shadow:
+    inset 0 0 0 1px rgba(17, 24, 39, 0.08),
+    0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.lang-btn[data-lang="ru"]::before {
+  background:
+    linear-gradient(
+      to bottom,
+      #ffffff 0,
+      #ffffff 33.33%,
+      #0f5bd3 33.33%,
+      #0f5bd3 66.66%,
+      #d52b1e 66.66%,
+      #d52b1e 100%
+    );
+}
+
+.lang-btn[data-lang="en"]::before {
+  background:
+    linear-gradient(33deg, transparent 42%, #ffffff 42%, #ffffff 49%, transparent 49%),
+    linear-gradient(-33deg, transparent 42%, #ffffff 42%, #ffffff 49%, transparent 49%),
+    linear-gradient(33deg, transparent 46%, #c8102e 46%, #c8102e 49%, transparent 49%),
+    linear-gradient(-33deg, transparent 46%, #c8102e 46%, #c8102e 49%, transparent 49%),
+    linear-gradient(to right, transparent 38%, #ffffff 38%, #ffffff 62%, transparent 62%),
+    linear-gradient(to bottom, transparent 35%, #ffffff 35%, #ffffff 65%, transparent 65%),
+    linear-gradient(to right, transparent 44%, #c8102e 44%, #c8102e 56%, transparent 56%),
+    linear-gradient(to bottom, transparent 41%, #c8102e 41%, #c8102e 59%, transparent 59%),
+    #012169;
 }
 
 .lang-btn:hover {
-  opacity: 0.85;
+  opacity: 0.92;
+  transform: translateY(-1px);
 }
 
 .lang-btn.is-active {
   border-color: var(--rs-color-border);
   opacity: 1;
   background: var(--rs-color-bg);
+  box-shadow:
+    inset 0 0 0 1px rgba(22, 163, 74, 0.12),
+    0 0 0 2px rgba(34, 197, 94, 0.12);
+}
+
+.lang-btn:focus-visible {
+  outline: 2px solid rgba(22, 163, 74, 0.35);
+  outline-offset: 2px;
 }
 
 .settings-panel {
