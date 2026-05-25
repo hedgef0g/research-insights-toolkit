@@ -22,7 +22,6 @@ import {
 
 import {
   detectMetricRowsFromLeftLabels,
-  formatMetricDetectionDiagnostics,
   buildCalculationBlocks,
   getAllowedMarkerRowIndexes,
 } from "../core/metric-detector";
@@ -32,7 +31,7 @@ import { writeCellResultsToSelectedRange, resolveNumericOutput } from "../core/e
 import { buildTablePreviewModel } from "../core/table-preview-model";
 import { scanWorksheetForTables } from "../core/table-inventory-scanner";
 
-import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core/banner-detector";
+import { detectBannerStructure } from "../core/banner-detector";
 
 import { normalizeSelectedRange, hasEmptyDataRowGap, selectionHasMultiTableGap } from "../core/range-normalizer";
 
@@ -40,7 +39,6 @@ import { filterWorkbookCandidates, BATCH_SKIP_REASONS } from "../core/batch-cand
 
 import {
   interpretSelectedRange,
-  loadLabelValuesForSelectedRange,
   detectLeadingEmptyColumns,
 } from "./selected-range-interpreter";
 
@@ -350,8 +348,6 @@ const SETTINGS_TOOLTIPS = {
     "Сбросить все настройки к значениям по умолчанию и удалить локально сохранённые настройки.",
 };
 
-const ENABLE_BANNER_SPAN_DIAGNOSTICS = false;
-
 /**
  * Initializes task pane events after Office is ready.
  *
@@ -374,7 +370,6 @@ Office.onReady((info) => {
 
   const calculateButton = document.getElementById("calculate-significance"); // Unified auto-detection button.
   const clearButton = document.getElementById("clear-significance"); // Button for removing markers.
-  const detectMetricTypeButton = document.getElementById("detect-metric-type"); // Diagnostic detector button.
   const checkTableButton = document.getElementById("check-table"); // Read-only table check button.
   const findTablesButton = document.getElementById("find-tables"); // Table inventory button.
   const runAllTablesButton = document.getElementById("run-all-tables"); // Auto-runner button.
@@ -394,10 +389,6 @@ Office.onReady((info) => {
 
   if (clearButton) {
     clearButton.addEventListener("click", clearSignificanceFromSelection);
-  }
-
-  if (detectMetricTypeButton) {
-    detectMetricTypeButton.addEventListener("click", runMetricDetectionDiagnostics);
   }
 
   if (checkTableButton) {
@@ -3033,49 +3024,6 @@ async function clearBannerMarkersAboveRange(context, targetRange) {
 }
 
 /**
- * Reads selected Excel range and scans labels to the left of it.
- *
- * PURPOSE:
- * Diagnostic-only step for auto metric detection.
- * This function does not calculate significance and does not change the sheet.
- */
-async function runMetricDetectionDiagnostics() {
-  await Excel.run(async (context) => {
-    const calculationSettings = readCalculationSettingsFromPanel();
-    const selectedRange = context.workbook.getSelectedRange(); // User-selected data range.
-
-    selectedRange.load(["values", "rowIndex", "columnIndex", "rowCount"]);
-
-    await context.sync();
-
-    const selectedValues = selectedRange.values; // Selected data values.
-    const selectedStartColumnIndex = selectedRange.columnIndex; // Zero-based first column of selected range.
-
-    const outputElement = document.getElementById("significance-result"); // Task pane output area.
-
-    if (selectedStartColumnIndex === 0 && !calculationSettings.labelsOnLeftSide) {
-      const detectionResult = detectMetricRowsFromLeftLabels(selectedValues, []);
-
-      outputElement.textContent =
-        formatMetricDetectionDiagnostics(detectionResult) +
-        "\n\nNo columns exist to the left of the selected range. Default would be proportions.";
-
-      return;
-    }
-
-    const leftLabelValues = await loadLabelValuesForSelectedRange(
-      context,
-      selectedRange,
-      calculationSettings
-    );
-
-    const detectionResult = detectMetricRowsFromLeftLabels(selectedValues, leftLabelValues);
-
-    setStatusMessage(formatMetricDetectionDiagnostics(detectionResult));
-  });
-}
-
-/**
  * Read-only check pipeline for a named range inside an existing Excel.run context.
  *
  * Loads the range, runs interpretSelectedRange + buildTablePreviewModel, and
@@ -4942,398 +4890,6 @@ function setInventoryMessage(message) {
 }
 
 /**
- * Reads expanded banner rows and reconstructs possible horizontal spans.
- *
- * PURPOSE:
- * Diagnostic-only fallback for merged banner headers.
- *
- * WHY:
- * Office.js may not expose merged areas reliably for continuation cells.
- * In practice, merged banner rows often look like:
- *   Age | "" | ""
- * So we reconstruct spans as:
- *   non-empty cell + following empty cells until next non-empty cell.
- */
-async function loadBannerSpanDiagnosticsForSelectedRange(context, selectedRange) {
-  const maxBannerScanRows = 5;
-  const maxColumnsToScanLeft = 10;
-  const maxColumnsToScanRight = 10;
-
-  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
-
-  await context.sync();
-
-  const selectedStartRowIndex = selectedRange.rowIndex;
-  const selectedStartColumnIndex = selectedRange.columnIndex;
-  const selectedColumnCount = selectedRange.columnCount;
-  const selectedEndColumnIndex = selectedStartColumnIndex + selectedColumnCount - 1;
-
-  if (selectedStartRowIndex === 0) {
-    return [
-      "Banner span diagnostics:",
-      "- Над выделенным диапазоном нет строк для анализа span-структуры.",
-    ].join("\n");
-  }
-
-  const availableRowCount = Math.min(maxBannerScanRows + 1, selectedStartRowIndex);
-  const firstBannerRowIndex = selectedStartRowIndex - availableRowCount;
-
-  const scanStartColumnIndex = Math.max(0, selectedStartColumnIndex - maxColumnsToScanLeft);
-
-  const scanEndColumnIndex = selectedEndColumnIndex + maxColumnsToScanRight;
-
-  const scanColumnCount = scanEndColumnIndex - scanStartColumnIndex + 1;
-
-  const bannerScanRange = selectedRange.worksheet.getRangeByIndexes(
-    firstBannerRowIndex,
-    scanStartColumnIndex,
-    availableRowCount,
-    scanColumnCount
-  );
-
-  bannerScanRange.load("text");
-
-  await context.sync();
-
-  const lines = [];
-
-  lines.push("Banner span diagnostics:");
-  lines.push(
-    `- Диапазон проверки: строки ${firstBannerRowIndex + 1}:${selectedStartRowIndex}, колонки ${getExcelColumnLetter(scanStartColumnIndex)}:${getExcelColumnLetter(scanEndColumnIndex)}.`
-  );
-  lines.push(
-    `- Выделение по колонкам: ${getExcelColumnLetter(selectedStartColumnIndex)}:${getExcelColumnLetter(selectedEndColumnIndex)}.`
-  );
-
-  const lowerBannerLocalRowIndex = availableRowCount - 1;
-  const lowerBannerRowText = bannerScanRange.text[lowerBannerLocalRowIndex] || [];
-
-  for (let localRowIndex = 0; localRowIndex < availableRowCount; localRowIndex++) {
-    const sheetRowIndex = firstBannerRowIndex + localRowIndex;
-    const rowOffsetFromSelection = sheetRowIndex - selectedStartRowIndex;
-    const rowText = bannerScanRange.text[localRowIndex] || [];
-
-    const spans = reconstructHorizontalSpansFromRowText(
-      rowText,
-      scanStartColumnIndex,
-      selectedStartColumnIndex,
-      selectedEndColumnIndex,
-      lowerBannerRowText,
-      localRowIndex === lowerBannerLocalRowIndex
-    );
-
-    lines.push(`- Row offset ${rowOffsetFromSelection}:`);
-
-    if (spans.length === 0) {
-      lines.push("  - spans: none");
-      continue;
-    }
-
-    for (const span of spans) {
-      const selectedPartText =
-        span.selectedStartColumnIndex !== null
-          ? `, selected cols ${getExcelColumnLetter(span.selectedStartColumnIndex)}:${getExcelColumnLetter(span.selectedEndColumnIndex)}`
-          : ", outside selection";
-
-      lines.push(
-        `  - "${span.label}": sheet cols ${getExcelColumnLetter(span.startColumnIndex)}:${getExcelColumnLetter(span.endColumnIndex)}, length=${span.length}${selectedPartText}`
-      );
-    }
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * Reconstructs possible horizontal spans from row text.
- *
- * RULE:
- * A non-empty cell starts a span.
- * Empty cells to the right are treated as continuation until next non-empty cell.
- *
- * For upper banner rows, spans are additionally constrained by the lower banner row:
- * if lower level has a continuous non-empty area starting at the span start,
- * upper span should not extend beyond that lower-level area.
- */
-function reconstructHorizontalSpansFromRowText(
-  rowText,
-  scanStartColumnIndex,
-  selectedStartColumnIndex,
-  selectedEndColumnIndex,
-  lowerBannerRowText = [],
-  isLowerBannerRow = false
-) {
-  const spans = [];
-  let currentSpan = null;
-
-  for (let localColumnIndex = 0; localColumnIndex < rowText.length; localColumnIndex++) {
-    const sheetColumnIndex = scanStartColumnIndex + localColumnIndex;
-    const cellText = normalizeBannerDiagnosticCellText(rowText[localColumnIndex]);
-
-    if (cellText) {
-      if (currentSpan) {
-        currentSpan.endColumnIndex = sheetColumnIndex - 1;
-        refineDiagnosticSpanRightBoundaryByLowerBannerRow(
-          currentSpan,
-          lowerBannerRowText,
-          scanStartColumnIndex,
-          isLowerBannerRow
-        );
-        finalizeDiagnosticSpanSelection(
-          currentSpan,
-          selectedStartColumnIndex,
-          selectedEndColumnIndex
-        );
-        spans.push(currentSpan);
-      }
-
-      currentSpan = {
-        label: cellText,
-        startColumnIndex: sheetColumnIndex,
-        endColumnIndex: sheetColumnIndex,
-        length: 1,
-        selectedStartColumnIndex: null,
-        selectedEndColumnIndex: null,
-      };
-
-      continue;
-    }
-
-    if (currentSpan) {
-      currentSpan.endColumnIndex = sheetColumnIndex;
-    }
-  }
-
-  if (currentSpan) {
-    refineDiagnosticSpanRightBoundaryByLowerBannerRow(
-      currentSpan,
-      lowerBannerRowText,
-      scanStartColumnIndex,
-      isLowerBannerRow
-    );
-    finalizeDiagnosticSpanSelection(currentSpan, selectedStartColumnIndex, selectedEndColumnIndex);
-    spans.push(currentSpan);
-  }
-
-  return spans
-    .map((span) => ({
-      ...span,
-      length: span.endColumnIndex - span.startColumnIndex + 1,
-    }))
-    .filter((span) => span.label && span.length > 0);
-}
-
-/**
- * Adds selected-range intersection metadata to reconstructed span.
- */
-function finalizeDiagnosticSpanSelection(span, selectedStartColumnIndex, selectedEndColumnIndex) {
-  const intersectionStart = Math.max(span.startColumnIndex, selectedStartColumnIndex);
-  const intersectionEnd = Math.min(span.endColumnIndex, selectedEndColumnIndex);
-
-  if (intersectionStart <= intersectionEnd) {
-    span.selectedStartColumnIndex = intersectionStart;
-    span.selectedEndColumnIndex = intersectionEnd;
-  }
-}
-
-/**
- * Refines upper banner span right boundary using lower banner row.
- *
- * PURPOSE:
- * Prevents a merged-like upper label from stretching to the end of the scan range.
- *
- * Example:
- * Upper row:
- *   Age | "" | "" | "" | ""
- * Lower row:
- *   Total | 18-24 | 25-34 | "" | ""
- *
- * Without refinement:
- *   Age spans all scanned empty cells.
- *
- * With refinement:
- *   Age spans only the continuous non-empty lower-level area: Total..25-34.
- */
-function refineDiagnosticSpanRightBoundaryByLowerBannerRow(
-  span,
-  lowerBannerRowText,
-  scanStartColumnIndex,
-  isLowerBannerRow
-) {
-  if (isLowerBannerRow) {
-    return;
-  }
-
-  if (!lowerBannerRowText || lowerBannerRowText.length === 0) {
-    return;
-  }
-
-  const spanStartLocalColumnIndex = span.startColumnIndex - scanStartColumnIndex;
-
-  if (spanStartLocalColumnIndex < 0 || spanStartLocalColumnIndex >= lowerBannerRowText.length) {
-    return;
-  }
-
-  const lowerStartText = normalizeBannerDiagnosticCellText(
-    lowerBannerRowText[spanStartLocalColumnIndex]
-  );
-
-  if (!lowerStartText) {
-    return;
-  }
-
-  let lowerAreaEndLocalColumnIndex = spanStartLocalColumnIndex;
-
-  for (
-    let localColumnIndex = spanStartLocalColumnIndex + 1;
-    localColumnIndex < lowerBannerRowText.length;
-    localColumnIndex++
-  ) {
-    const lowerCellText = normalizeBannerDiagnosticCellText(lowerBannerRowText[localColumnIndex]);
-
-    if (!lowerCellText) {
-      break;
-    }
-
-    lowerAreaEndLocalColumnIndex = localColumnIndex;
-  }
-
-  const lowerAreaEndSheetColumnIndex = scanStartColumnIndex + lowerAreaEndLocalColumnIndex;
-
-  span.endColumnIndex = Math.min(span.endColumnIndex, lowerAreaEndSheetColumnIndex);
-}
-
-/**
- * Normalizes diagnostic banner cell text.
- */
-function normalizeBannerDiagnosticCellText(rawValue) {
-  if (rawValue === null || rawValue === undefined) {
-    return "";
-  }
-
-  return String(rawValue).trim();
-}
-
-/**
- * Reads merge diagnostics for banner rows above selected range.
- *
- * PURPOSE:
- * Temporary spike for understanding how Office.js exposes merged cells.
- *
- * This function does not affect calculations.
- */
-async function loadBannerMergeDiagnosticsForSelectedRange(context, selectedRange) {
-  const maxBannerScanRows = 5;
-
-  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
-
-  await context.sync();
-
-  const selectedStartRowIndex = selectedRange.rowIndex;
-  const selectedStartColumnIndex = selectedRange.columnIndex;
-  const selectedColumnCount = selectedRange.columnCount;
-
-  if (selectedStartRowIndex === 0) {
-    return [
-      "Merge diagnostics:",
-      "- Над выделенным диапазоном нет строк для анализа merge-структуры.",
-    ].join("\n");
-  }
-
-  const availableRowCount = Math.min(maxBannerScanRows + 1, selectedStartRowIndex);
-  const firstBannerRowIndex = selectedStartRowIndex - availableRowCount;
-
-  const bannerScanRange = selectedRange.worksheet.getRangeByIndexes(
-    firstBannerRowIndex,
-    selectedStartColumnIndex,
-    availableRowCount,
-    selectedColumnCount
-  );
-
-  bannerScanRange.load(["text", "values", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
-
-  await context.sync();
-
-  const lines = [];
-
-  lines.push("Merge diagnostics:");
-  lines.push(
-    `- Диапазон проверки: ${availableRowCount} строк над выделением, ${selectedColumnCount} колонок.`
-  );
-
-  for (let localRowIndex = 0; localRowIndex < availableRowCount; localRowIndex++) {
-    const sheetRowIndex = firstBannerRowIndex + localRowIndex;
-    const rowOffsetFromSelection = sheetRowIndex - selectedStartRowIndex;
-
-    lines.push(`- Row offset ${rowOffsetFromSelection}:`);
-
-    for (let localColumnIndex = 0; localColumnIndex < selectedColumnCount; localColumnIndex++) {
-      const sheetColumnIndex = selectedStartColumnIndex + localColumnIndex;
-
-      const cellText =
-        bannerScanRange.text &&
-        bannerScanRange.text[localRowIndex] &&
-        bannerScanRange.text[localRowIndex][localColumnIndex] !== undefined
-          ? bannerScanRange.text[localRowIndex][localColumnIndex]
-          : "";
-
-      const mergeInfo = await getCellMergeDiagnosticInfo(
-        context,
-        selectedRange.worksheet,
-        sheetRowIndex,
-        sheetColumnIndex
-      );
-
-      lines.push(`  - col ${localColumnIndex + 1}: text="${cellText}", ${mergeInfo}`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * Attempts to get merge diagnostic info for one worksheet cell.
- *
- * IMPORTANT:
- * Office.js merged-cell support can vary by runtime/API set.
- * This helper is intentionally defensive.
- */
-async function getCellMergeDiagnosticInfo(context, worksheet, rowIndex, columnIndex) {
-  const cell = worksheet.getRangeByIndexes(rowIndex, columnIndex, 1, 1);
-
-  try {
-    const mergedArea = cell.getMergedAreasOrNullObject();
-
-    mergedArea.load([
-      "isNullObject",
-      "address",
-      "rowIndex",
-      "columnIndex",
-      "rowCount",
-      "columnCount",
-    ]);
-
-    await context.sync();
-
-    if (mergedArea.isNullObject) {
-      return "merged=false";
-    }
-
-    return [
-      "merged=true",
-      `area="${mergedArea.address}"`,
-      `topRow=${mergedArea.rowIndex + 1}`,
-      `leftCol=${mergedArea.columnIndex + 1}`,
-      `rows=${mergedArea.rowCount}`,
-      `cols=${mergedArea.columnCount}`,
-    ].join(", ");
-  } catch (error) {
-    return `mergeInfo=unavailable (${error && error.message ? error.message : "unknown error"})`;
-  }
-}
-
-
-/**
  * Reads calculation settings from the task pane UI.
  *
  * PURPOSE:
@@ -6247,22 +5803,6 @@ function initializeBannerStructureSettings() {
   }
 
   refreshSettingsPanelState();
-}
-
-/**
- * Converts zero-based column index to Excel column letter.
- */
-function getExcelColumnLetter(columnIndex) {
-  let dividend = columnIndex + 1;
-  let columnName = "";
-
-  while (dividend > 0) {
-    const modulo = (dividend - 1) % 26;
-    columnName = String.fromCharCode(65 + modulo) + columnName;
-    dividend = Math.floor((dividend - modulo) / 26);
-  }
-
-  return columnName;
 }
 
 function getFirstBannerStructureError(bannerStructure) {

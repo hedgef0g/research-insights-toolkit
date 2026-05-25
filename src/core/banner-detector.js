@@ -188,65 +188,6 @@ export function detectBannerStructure(bannerContext, settings = {}) {
 }
 
 /**
- * Formats banner detection diagnostics for status output.
- */
-export function formatBannerDetectionDiagnostics(bannerStructure) {
-  if (!bannerStructure || !bannerStructure.isDetected) {
-    return "Баннер: структура не обнаружена.";
-  }
-
-  const lines = [];
-
-  lines.push("Баннер:");
-  lines.push(`- Режим: ${bannerStructure.mode}`);
-
-  if (bannerStructure.globalTotalColumnIndex !== null) {
-    lines.push(`- Глобальный Тотал: колонка ${bannerStructure.globalTotalColumnIndex + 1}`);
-  }
-
-  if (bannerStructure.totalColumnIndexes && bannerStructure.totalColumnIndexes.length > 0) {
-    lines.push(
-      `- Найденные Тоталы: ${bannerStructure.totalColumnIndexes
-        .map((columnIndex) => columnIndex + 1)
-        .join(", ")}`
-    );
-  } else {
-    lines.push("- Найденные Тоталы: нет");
-  }
-
-  if (bannerStructure.groups && bannerStructure.groups.length > 0) {
-    lines.push("- Группы:");
-
-    for (const group of bannerStructure.groups) {
-      const columnLabels = group.columnIndexes
-        .map((columnIndex) => {
-          const descriptor = bannerStructure.columnDescriptors.find(
-            (item) => item.columnIndex === columnIndex
-          );
-
-          return descriptor ? descriptor.lowerLabel || `Column ${columnIndex + 1}` : "";
-        })
-        .filter(Boolean)
-        .join(", ");
-
-      lines.push(`  - ${group.label}: ${columnLabels}`);
-    }
-  }
-
-  const bannerMessages = bannerStructure.messages || [];
-
-  if (bannerMessages.length > 0) {
-    lines.push("- Сообщения:");
-
-    for (const message of bannerMessages) {
-      lines.push(`  - ${message.text}`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
-/**
  * Returns lower banner row from context.
  */
 function getLowerBannerRow(bannerContext) {
