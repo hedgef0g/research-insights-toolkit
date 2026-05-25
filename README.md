@@ -197,6 +197,7 @@ Technical banner diagnostics are hidden from normal output. The status panel sho
 
 ## Documentation
 
+- [docs/USER_GUIDE.md](docs/USER_GUIDE.md) — user-facing MVP usage guide for the current Excel workflows.
 - [docs/TABLE_STRUCTURE_MATRIX.md](docs/TABLE_STRUCTURE_MATRIX.md) — structural support coverage (supported / partial / unsupported / future).
 - [docs/TEST_CASES.md](docs/TEST_CASES.md) — manual smoke validation checklist.
 - [docs/STATUS.md](docs/STATUS.md) — technical health and current focus.
