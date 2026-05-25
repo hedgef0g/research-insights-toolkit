@@ -126,88 +126,59 @@ b {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   flex: 0 0 auto;
+  align-self: flex-start;
+  margin-top: 2px;
 }
 
 .lang-btn {
   position: relative;
-  width: 28px;
-  height: 20px;
-  background: rgba(255, 255, 255, 0.72);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 22px;
+  padding: 2px;
   border: 1px solid transparent;
   border-radius: var(--rs-radius-sm);
+  background: rgba(255, 255, 255, 0.72);
   cursor: pointer;
-  font-size: 0;
-  line-height: 0;
-  padding: 0;
-  color: transparent;
-  opacity: 0.72;
+  opacity: 0.78;
   overflow: hidden;
-  box-shadow: inset 0 0 0 1px rgba(17, 24, 39, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(17, 24, 39, 0.06);
   transition:
-    opacity 0.15s,
-    border-color 0.15s,
-    background-color 0.15s,
-    box-shadow 0.15s,
-    transform 0.15s;
+    opacity 0.15s ease,
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
 }
 
-.lang-btn::before {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 20px;
-  height: 14px;
+.lang-btn .lang-flag {
+  display: block;
+  width: 100%;
+  height: 100%;
   border-radius: 3px;
-  box-shadow:
-    inset 0 0 0 1px rgba(17, 24, 39, 0.08),
-    0 0 0 1px rgba(255, 255, 255, 0.4);
-}
-
-.lang-btn[data-lang="ru"]::before {
-  background:
-    linear-gradient(
-      to bottom,
-      #ffffff 0,
-      #ffffff 33.33%,
-      #0f5bd3 33.33%,
-      #0f5bd3 66.66%,
-      #d52b1e 66.66%,
-      #d52b1e 100%
-    );
-}
-
-.lang-btn[data-lang="en"]::before {
-  background:
-    linear-gradient(33deg, transparent 42%, #ffffff 42%, #ffffff 49%, transparent 49%),
-    linear-gradient(-33deg, transparent 42%, #ffffff 42%, #ffffff 49%, transparent 49%),
-    linear-gradient(33deg, transparent 46%, #c8102e 46%, #c8102e 49%, transparent 49%),
-    linear-gradient(-33deg, transparent 46%, #c8102e 46%, #c8102e 49%, transparent 49%),
-    linear-gradient(to right, transparent 38%, #ffffff 38%, #ffffff 62%, transparent 62%),
-    linear-gradient(to bottom, transparent 35%, #ffffff 35%, #ffffff 65%, transparent 65%),
-    linear-gradient(to right, transparent 44%, #c8102e 44%, #c8102e 56%, transparent 56%),
-    linear-gradient(to bottom, transparent 41%, #c8102e 41%, #c8102e 59%, transparent 59%),
-    #012169;
+  filter: saturate(1);
 }
 
 .lang-btn:hover {
-  opacity: 0.92;
+  opacity: 1;
   transform: translateY(-1px);
 }
 
 .lang-btn.is-active {
-  border-color: var(--rs-color-border);
+  border-color: rgba(22, 163, 74, 0.55);
   opacity: 1;
   background: var(--rs-color-bg);
   box-shadow:
-    inset 0 0 0 1px rgba(22, 163, 74, 0.12),
-    0 0 0 2px rgba(34, 197, 94, 0.12);
+    inset 0 0 0 1px rgba(22, 163, 74, 0.18),
+    0 0 0 2px rgba(34, 197, 94, 0.18);
 }
 
 .lang-btn:focus-visible {
-  outline: 2px solid rgba(22, 163, 74, 0.35);
+  outline: 2px solid rgba(22, 163, 74, 0.45);
   outline-offset: 2px;
 }
 
@@ -338,6 +309,10 @@ b {
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .primary-action-button:hover {
@@ -348,6 +323,13 @@ b {
 .primary-action-button:active {
   background: #14532d;
   border-color: #14532d;
+}
+
+.primary-action-button:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px #fff,
+    0 0 0 4px rgba(22, 163, 74, 0.5);
 }
 
 .settings-warning {
@@ -425,6 +407,10 @@ b {
 .primary-action-button {
   flex: 0 0 auto;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   padding: 10px 18px;
   border: 1px solid var(--rs-color-primary);
   border-radius: var(--rs-radius-md);
@@ -433,6 +419,10 @@ b {
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .primary-action-button:hover {
@@ -446,19 +436,29 @@ b {
 }
 
 .secondary-action-button {
-  flex: 0 1 140px;
+  flex: 0 1 160px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
   padding: 6px 8px;
   border: none;
+  border-radius: var(--rs-radius-sm);
   background: transparent;
   color: var(--rs-color-muted);
   font-size: 12px;
   font-weight: 600;
-  text-decoration: underline;
   cursor: pointer;
   word-break: normal;
   overflow-wrap: normal;
-  max-width: 140px;
+  max-width: 160px;
   line-height: 1.2;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.secondary-action-button > span {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .secondary-action-button:hover {
@@ -468,6 +468,13 @@ b {
 
 .secondary-action-button:active {
   color: #000;
+}
+
+.secondary-action-button:focus-visible {
+  outline: none;
+  background: var(--rs-color-bg-tint);
+  color: var(--rs-color-text);
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.35);
 }
 
 .action-panel {
@@ -594,6 +601,9 @@ b {
 }
 
 .check-action-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 5px 10px;
   border: 1px solid var(--rs-color-primary);
   border-radius: var(--rs-radius-sm);
@@ -602,6 +612,10 @@ b {
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .check-action-button:hover {
@@ -610,6 +624,11 @@ b {
 
 .check-action-button:active {
   background: #dcfce7;
+}
+
+.check-action-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.35);
 }
 
 .inventory-mode-row {
@@ -789,4 +808,80 @@ b {
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--rs-color-border);
+}
+
+/* ── Shared Lucide-style icon helpers (issue #233) ───────────────────────── */
+
+.btn-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  vertical-align: middle;
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.primary-action-button .btn-icon {
+  width: 16px;
+  height: 16px;
+  opacity: 0.95;
+}
+
+.secondary-action-button .btn-icon,
+.check-action-button .btn-icon {
+  width: 13px;
+  height: 13px;
+}
+
+/* ── Focus, hover, and density polish (issue #233) ───────────────────────── */
+
+.action-tab:focus-visible,
+.scope-btn:focus-visible,
+.settings-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.45);
+}
+
+.panel-dismiss:focus-visible {
+  outline: 2px solid rgba(22, 163, 74, 0.45);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.action-tab,
+.scope-btn,
+.settings-tab,
+.action-tab.is-active,
+.scope-btn.is-active,
+.settings-tab.is-active {
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.panel-header {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--rs-color-border);
+}
+
+.panel-header h4 {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--rs-color-text);
+}
+
+.action-buttons-row {
+  margin-top: 2px;
+}
+
+.check-buttons-row {
+  margin-top: 6px;
+}
+
+.inventory-mode-row {
+  margin-top: 8px;
 }
