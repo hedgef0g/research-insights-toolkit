@@ -48,12 +48,14 @@
           </button>
           <button class="lang-btn" data-lang="en" aria-label="English" title="English">
             <svg class="lang-flag" viewBox="0 0 60 30" preserveAspectRatio="none" aria-hidden="true" focusable="false">
-              <clipPath id="rs-uk-clip"><rect width="60" height="30"/></clipPath>
-              <g clip-path="url(#rs-uk-clip)">
+              <clipPath id="rs-uk-bounds"><rect width="60" height="30"/></clipPath>
+              <clipPath id="rs-uk-saltire">
+                <path d="M30,15 L60,15 L60,30 Z M30,15 L30,30 L0,30 Z M30,15 L0,15 L0,0 Z M30,15 L30,0 L60,0 Z"/>
+              </clipPath>
+              <g clip-path="url(#rs-uk-bounds)">
                 <rect width="60" height="30" fill="#012169"/>
                 <path d="M0,0 L60,30 M60,0 L0,30" stroke="#ffffff" stroke-width="6"/>
-                <path d="M0,0 L60,30" stroke="#c8102e" stroke-width="2" stroke-dasharray="33.54 33.54"/>
-                <path d="M60,0 L0,30" stroke="#c8102e" stroke-width="2" stroke-dasharray="33.54 33.54" stroke-dashoffset="-33.54"/>
+                <path d="M0,0 L60,30 M60,0 L0,30" stroke="#c8102e" stroke-width="4" clip-path="url(#rs-uk-saltire)"/>
                 <path d="M30,0 V30 M0,15 H60" stroke="#ffffff" stroke-width="10"/>
                 <path d="M30,0 V30 M0,15 H60" stroke="#c8102e" stroke-width="6"/>
               </g>
