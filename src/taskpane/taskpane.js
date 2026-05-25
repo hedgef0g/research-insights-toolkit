@@ -575,13 +575,11 @@ function initActionScopeShell() {
  */
 async function runSignificanceFromSelection() {
   await Excel.run(async (context) => {
-    let selectedRange = context.workbook.getSelectedRange();
-
     const calculationSettings = readCalculationSettingsFromPanel();
     if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
       setStatusMessage(
         // eslint-disable-next-line quotes
-        'Режим "Сравнение с предыдущей колонкой" несовместим с режимом "Сравнивать только с Тотал".'
+        'Режим “Сравнение с предыдущей колонкой” несовместим с режимом “Сравнивать только с Тотал”.'
       );
 
       return;
@@ -611,9 +609,18 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    selectedRange.load(["address", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
-
-    await context.sync();
+    // getSelectedRange() throws a RichApi.Error for non-contiguous (Ctrl+Click
+    // multi-area) selections. Catch that error here and surface a user-facing
+    // message rather than letting the runtime error propagate.
+    let selectedRange;
+    try {
+      selectedRange = context.workbook.getSelectedRange();
+      selectedRange.load(["address", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+      await context.sync();
+    } catch (_selectionErr) {
+      setStatusMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      return;
+    }
 
     if (
       calculationSettings.compareWithPreviousColumn &&
@@ -2785,14 +2792,21 @@ function calculateBlockResults(cleanedValues, calculationBlock, calculationSetti
  */
 async function clearSignificanceFromSelection() {
   await Excel.run(async (context) => {
-    const selectedRange = context.workbook.getSelectedRange();
-
-    // Read-only load: needed to decide whether to operate on the whole
-    // selection (strict numeric case) or only on the detected data body
-    // (forgiving full-table case). No writes happen before the target is known.
-    selectedRange.load(["values", "text"]);
-
-    await context.sync();
+    // getSelectedRange() throws a RichApi.Error for non-contiguous (Ctrl+Click
+    // multi-area) selections. Catch that error here and surface a user-facing
+    // message rather than letting the runtime error propagate.
+    let selectedRange;
+    try {
+      selectedRange = context.workbook.getSelectedRange();
+      // Read-only load: needed to decide whether to operate on the whole
+      // selection (strict numeric case) or only on the detected data body
+      // (forgiving full-table case). No writes happen before the target is known.
+      selectedRange.load(["values", "text"]);
+      await context.sync();
+    } catch (_selectionErr) {
+      setStatusMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      return;
+    }
 
     const selectedValues = selectedRange.values;
     const selectedText = selectedRange.text;
