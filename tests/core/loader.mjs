@@ -37,9 +37,14 @@ export async function resolve(specifier, context, nextResolve) {
 
 export async function load(url, context, nextLoad) {
   // Force ESM format for project source files.
-  // src/core/*.js files use export/import syntax but the package has no
-  // "type":"module", so Node would otherwise parse them as CommonJS.
-  if (url.includes("/src/core/") && !url.includes("/node_modules/") && url.endsWith(".js")) {
+  // src/core/*.js and src/taskpane/*.js files use export/import syntax but
+  // the package has no "type":"module", so Node would otherwise parse them
+  // as CommonJS.
+  if (
+    (url.includes("/src/core/") || url.includes("/src/taskpane/")) &&
+    !url.includes("/node_modules/") &&
+    url.endsWith(".js")
+  ) {
     const result = await nextLoad(url, context);
     return { ...result, format: "module" };
   }
