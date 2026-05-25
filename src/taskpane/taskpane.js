@@ -60,6 +60,12 @@ const SCAN_CELL_LIMIT = 250000;
 const INVENTORY_CONTENT_SHEET_NAME = "Content";
 const RUN_REPORT_SHEET_NAME = "Run report";
 const GENERATED_SHEET_NAMES = new Set([INVENTORY_CONTENT_SHEET_NAME, RUN_REPORT_SHEET_NAME]);
+
+// Shown when the user has a non-contiguous (multi-area) selection active.
+// context.workbook.getSelectedRange() throws a RichApi.Error for such selections.
+const NON_CONTIGUOUS_SELECTION_MESSAGE =
+  "Выделение состоит из нескольких несмежных областей. " +
+  "Для этой операции выберите один непрерывный диапазон или поставьте курсор внутри одной таблицы.";
 const INVENTORY_CONTENT_COLUMNS = [
   "#",
   "Sheet",
@@ -437,6 +443,11 @@ Office.onReady((info) => {
   }
 
   document.getElementById("check-add-report")?.addEventListener("change", updateCheckHints);
+
+  const checkSelectedRangeButton = document.getElementById("check-selected-range");
+  if (checkSelectedRangeButton) {
+    checkSelectedRangeButton.addEventListener("click", runCheckSelectedRange);
+  }
 
   initActionScopeShell();
   initPanelDismiss();
@@ -3184,11 +3195,22 @@ async function runCheckTable() {
     // calling the active-cell resolver. If the selection spans multiple table-like
     // blocks separated by empty rows, block immediately with a clear message.
     // A single-cell selection or a normal single-table selection passes through.
-    const selectionForGuard = context.workbook.getSelectedRange();
-    selectionForGuard.load(["values"]);
-    await context.sync();
+    //
+    // getSelectedRange() throws a RichApi.Error for non-contiguous (Ctrl+Click
+    // multi-area) selections. Catch that error here and surface a user-facing
+    // message rather than letting the runtime error propagate.
+    let guardValues;
+    try {
+      const selectionForGuard = context.workbook.getSelectedRange();
+      selectionForGuard.load(["values"]);
+      await context.sync();
+      guardValues = selectionForGuard.values;
+    } catch (_selectionErr) {
+      setCheckMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      return;
+    }
 
-    if (selectionHasMultiTableGap(selectionForGuard.values)) {
+    if (selectionHasMultiTableGap(guardValues)) {
       const msg =
         "Выделение содержит несколько таблиц или блоков данных, разделённых пустыми строками. " +
         "Для «Текущей таблицы» поставьте курсор в одну таблицу или используйте «Проверить лист».";
@@ -3334,6 +3356,97 @@ async function runCheckTable() {
         blocksProcessed: summary.detectedBlocks,
       }], "Проверка — Текущая таблица");
     }
+  });
+}
+
+/**
+ * Расчёт → Проверить выделение: runs a read-only selected-range check directly
+ * on the current Excel selection — does NOT use the active-cell resolver.
+ *
+ * Reads the selected range address, calls checkSelectedRangePreview with the
+ * exact selection, and renders the result in the check panel. Nothing is written
+ * to the workbook.
+ */
+async function runCheckSelectedRange() {
+  await Excel.run(async (context) => {
+    const calculationSettings = readCalculationSettingsFromPanel();
+
+    // getSelectedRange() throws a RichApi.Error for non-contiguous (Ctrl+Click
+    // multi-area) selections. Catch the error here and show a user-facing
+    // message rather than letting the runtime error propagate.
+    let sheetName;
+    let rangeAddress;
+    try {
+      const selectedRange = context.workbook.getSelectedRange();
+      selectedRange.load(["address"]);
+      const worksheet = selectedRange.worksheet;
+      worksheet.load(["name"]);
+      await context.sync();
+
+      sheetName = worksheet.name;
+      const fullAddress = selectedRange.address;
+      const exclamationIndex = fullAddress.lastIndexOf("!");
+      rangeAddress =
+        exclamationIndex >= 0 ? fullAddress.substring(exclamationIndex + 1) : fullAddress;
+    } catch (_selectionErr) {
+      setCheckMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      return;
+    }
+
+    const checkResult = await checkSelectedRangePreview(
+      context,
+      sheetName,
+      rangeAddress,
+      calculationSettings
+    );
+
+    if (checkResult.status === "no-data") {
+      setCheckMessage(checkResult.message);
+      return;
+    }
+
+    if (checkResult.status === "blocked") {
+      setCheckMessage(checkResult.message);
+      return;
+    }
+
+    if (checkResult.status === "empty") {
+      setCheckMessage(checkResult.message);
+      return;
+    }
+
+    // status === "checked"
+    const { model, normalizationLines } = checkResult;
+    const { summary, qualitySummary, userVisibleIssues, bannerStructure, calculationBlocks, rowDiagnostics } = model;
+
+    const lines = [
+      `Проверка выделения завершена. ${sheetName}!${rangeAddress}. Строк: ${summary.rowCount}. Блоков: ${summary.detectedBlocks}. Баз: ${summary.baseRows}. Предупреждений: ${qualitySummary.warningCount}. Критических: ${qualitySummary.criticalCount}.`,
+    ];
+
+    if (normalizationLines.length > 0) {
+      lines.push("");
+      lines.push(...normalizationLines);
+    }
+
+    const bannerLines = formatCheckBannerSummary(bannerStructure);
+    if (bannerLines.length > 0) {
+      lines.push("");
+      lines.push(...bannerLines);
+    }
+
+    const issueLines = formatCheckUserVisibleIssues(userVisibleIssues);
+    if (issueLines.length > 0) {
+      lines.push("");
+      lines.push(...issueLines);
+    }
+
+    const blockLines = formatCheckCalculationBlocks(calculationBlocks, rowDiagnostics);
+    if (blockLines.length > 0) {
+      lines.push("");
+      lines.push(...blockLines);
+    }
+
+    setCheckMessage(lines.join("\n"));
   });
 }
 
