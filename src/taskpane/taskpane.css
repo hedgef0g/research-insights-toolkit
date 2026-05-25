@@ -800,24 +800,19 @@ b {
 }
 
 .settings-tab-nav {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 2px;
   margin-bottom: 8px;
   padding: 3px;
   background: var(--rs-color-bg-soft);
   border: 1px solid var(--rs-color-border);
   border-radius: var(--rs-radius-sm);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.settings-tab-nav::-webkit-scrollbar {
-  display: none;
 }
 
 .settings-tab {
-  flex: 0 0 auto;
-  padding: 4px 8px;
+  min-width: 0;
+  padding: 4px 4px;
   border: none;
   border-radius: 4px;
   background: transparent;
@@ -826,6 +821,9 @@ b {
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
 }
 
 .settings-tab:hover {
@@ -833,9 +831,9 @@ b {
   color: var(--rs-color-text);
 }
 
-/* Active tab: natural content width, white background, green underline. */
+/* Active tab: white bg + green underline, grid handles sizing. */
 .settings-tab.is-active {
-  padding: 4px 8px;
+  padding: 4px 4px;
   background: var(--rs-color-bg);
   color: var(--rs-color-primary-dark);
   border: 1px solid var(--rs-color-border);
