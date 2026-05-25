@@ -280,13 +280,43 @@ b {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 0;
+  padding: 4px 0;
   border: none;
   background: transparent;
   color: var(--rs-color-text);
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
+  border-radius: var(--rs-radius-sm);
+}
+
+.settings-toggle:hover {
+  color: var(--rs-color-primary-dark);
+}
+
+.settings-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.45);
+}
+
+.settings-toggle-chevron {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  transition: transform 0.18s ease;
+  opacity: 0.7;
+}
+
+.settings-toggle[aria-expanded="false"] .settings-toggle-chevron {
+  transform: rotate(180deg);
+}
+
+.settings-panel-body {
+  margin-top: 6px;
+}
+
+.settings-panel-body.is-collapsed {
+  display: none;
 }
 
 .settings-content {
@@ -765,7 +795,7 @@ b {
 /* ── Settings tabbed navigation (issue #197) ─────────────────────────────── */
 
 .settings-tabbed-panel {
-  padding-top: 8px;
+  padding-top: 6px;
 }
 
 .settings-tab-nav {
@@ -818,6 +848,39 @@ b {
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--rs-color-border);
+}
+
+/* ── Utility footer (issue #235) ──────────────────────────────────────── */
+
+.utility-footer {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--rs-color-border);
+  border-radius: var(--rs-radius-md);
+  background: var(--rs-color-bg);
+}
+
+.utility-footer-storage {
+  margin-bottom: 6px;
+}
+
+.utility-footer-storage label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rs-color-text);
+}
+
+.utility-footer #help-link {
+  display: inline-block;
+  color: var(--rs-color-primary-dark);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* ── Shared Lucide-style icon helpers (issue #233) ───────────────────────── */

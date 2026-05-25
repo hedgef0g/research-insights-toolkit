@@ -240,6 +240,12 @@
 
       <!-- Settings section (tabbed navigation) -->
       <section class="settings-panel settings-tabbed-panel">
+        <button id="settings-toggle" class="settings-toggle" aria-expanded="true" aria-controls="settings-panel-body">
+          <span data-i18n="settings.panelTitle">Настройки</span>
+          <svg class="settings-toggle-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+        </button>
+
+        <div id="settings-panel-body" class="settings-panel-body">
         <div class="settings-tab-nav" role="tablist" id="settings-tab-nav">
           <button class="settings-tab is-active" data-settings-tab="osnovnye" role="tab" aria-selected="true" data-i18n="settings.tab.basic">Основные</button>
           <button class="settings-tab" data-settings-tab="sravneniya" role="tab" aria-selected="false" data-i18n="settings.tab.comparisons">Сравнения</button>
@@ -399,27 +405,29 @@
           </div>
         </div>
 
-        <!-- Persistence and help — always visible, outside tab panels -->
-        <div class="settings-footer">
-          <div class="settings-group">
-            <label for="settings-storage-mode" data-i18n="settings.saveSettings">Сохранять настройки...</label>
-            <div class="settings-storage-row">
-              <select id="settings-storage-mode">
-                <option value="none" selected data-i18n="storage.none">Не сохранять</option>
-                <option value="local" data-i18n="storage.local">Локально</option>
-                <option value="cloud" disabled data-i18n="storage.cloud">В облаке</option>
-              </select>
-              <button type="button" id="reset-settings" class="settings-reset-button" data-i18n="settings.reset">Сброс</button>
-            </div>
-          </div>
-          <a
-            href="https://hedgef0g.github.io/research-insights-toolkit/assets/rit-help-ru.html"
-            id="help-link"
-            data-i18n="help.link"
-            >Справка об использовании</a
-          >
-        </div>
+        </div><!-- /settings-panel-body -->
       </section>
+
+      <!-- Utility footer: settings persistence, reset, and help -->
+      <footer class="utility-footer">
+        <div class="utility-footer-storage">
+          <label for="settings-storage-mode" data-i18n="settings.saveSettings">Сохранять настройки...</label>
+          <div class="settings-storage-row">
+            <select id="settings-storage-mode">
+              <option value="none" selected data-i18n="storage.none">Не сохранять</option>
+              <option value="local" data-i18n="storage.local">Локально</option>
+              <option value="cloud" disabled data-i18n="storage.cloud">В облаке</option>
+            </select>
+            <button type="button" id="reset-settings" class="settings-reset-button" data-i18n="settings.reset">Сброс</button>
+          </div>
+        </div>
+        <a
+          href="https://hedgef0g.github.io/research-insights-toolkit/assets/rit-help-ru.html"
+          id="help-link"
+          data-i18n="help.link"
+          >Справка об использовании</a
+        >
+      </footer>
     </main>
   </body>
 </html>

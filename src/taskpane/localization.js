@@ -56,6 +56,8 @@ const STRINGS = {
     "panel.check": "Проверка",
     "panel.inventory": "Оглавление",
 
+    "settings.panelTitle": "Настройки",
+
     "settings.tab.basic": "Основные",
     "settings.tab.comparisons": "Сравнения",
     "settings.tab.banner": "Баннер",
@@ -190,6 +192,8 @@ const STRINGS = {
     "panel.status": "Status",
     "panel.check": "Check",
     "panel.inventory": "Contents",
+
+    "settings.panelTitle": "Settings",
 
     "settings.tab.basic": "General",
     "settings.tab.comparisons": "Comparisons",
