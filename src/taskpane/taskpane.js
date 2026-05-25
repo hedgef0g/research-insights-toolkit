@@ -6188,7 +6188,7 @@ function resetSettingsToDefaults() {
   clearSavedLocalSettings();
   refreshSettingsPanelState();
 
-  setStatusMessage("Настройки сброшены к значениям по умолчанию.");
+  setStatusMessage(t("status.settingsReset"));
 }
 
 /**

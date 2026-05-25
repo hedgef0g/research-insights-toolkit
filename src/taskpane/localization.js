@@ -98,6 +98,8 @@ const STRINGS = {
     "status.autorunClearSkipped": "Автозапуск — Текущая таблица: очистка пропущена — {msg}.",
     "status.autorunReportWriteError": "[Отчёт: ошибка записи — {msg}]",
 
+    "status.settingsReset": "Настройки сброшены к значениям по умолчанию.",
+
     "status.runDone": "Расчёт выполнен. Обработано блоков: {count}.",
     "status.clearDone": "Значимости очищены.",
 
@@ -234,6 +236,8 @@ const STRINGS = {
     "status.autorunCleared": "Autorun — Current table: cleared. {sheet}!{range}.",
     "status.autorunClearSkipped": "Autorun — Current table: clear skipped — {msg}.",
     "status.autorunReportWriteError": "[Report: write error — {msg}]",
+
+    "status.settingsReset": "Settings were reset to defaults.",
 
     "status.runDone": "Calculation complete. Blocks processed: {count}.",
     "status.clearDone": "Significance markers removed.",

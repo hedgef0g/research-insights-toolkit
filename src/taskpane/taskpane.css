@@ -185,6 +185,7 @@ b {
 .settings-panel {
   width: 100%;
   box-sizing: border-box;
+  margin-top: 12px;
   margin-bottom: 0;
   padding: 10px 12px;
   border: 1px solid var(--rs-color-border);
@@ -829,17 +830,16 @@ b {
   color: var(--rs-color-text);
 }
 
-/* Active settings tab takes a larger flex share and keeps its label fully
-   visible. Russian labels like "Основные" do not fit when every tab gets
-   an equal slice; this trade-off shrinks inactive tabs (which keep their
-   ellipsis fallback) so the active tab can never truncate. */
+/* Active settings tab: slightly wider share so Russian labels like "Основные"
+   never truncate; white background + green underline gives a tab-like look
+   without the heavy segmented-button border of the previous style. */
 .settings-tab.is-active {
   flex: 2 1 auto;
-  padding-left: 8px;
-  padding-right: 8px;
-  background: var(--rs-color-bg-tint);
+  padding: 4px 4px;
+  background: var(--rs-color-bg);
   color: var(--rs-color-primary-dark);
-  border: 1px solid var(--rs-color-primary);
+  border: 1px solid var(--rs-color-border);
+  border-bottom: 2px solid var(--rs-color-primary);
   overflow: visible;
   text-overflow: clip;
 }
