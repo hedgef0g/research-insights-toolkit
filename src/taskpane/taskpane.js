@@ -60,6 +60,12 @@ const SCAN_CELL_LIMIT = 250000;
 const INVENTORY_CONTENT_SHEET_NAME = "Content";
 const RUN_REPORT_SHEET_NAME = "Run report";
 const GENERATED_SHEET_NAMES = new Set([INVENTORY_CONTENT_SHEET_NAME, RUN_REPORT_SHEET_NAME]);
+
+// Shown when the user has a non-contiguous (multi-area) selection active.
+// context.workbook.getSelectedRange() throws a RichApi.Error for such selections.
+const NON_CONTIGUOUS_SELECTION_MESSAGE =
+  "Выделение состоит из нескольких несмежных областей. " +
+  "Для этой операции выберите один непрерывный диапазон или поставьте курсор внутри одной таблицы.";
 const INVENTORY_CONTENT_COLUMNS = [
   "#",
   "Sheet",
@@ -3189,11 +3195,22 @@ async function runCheckTable() {
     // calling the active-cell resolver. If the selection spans multiple table-like
     // blocks separated by empty rows, block immediately with a clear message.
     // A single-cell selection or a normal single-table selection passes through.
-    const selectionForGuard = context.workbook.getSelectedRange();
-    selectionForGuard.load(["values"]);
-    await context.sync();
+    //
+    // getSelectedRange() throws a RichApi.Error for non-contiguous (Ctrl+Click
+    // multi-area) selections. Catch that error here and surface a user-facing
+    // message rather than letting the runtime error propagate.
+    let guardValues;
+    try {
+      const selectionForGuard = context.workbook.getSelectedRange();
+      selectionForGuard.load(["values"]);
+      await context.sync();
+      guardValues = selectionForGuard.values;
+    } catch (_selectionErr) {
+      setCheckMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      return;
+    }
 
-    if (selectionHasMultiTableGap(selectionForGuard.values)) {
+    if (selectionHasMultiTableGap(guardValues)) {
       const msg =
         "Выделение содержит несколько таблиц или блоков данных, разделённых пустыми строками. " +
         "Для «Текущей таблицы» поставьте курсор в одну таблицу или используйте «Проверить лист».";
@@ -3354,17 +3371,27 @@ async function runCheckSelectedRange() {
   await Excel.run(async (context) => {
     const calculationSettings = readCalculationSettingsFromPanel();
 
-    const selectedRange = context.workbook.getSelectedRange();
-    selectedRange.load(["address"]);
-    const worksheet = selectedRange.worksheet;
-    worksheet.load(["name"]);
-    await context.sync();
+    // getSelectedRange() throws a RichApi.Error for non-contiguous (Ctrl+Click
+    // multi-area) selections. Catch the error here and show a user-facing
+    // message rather than letting the runtime error propagate.
+    let sheetName;
+    let rangeAddress;
+    try {
+      const selectedRange = context.workbook.getSelectedRange();
+      selectedRange.load(["address"]);
+      const worksheet = selectedRange.worksheet;
+      worksheet.load(["name"]);
+      await context.sync();
 
-    const sheetName = worksheet.name;
-    const fullAddress = selectedRange.address;
-    const exclamationIndex = fullAddress.lastIndexOf("!");
-    const rangeAddress =
-      exclamationIndex >= 0 ? fullAddress.substring(exclamationIndex + 1) : fullAddress;
+      sheetName = worksheet.name;
+      const fullAddress = selectedRange.address;
+      const exclamationIndex = fullAddress.lastIndexOf("!");
+      rangeAddress =
+        exclamationIndex >= 0 ? fullAddress.substring(exclamationIndex + 1) : fullAddress;
+    } catch (_selectionErr) {
+      setCheckMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      return;
+    }
 
     const checkResult = await checkSelectedRangePreview(
       context,
