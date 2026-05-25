@@ -32,102 +32,109 @@
           <span></span><span></span><span></span>
           <span></span><span></span><span></span>
         </div>
-        <div>
+        <div class="taskpane-brand-text">
           <p class="taskpane-brand-eyebrow">ResearchSignal</p>
           <h1>Table</h1>
           <p class="taskpane-brand-subtitle">Research table intelligence</p>
+        </div>
+        <div class="lang-selector-row">
+          <label for="language-selector" class="lang-selector-label" data-i18n="lang.label">Язык</label>
+          <select id="language-selector" class="lang-selector-select">
+            <option value="ru">Русский</option>
+            <option value="en">English</option>
+          </select>
         </div>
       </section>
 
       <section class="action-panel action-panel-sticky">
         <!-- Action tabs: Расчёт | Автозапуск | Проверка | Оглавление -->
         <div class="action-tabs" role="tablist" id="action-tabs">
-          <button class="action-tab is-active" data-action="run" role="tab" aria-selected="true">Расчёт</button>
-          <button class="action-tab" data-action="autorun" role="tab" aria-selected="false">Автозапуск</button>
-          <button class="action-tab action-tab--readonly" data-action="check" role="tab" aria-selected="false">Проверка</button>
-          <button class="action-tab" data-action="content" role="tab" aria-selected="false">Оглавление</button>
+          <button class="action-tab is-active" data-action="run" role="tab" aria-selected="true" data-i18n="tabs.run">Расчёт</button>
+          <button class="action-tab" data-action="autorun" role="tab" aria-selected="false" data-i18n="tabs.autorun">Автозапуск</button>
+          <button class="action-tab action-tab--readonly" data-action="check" role="tab" aria-selected="false" data-i18n="tabs.check">Проверка</button>
+          <button class="action-tab" data-action="content" role="tab" aria-selected="false" data-i18n="tabs.content">Оглавление</button>
         </div>
 
         <!-- Scope selector: Current table | Current sheet | Whole workbook -->
         <div class="scope-selector" role="group" aria-label="Область действия" id="scope-selector">
-          <button class="scope-btn is-active" data-scope="current_table">Текущая таблица</button>
-          <button class="scope-btn" data-scope="current_sheet">Текущий лист</button>
-          <button class="scope-btn" data-scope="whole_workbook">Вся книга</button>
+          <button class="scope-btn is-active" data-scope="current_table" data-i18n="scope.currentTable">Текущая таблица</button>
+          <button class="scope-btn" data-scope="current_sheet" data-i18n="scope.currentSheet">Текущий лист</button>
+          <button class="scope-btn" data-scope="whole_workbook" data-i18n="scope.wholeWorkbook">Вся книга</button>
         </div>
 
         <!-- Workspaces: one shown at a time based on action + scope -->
 
         <div class="action-workspace" data-workspace="run-current_table">
-          <p class="run-scope-fixed">Область: выделенный диапазон</p>
+          <p class="run-scope-fixed" data-i18n="hint.runCurrentTable">Область: выделенный диапазон</p>
           <div class="action-buttons-row">
-            <button id="calculate-significance" class="primary-action-button">Рассчитать</button>
-            <button id="clear-significance" class="secondary-action-button">Очистить значимости</button>
+            <button id="calculate-significance" class="primary-action-button" data-i18n="btn.calculate">Рассчитать</button>
+            <button id="clear-significance" class="secondary-action-button" data-i18n="btn.clearSignificance">Очистить значимости</button>
           </div>
           <div class="check-buttons-row">
-            <button id="check-selected-range" class="check-action-button">Проверить выделение</button>
+            <button id="check-selected-range" class="check-action-button" data-i18n="btn.checkSelection">Проверить выделение</button>
           </div>
         </div>
 
         <div class="action-workspace" data-workspace="autorun-current_table" style="display:none">
-          <p class="run-scope-fixed">Область: активная ячейка → таблица</p>
+          <p class="run-scope-fixed" data-i18n="hint.autorunCurrentTable">Область: активная ячейка → таблица</p>
           <div class="action-buttons-row">
-            <button id="autorun-current-table" class="primary-action-button">Рассчитать</button>
-            <button id="clear-current-table" class="secondary-action-button">Очистить значимости</button>
+            <button id="autorun-current-table" class="primary-action-button" data-i18n="btn.calculate">Рассчитать</button>
+            <button id="clear-current-table" class="secondary-action-button" data-i18n="btn.clearSignificance">Очистить значимости</button>
           </div>
         </div>
 
         <div class="action-workspace" data-workspace="autorun-current_sheet" style="display:none">
           <div class="action-buttons-row">
-            <button id="run-sheet-tables" class="primary-action-button">Рассчитать</button>
-            <button id="clear-sheet-tables" class="secondary-action-button">Очистить значимости</button>
+            <button id="run-sheet-tables" class="primary-action-button" data-i18n="btn.calculate">Рассчитать</button>
+            <button id="clear-sheet-tables" class="secondary-action-button" data-i18n="btn.clearSignificance">Очистить значимости</button>
           </div>
         </div>
 
         <div class="action-workspace" data-workspace="autorun-whole_workbook" style="display:none">
           <div class="action-buttons-row">
-            <button id="run-all-tables" class="primary-action-button">Рассчитать</button>
-            <button id="clear-all-tables" class="secondary-action-button">Очистить значимости</button>
+            <button id="run-all-tables" class="primary-action-button" data-i18n="btn.calculate">Рассчитать</button>
+            <button id="clear-all-tables" class="secondary-action-button" data-i18n="btn.clearSignificance">Очистить значимости</button>
           </div>
         </div>
 
         <div class="action-workspace" data-workspace="check-current_table" style="display:none">
           <div class="check-buttons-row">
-            <button id="check-table" class="check-action-button">Проверить таблицу</button>
+            <button id="check-table" class="check-action-button" data-i18n="btn.checkTable">Проверить таблицу</button>
           </div>
-          <p class="check-workspace-hint" data-hint-base="Проверяет таблицу вокруг активной ячейки."></p>
+          <p class="check-workspace-hint" data-hint-base="Проверяет таблицу вокруг активной ячейки." data-hint-i18n="hint.checkCurrentTable"></p>
         </div>
 
         <div class="action-workspace" data-workspace="check-current_sheet" style="display:none">
           <div class="check-buttons-row">
-            <button id="check-sheet-tables" class="check-action-button">Проверить лист</button>
+            <button id="check-sheet-tables" class="check-action-button" data-i18n="btn.checkSheet">Проверить лист</button>
           </div>
-          <p class="check-workspace-hint" data-hint-base="Проверяет таблицы на текущем листе."></p>
+          <p class="check-workspace-hint" data-hint-base="Проверяет таблицы на текущем листе." data-hint-i18n="hint.checkCurrentSheet"></p>
         </div>
 
         <div class="action-workspace" data-workspace="check-whole_workbook" style="display:none">
           <div class="check-buttons-row">
-            <button id="find-tables" class="check-action-button">Проверить книгу</button>
+            <button id="find-tables" class="check-action-button" data-i18n="btn.checkWorkbook">Проверить книгу</button>
           </div>
-          <p class="check-workspace-hint" data-hint-base="Проверяет таблицы по всей книге."></p>
+          <p class="check-workspace-hint" data-hint-base="Проверяет таблицы по всей книге." data-hint-i18n="hint.checkWholeWorkbook"></p>
         </div>
 
         <div class="action-workspace" data-workspace="content-whole_workbook" style="display:none">
           <div class="check-buttons-row">
-            <button id="content-find-tables" class="check-action-button">Создать оглавление</button>
+            <button id="content-find-tables" class="check-action-button" data-i18n="btn.createContents">Создать оглавление</button>
           </div>
-          <p class="check-workspace-hint">Сканирует все листы книги и создаёт или обновляет лист «Content» со списком таблиц. Данные таблиц не изменяются.</p>
+          <p class="check-workspace-hint" data-i18n="content.hintText">Сканирует все листы книги и создаёт или обновляет лист «Content» со списком таблиц. Данные таблиц не изменяются.</p>
           <div class="inventory-mode-row">
-            <label for="content-output-mode">Формат оглавления</label>
+            <label for="content-output-mode" data-i18n="content.format">Формат оглавления</label>
             <select id="content-output-mode" class="inventory-mode-select">
-              <option value="client">Для клиента</option>
-              <option value="minimal-check">С минимальной проверкой</option>
-              <option value="full-check">С полной проверкой</option>
+              <option value="client" data-i18n="content.formatClient">Для клиента</option>
+              <option value="minimal-check" data-i18n="content.formatMinimalCheck">С минимальной проверкой</option>
+              <option value="full-check" data-i18n="content.formatFullCheck">С полной проверкой</option>
             </select>
           </div>
           <div class="inventory-backlink-row">
             <label class="inline-checkbox-label" for="content-add-backlinks">
               <input type="checkbox" id="content-add-backlinks" />
-              <span>Ставить обратные ссылки</span>
+              <span data-i18n="content.addBacklinks">Ставить обратные ссылки</span>
             </label>
           </div>
         </div>
@@ -136,7 +143,7 @@
         <div id="run-report-control" class="inventory-backlink-row" style="display:none">
           <label class="inline-checkbox-label" for="run-add-report">
             <input type="checkbox" id="run-add-report" />
-            <span>Добавить диагностический лист</span>
+            <span data-i18n="control.addDiagnosticSheet">Добавить диагностический лист</span>
           </label>
         </div>
 
@@ -144,14 +151,14 @@
         <div id="check-report-control" class="inventory-backlink-row" style="display:none">
           <label class="inline-checkbox-label" for="check-add-report">
             <input type="checkbox" id="check-add-report" />
-            <span>Записать результат</span>
+            <span data-i18n="control.writeResult">Записать результат</span>
           </label>
         </div>
       </section>
 
       <section id="status-panel" class="status-panel" style="display: none">
         <div class="panel-header">
-          <h4>Статус</h4>
+          <h4 data-i18n="panel.status">Статус</h4>
           <button class="panel-dismiss" data-dismiss="status-panel" aria-label="Закрыть">✕</button>
         </div>
         <pre id="significance-result"></pre>
@@ -159,7 +166,7 @@
 
       <section id="check-panel" class="status-panel check-panel" style="display: none">
         <div class="panel-header">
-          <h4>Проверка</h4>
+          <h4 data-i18n="panel.check">Проверка</h4>
           <button class="panel-dismiss" data-dismiss="check-panel" aria-label="Закрыть">✕</button>
         </div>
         <pre id="check-result"></pre>
@@ -167,7 +174,7 @@
 
       <section id="inventory-panel" class="status-panel check-panel" style="display: none">
         <div class="panel-header">
-          <h4>Оглавление</h4>
+          <h4 data-i18n="panel.inventory">Оглавление</h4>
           <button class="panel-dismiss" data-dismiss="inventory-panel" aria-label="Закрыть">✕</button>
         </div>
         <pre id="inventory-result"></pre>
@@ -176,17 +183,17 @@
       <!-- Settings section (tabbed navigation) -->
       <section class="settings-panel settings-tabbed-panel">
         <div class="settings-tab-nav" role="tablist" id="settings-tab-nav">
-          <button class="settings-tab is-active" data-settings-tab="osnovnye" role="tab" aria-selected="true">Основные</button>
-          <button class="settings-tab" data-settings-tab="sravneniya" role="tab" aria-selected="false">Сравнения</button>
-          <button class="settings-tab" data-settings-tab="banner" role="tab" aria-selected="false">Баннер</button>
-          <button class="settings-tab" data-settings-tab="bazy" role="tab" aria-selected="false">Базы</button>
-          <button class="settings-tab" data-settings-tab="dizain" role="tab" aria-selected="false">Дизайн</button>
+          <button class="settings-tab is-active" data-settings-tab="osnovnye" role="tab" aria-selected="true" data-i18n="settings.tab.basic">Основные</button>
+          <button class="settings-tab" data-settings-tab="sravneniya" role="tab" aria-selected="false" data-i18n="settings.tab.comparisons">Сравнения</button>
+          <button class="settings-tab" data-settings-tab="banner" role="tab" aria-selected="false" data-i18n="settings.tab.banner">Баннер</button>
+          <button class="settings-tab" data-settings-tab="bazy" role="tab" aria-selected="false" data-i18n="settings.tab.bases">Базы</button>
+          <button class="settings-tab" data-settings-tab="dizain" role="tab" aria-selected="false" data-i18n="settings.tab.design">Дизайн</button>
         </div>
 
         <!-- Основные -->
         <div class="settings-tab-panel" data-settings-panel="osnovnye">
           <div class="settings-group">
-            <label for="confidence-level">Уровень значимости</label>
+            <label for="confidence-level" data-i18n="settings.confidenceLevel">Уровень значимости</label>
             <div class="confidence-settings-row">
               <select id="confidence-level">
                 <option value="99">99%</option>
@@ -203,7 +210,7 @@
           </div>
 
           <div class="settings-group">
-            <label for="preferred-base">База для расчёта</label>
+            <label for="preferred-base" data-i18n="settings.preferredBase">База для расчёта</label>
             <select id="preferred-base">
               <option value="auto" selected>Авто</option>
               <option value="effective">Effective Base</option>
@@ -335,14 +342,14 @@
         <!-- Persistence and help — always visible, outside tab panels -->
         <div class="settings-footer">
           <div class="settings-group">
-            <label for="settings-storage-mode">Сохранять настройки...</label>
+            <label for="settings-storage-mode" data-i18n="settings.saveSettings">Сохранять настройки...</label>
             <div class="settings-storage-row">
               <select id="settings-storage-mode">
-                <option value="none" selected>Не сохранять</option>
-                <option value="local">Локально</option>
-                <option value="cloud" disabled>В облаке</option>
+                <option value="none" selected data-i18n="storage.none">Не сохранять</option>
+                <option value="local" data-i18n="storage.local">Локально</option>
+                <option value="cloud" disabled data-i18n="storage.cloud">В облаке</option>
               </select>
-              <button type="button" id="reset-settings" class="settings-reset-button">Сброс</button>
+              <button type="button" id="reset-settings" class="settings-reset-button" data-i18n="settings.reset">Сброс</button>
             </div>
           </div>
           <a

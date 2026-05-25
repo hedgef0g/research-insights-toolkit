@@ -46,6 +46,8 @@ import {
 
 import { resolveCurrentTableFromActiveCell } from "./active-cell-resolver";
 
+import { t, setLanguage, loadSavedLanguage, applyI18n } from "./localization";
+
 const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
   "GLOBAL_TOTAL_USED",
   "BANNER_AUTO_PREVIOUS_COLUMN_APPLIED",
@@ -63,9 +65,10 @@ const GENERATED_SHEET_NAMES = new Set([INVENTORY_CONTENT_SHEET_NAME, RUN_REPORT_
 
 // Shown when the user has a non-contiguous (multi-area) selection active.
 // context.workbook.getSelectedRange() throws a RichApi.Error for such selections.
-const NON_CONTIGUOUS_SELECTION_MESSAGE =
-  "Выделение состоит из нескольких несмежных областей. " +
-  "Для этой операции выберите один непрерывный диапазон или поставьте курсор внутри одной таблицы.";
+// Resolved via t() at call sites so the message respects the active UI language.
+function nonContiguousSelectionMessage() {
+  return t("status.nonContiguousSelection");
+}
 const INVENTORY_CONTENT_COLUMNS = [
   "#",
   "Sheet",
@@ -376,6 +379,9 @@ Office.onReady((info) => {
   const runAllTablesButton = document.getElementById("run-all-tables"); // Auto-runner button.
   const clearAllTablesButton = document.getElementById("clear-all-tables"); // Auto-clear button.
 
+  loadSavedLanguage();
+  applyI18n();
+
   initializeSettingsPanel();
   loadSavedSettingsIntoPanel();
   refreshSettingsPanelState();
@@ -451,6 +457,7 @@ Office.onReady((info) => {
 
   initActionScopeShell();
   initPanelDismiss();
+  initLanguageSelector();
 });
 
 function initPanelDismiss() {
@@ -459,6 +466,17 @@ function initPanelDismiss() {
       const panel = document.getElementById(btn.dataset.dismiss);
       if (panel) panel.style.display = "none";
     });
+  });
+}
+
+function initLanguageSelector() {
+  const langSelector = document.getElementById("language-selector");
+  if (!langSelector) return;
+  langSelector.addEventListener("change", () => {
+    // setLanguage() calls applyI18n() internally; updateCheckHints() then
+    // re-applies the mode-suffix in the new language.
+    setLanguage(langSelector.value);
+    updateCheckHints();
   });
 }
 
@@ -472,7 +490,7 @@ function isCheckReportEnabled() {
 }
 
 function updateCheckHints() {
-  const modeText = isCheckReportEnabled() ? " С записью на лист." : " Только чтение.";
+  const modeText = isCheckReportEnabled() ? t("hint.checkWriteMode") : t("hint.checkReadOnly");
   document.querySelectorAll(".check-workspace-hint[data-hint-base]").forEach((el) => {
     el.textContent = el.dataset.hintBase + modeText;
   });
@@ -618,7 +636,7 @@ async function runSignificanceFromSelection() {
       selectedRange.load(["address", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
       await context.sync();
     } catch (_selectionErr) {
-      setStatusMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      setStatusMessage(nonContiguousSelectionMessage());
       return;
     }
 
@@ -2804,7 +2822,7 @@ async function clearSignificanceFromSelection() {
       selectedRange.load(["values", "text"]);
       await context.sync();
     } catch (_selectionErr) {
-      setStatusMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      setStatusMessage(nonContiguousSelectionMessage());
       return;
     }
 
@@ -3220,7 +3238,7 @@ async function runCheckTable() {
       await context.sync();
       guardValues = selectionForGuard.values;
     } catch (_selectionErr) {
-      setCheckMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      setCheckMessage(nonContiguousSelectionMessage());
       return;
     }
 
@@ -3403,7 +3421,7 @@ async function runCheckSelectedRange() {
       rangeAddress =
         exclamationIndex >= 0 ? fullAddress.substring(exclamationIndex + 1) : fullAddress;
     } catch (_selectionErr) {
-      setCheckMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      setCheckMessage(nonContiguousSelectionMessage());
       return;
     }
 
