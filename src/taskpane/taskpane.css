@@ -117,6 +117,41 @@ b {
   line-height: 1.25;
 }
 
+.taskpane-brand-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lang-selector-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.lang-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--rs-radius-sm);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 4px;
+  opacity: 0.45;
+  transition: opacity 0.15s;
+}
+
+.lang-btn:hover {
+  opacity: 0.85;
+}
+
+.lang-btn.is-active {
+  border-color: var(--rs-color-border);
+  opacity: 1;
+  background: var(--rs-color-bg);
+}
+
 .settings-panel {
   width: 100%;
   box-sizing: border-box;

@@ -32,102 +32,106 @@
           <span></span><span></span><span></span>
           <span></span><span></span><span></span>
         </div>
-        <div>
+        <div class="taskpane-brand-text">
           <p class="taskpane-brand-eyebrow">ResearchSignal</p>
           <h1>Table</h1>
           <p class="taskpane-brand-subtitle">Research table intelligence</p>
+        </div>
+        <div class="lang-selector-row">
+          <button class="lang-btn is-active" data-lang="ru" aria-label="Русский" title="Русский">🇷🇺</button>
+          <button class="lang-btn" data-lang="en" aria-label="English" title="English">🇬🇧</button>
         </div>
       </section>
 
       <section class="action-panel action-panel-sticky">
         <!-- Action tabs: Расчёт | Автозапуск | Проверка | Оглавление -->
         <div class="action-tabs" role="tablist" id="action-tabs">
-          <button class="action-tab is-active" data-action="run" role="tab" aria-selected="true">Расчёт</button>
-          <button class="action-tab" data-action="autorun" role="tab" aria-selected="false">Автозапуск</button>
-          <button class="action-tab action-tab--readonly" data-action="check" role="tab" aria-selected="false">Проверка</button>
-          <button class="action-tab" data-action="content" role="tab" aria-selected="false">Оглавление</button>
+          <button class="action-tab is-active" data-action="run" role="tab" aria-selected="true" data-i18n="tabs.run">Расчёт</button>
+          <button class="action-tab" data-action="autorun" role="tab" aria-selected="false" data-i18n="tabs.autorun">Автозапуск</button>
+          <button class="action-tab action-tab--readonly" data-action="check" role="tab" aria-selected="false" data-i18n="tabs.check">Проверка</button>
+          <button class="action-tab" data-action="content" role="tab" aria-selected="false" data-i18n="tabs.content">Оглавление</button>
         </div>
 
         <!-- Scope selector: Current table | Current sheet | Whole workbook -->
         <div class="scope-selector" role="group" aria-label="Область действия" id="scope-selector">
-          <button class="scope-btn is-active" data-scope="current_table">Текущая таблица</button>
-          <button class="scope-btn" data-scope="current_sheet">Текущий лист</button>
-          <button class="scope-btn" data-scope="whole_workbook">Вся книга</button>
+          <button class="scope-btn is-active" data-scope="current_table" data-i18n="scope.currentTable">Текущая таблица</button>
+          <button class="scope-btn" data-scope="current_sheet" data-i18n="scope.currentSheet">Текущий лист</button>
+          <button class="scope-btn" data-scope="whole_workbook" data-i18n="scope.wholeWorkbook">Вся книга</button>
         </div>
 
         <!-- Workspaces: one shown at a time based on action + scope -->
 
         <div class="action-workspace" data-workspace="run-current_table">
-          <p class="run-scope-fixed">Область: выделенный диапазон</p>
+          <p class="run-scope-fixed" data-i18n="hint.runCurrentTable">Область: выделенный диапазон</p>
           <div class="action-buttons-row">
-            <button id="calculate-significance" class="primary-action-button">Рассчитать</button>
-            <button id="clear-significance" class="secondary-action-button">Очистить значимости</button>
+            <button id="calculate-significance" class="primary-action-button" data-i18n="btn.calculate">Рассчитать</button>
+            <button id="clear-significance" class="secondary-action-button" data-i18n="btn.clearSignificance">Очистить значимости</button>
           </div>
           <div class="check-buttons-row">
-            <button id="check-selected-range" class="check-action-button">Проверить выделение</button>
+            <button id="check-selected-range" class="check-action-button" data-i18n="btn.checkSelection">Проверить выделение</button>
           </div>
         </div>
 
         <div class="action-workspace" data-workspace="autorun-current_table" style="display:none">
-          <p class="run-scope-fixed">Область: активная ячейка → таблица</p>
+          <p class="run-scope-fixed" data-i18n="hint.autorunCurrentTable">Область: активная ячейка → таблица</p>
           <div class="action-buttons-row">
-            <button id="autorun-current-table" class="primary-action-button">Рассчитать</button>
-            <button id="clear-current-table" class="secondary-action-button">Очистить значимости</button>
+            <button id="autorun-current-table" class="primary-action-button" data-i18n="btn.calculate">Рассчитать</button>
+            <button id="clear-current-table" class="secondary-action-button" data-i18n="btn.clearSignificance">Очистить значимости</button>
           </div>
         </div>
 
         <div class="action-workspace" data-workspace="autorun-current_sheet" style="display:none">
           <div class="action-buttons-row">
-            <button id="run-sheet-tables" class="primary-action-button">Рассчитать</button>
-            <button id="clear-sheet-tables" class="secondary-action-button">Очистить значимости</button>
+            <button id="run-sheet-tables" class="primary-action-button" data-i18n="btn.calculate">Рассчитать</button>
+            <button id="clear-sheet-tables" class="secondary-action-button" data-i18n="btn.clearSignificance">Очистить значимости</button>
           </div>
         </div>
 
         <div class="action-workspace" data-workspace="autorun-whole_workbook" style="display:none">
           <div class="action-buttons-row">
-            <button id="run-all-tables" class="primary-action-button">Рассчитать</button>
-            <button id="clear-all-tables" class="secondary-action-button">Очистить значимости</button>
+            <button id="run-all-tables" class="primary-action-button" data-i18n="btn.calculate">Рассчитать</button>
+            <button id="clear-all-tables" class="secondary-action-button" data-i18n="btn.clearSignificance">Очистить значимости</button>
           </div>
         </div>
 
         <div class="action-workspace" data-workspace="check-current_table" style="display:none">
           <div class="check-buttons-row">
-            <button id="check-table" class="check-action-button">Проверить таблицу</button>
+            <button id="check-table" class="check-action-button" data-i18n="btn.checkTable">Проверить таблицу</button>
           </div>
-          <p class="check-workspace-hint" data-hint-base="Проверяет таблицу вокруг активной ячейки."></p>
+          <p class="check-workspace-hint" data-hint-base="Проверяет таблицу вокруг активной ячейки." data-hint-i18n="hint.checkCurrentTable"></p>
         </div>
 
         <div class="action-workspace" data-workspace="check-current_sheet" style="display:none">
           <div class="check-buttons-row">
-            <button id="check-sheet-tables" class="check-action-button">Проверить лист</button>
+            <button id="check-sheet-tables" class="check-action-button" data-i18n="btn.checkSheet">Проверить лист</button>
           </div>
-          <p class="check-workspace-hint" data-hint-base="Проверяет таблицы на текущем листе."></p>
+          <p class="check-workspace-hint" data-hint-base="Проверяет таблицы на текущем листе." data-hint-i18n="hint.checkCurrentSheet"></p>
         </div>
 
         <div class="action-workspace" data-workspace="check-whole_workbook" style="display:none">
           <div class="check-buttons-row">
-            <button id="find-tables" class="check-action-button">Проверить книгу</button>
+            <button id="find-tables" class="check-action-button" data-i18n="btn.checkWorkbook">Проверить книгу</button>
           </div>
-          <p class="check-workspace-hint" data-hint-base="Проверяет таблицы по всей книге."></p>
+          <p class="check-workspace-hint" data-hint-base="Проверяет таблицы по всей книге." data-hint-i18n="hint.checkWholeWorkbook"></p>
         </div>
 
         <div class="action-workspace" data-workspace="content-whole_workbook" style="display:none">
           <div class="check-buttons-row">
-            <button id="content-find-tables" class="check-action-button">Создать оглавление</button>
+            <button id="content-find-tables" class="check-action-button" data-i18n="btn.createContents">Создать оглавление</button>
           </div>
-          <p class="check-workspace-hint">Сканирует все листы книги и создаёт или обновляет лист «Content» со списком таблиц. Данные таблиц не изменяются.</p>
+          <p class="check-workspace-hint" data-i18n="content.hintText">Сканирует все листы книги и создаёт или обновляет лист «Content» со списком таблиц. Данные таблиц не изменяются.</p>
           <div class="inventory-mode-row">
-            <label for="content-output-mode">Формат оглавления</label>
+            <label for="content-output-mode" data-i18n="content.format">Формат оглавления</label>
             <select id="content-output-mode" class="inventory-mode-select">
-              <option value="client">Для клиента</option>
-              <option value="minimal-check">С минимальной проверкой</option>
-              <option value="full-check">С полной проверкой</option>
+              <option value="client" data-i18n="content.formatClient">Для клиента</option>
+              <option value="minimal-check" data-i18n="content.formatMinimalCheck">С минимальной проверкой</option>
+              <option value="full-check" data-i18n="content.formatFullCheck">С полной проверкой</option>
             </select>
           </div>
           <div class="inventory-backlink-row">
             <label class="inline-checkbox-label" for="content-add-backlinks">
               <input type="checkbox" id="content-add-backlinks" />
-              <span>Ставить обратные ссылки</span>
+              <span data-i18n="content.addBacklinks">Ставить обратные ссылки</span>
             </label>
           </div>
         </div>
@@ -136,7 +140,7 @@
         <div id="run-report-control" class="inventory-backlink-row" style="display:none">
           <label class="inline-checkbox-label" for="run-add-report">
             <input type="checkbox" id="run-add-report" />
-            <span>Добавить диагностический лист</span>
+            <span data-i18n="control.addDiagnosticSheet">Добавить диагностический лист</span>
           </label>
         </div>
 
@@ -144,14 +148,14 @@
         <div id="check-report-control" class="inventory-backlink-row" style="display:none">
           <label class="inline-checkbox-label" for="check-add-report">
             <input type="checkbox" id="check-add-report" />
-            <span>Записать результат</span>
+            <span data-i18n="control.writeResult">Записать результат</span>
           </label>
         </div>
       </section>
 
       <section id="status-panel" class="status-panel" style="display: none">
         <div class="panel-header">
-          <h4>Статус</h4>
+          <h4 data-i18n="panel.status">Статус</h4>
           <button class="panel-dismiss" data-dismiss="status-panel" aria-label="Закрыть">✕</button>
         </div>
         <pre id="significance-result"></pre>
@@ -159,7 +163,7 @@
 
       <section id="check-panel" class="status-panel check-panel" style="display: none">
         <div class="panel-header">
-          <h4>Проверка</h4>
+          <h4 data-i18n="panel.check">Проверка</h4>
           <button class="panel-dismiss" data-dismiss="check-panel" aria-label="Закрыть">✕</button>
         </div>
         <pre id="check-result"></pre>
@@ -167,7 +171,7 @@
 
       <section id="inventory-panel" class="status-panel check-panel" style="display: none">
         <div class="panel-header">
-          <h4>Оглавление</h4>
+          <h4 data-i18n="panel.inventory">Оглавление</h4>
           <button class="panel-dismiss" data-dismiss="inventory-panel" aria-label="Закрыть">✕</button>
         </div>
         <pre id="inventory-result"></pre>
@@ -176,17 +180,17 @@
       <!-- Settings section (tabbed navigation) -->
       <section class="settings-panel settings-tabbed-panel">
         <div class="settings-tab-nav" role="tablist" id="settings-tab-nav">
-          <button class="settings-tab is-active" data-settings-tab="osnovnye" role="tab" aria-selected="true">Основные</button>
-          <button class="settings-tab" data-settings-tab="sravneniya" role="tab" aria-selected="false">Сравнения</button>
-          <button class="settings-tab" data-settings-tab="banner" role="tab" aria-selected="false">Баннер</button>
-          <button class="settings-tab" data-settings-tab="bazy" role="tab" aria-selected="false">Базы</button>
-          <button class="settings-tab" data-settings-tab="dizain" role="tab" aria-selected="false">Дизайн</button>
+          <button class="settings-tab is-active" data-settings-tab="osnovnye" role="tab" aria-selected="true" data-i18n="settings.tab.basic">Основные</button>
+          <button class="settings-tab" data-settings-tab="sravneniya" role="tab" aria-selected="false" data-i18n="settings.tab.comparisons">Сравнения</button>
+          <button class="settings-tab" data-settings-tab="banner" role="tab" aria-selected="false" data-i18n="settings.tab.banner">Баннер</button>
+          <button class="settings-tab" data-settings-tab="bazy" role="tab" aria-selected="false" data-i18n="settings.tab.bases">Базы</button>
+          <button class="settings-tab" data-settings-tab="dizain" role="tab" aria-selected="false" data-i18n="settings.tab.design">Дизайн</button>
         </div>
 
         <!-- Основные -->
         <div class="settings-tab-panel" data-settings-panel="osnovnye">
           <div class="settings-group">
-            <label for="confidence-level">Уровень значимости</label>
+            <label for="confidence-level" data-i18n="settings.confidenceLevel">Уровень значимости</label>
             <div class="confidence-settings-row">
               <select id="confidence-level">
                 <option value="99">99%</option>
@@ -197,15 +201,15 @@
               </select>
               <label class="inline-checkbox-label" for="one-tailed-test">
                 <input type="checkbox" id="one-tailed-test" />
-                <span>Односторонний тест</span>
+                <span data-i18n="settings.oneTailedTest">Односторонний тест</span>
               </label>
             </div>
           </div>
 
           <div class="settings-group">
-            <label for="preferred-base">База для расчёта</label>
+            <label for="preferred-base" data-i18n="settings.preferredBase">База для расчёта</label>
             <select id="preferred-base">
-              <option value="auto" selected>Авто</option>
+              <option value="auto" selected data-i18n="settings.preferredBaseAuto">Авто</option>
               <option value="effective">Effective Base</option>
               <option value="unweighted">Unweighted Base</option>
               <option value="plain">Base</option>
@@ -218,48 +222,49 @@
         <!-- Сравнения -->
         <div class="settings-tab-panel" data-settings-panel="sravneniya" style="display:none">
           <div class="settings-group">
-            <label>
+            <label class="inline-checkbox-label" for="compare-with-previous-column">
               <input type="checkbox" id="compare-with-previous-column" />
-              Сравнение с предыдущей колонкой
+              <span data-i18n="settings.comparePrevCol">Сравнение с предыдущей колонкой</span>
             </label>
             <div id="previous-column-fill-wrapper" style="display: none; margin-left: 18px">
-              <label>
+              <label class="inline-checkbox-label" for="apply-previous-column-fill">
                 <input type="checkbox" id="apply-previous-column-fill" />
-                Применить заливку
+                <span data-i18n="settings.applyPrevColFill">Применить заливку</span>
               </label>
             </div>
           </div>
 
           <div class="settings-group">
-            <h4>Сравнение с Тоталом</h4>
+            <h4 data-i18n="settings.compareWithTotal">Сравнение с Тоталом</h4>
             <fieldset class="exclusive-options">
-              <legend>Режим сравнения с Тоталом</legend>
-              <label
-                ><input type="checkbox" id="compare-only-with-total" /> Сравнивать только с
-                Тотал</label
+              <legend data-i18n="settings.legendCompareMode">Режим сравнения с Тоталом</legend>
+              <label class="inline-checkbox-label" for="compare-only-with-total"
+                ><input type="checkbox" id="compare-only-with-total" />
+                <span data-i18n="settings.compareOnlyWithTotal">Сравнивать только с Тотал</span></label
               >
-              <label
-                ><input type="checkbox" id="exclude-total-from-comparisons" /> Не сравнивать с
-                Тотал</label
+              <label class="inline-checkbox-label" for="exclude-total-from-comparisons"
+                ><input type="checkbox" id="exclude-total-from-comparisons" />
+                <span data-i18n="settings.excludeTotalFromComparisons">Не сравнивать с Тотал</span></label
               >
             </fieldset>
 
             <fieldset class="exclusive-options">
-              <legend>Расположение Тотала</legend>
-              <label
-                ><input type="checkbox" id="first-column-is-total" /> Первая колонка — Тотал</label
+              <legend data-i18n="settings.legendTotalPosition">Расположение Тотала</legend>
+              <label class="inline-checkbox-label" for="first-column-is-total"
+                ><input type="checkbox" id="first-column-is-total" />
+                <span data-i18n="settings.firstColumnIsTotal">Первая колонка — Тотал</span></label
               >
               <div
                 id="previous-column-total-warning"
                 class="settings-warning"
                 style="display: none"
               >
-                WARNING: При выбранных настройках Тотал будет обрабатываться как обычная предыдущая
-                колонка, если не включить "Не сравнивать с Тотал"
+                <span data-i18n="settings.warningTotalPreviousCol">WARNING: При выбранных настройках Тотал будет обрабатываться как обычная предыдущая
+                колонка, если не включить "Не сравнивать с Тотал"</span>
               </div>
-              <label
-                ><input type="checkbox" id="total-in-each-banner" disabled /> Тотал в каждом
-                баннере</label
+              <label class="inline-checkbox-label" for="total-in-each-banner"
+                ><input type="checkbox" id="total-in-each-banner" disabled />
+                <span data-i18n="settings.totalInEachBanner">Тотал в каждом баннере</span></label
               >
             </fieldset>
           </div>
@@ -268,22 +273,23 @@
         <!-- Баннер -->
         <div class="settings-tab-panel" data-settings-panel="banner" style="display:none">
           <div class="settings-group">
-            <label
-              ><input type="checkbox" id="write-banner-letters" /> Проставлять буквы в
-              баннере</label
+            <label class="inline-checkbox-label" for="write-banner-letters"
+              ><input type="checkbox" id="write-banner-letters" />
+              <span data-i18n="settings.writeBannerLetters">Проставлять буквы в баннере</span></label
             >
-            <label
-              ><input type="checkbox" id="respect-banner-structure" /> Учитывать структуру
-              баннера</label
+            <label class="inline-checkbox-label" for="respect-banner-structure"
+              ><input type="checkbox" id="respect-banner-structure" />
+              <span data-i18n="settings.respectBannerStructure">Учитывать структуру баннера</span></label
             >
             <div id="auto-detect-wave-banners-wrapper">
-              <label class="checkbox-label" for="auto-detect-wave-banners">
+              <label class="inline-checkbox-label" for="auto-detect-wave-banners">
                 <input type="checkbox" id="auto-detect-wave-banners" />
-                <span>Автоматически определять волны</span>
+                <span data-i18n="settings.autoDetectWaveBanners">Автоматически определять волны</span>
               </label>
             </div>
-            <label
-              ><input type="checkbox" id="labels-on-left-side" /> Лейблы значений слева листа</label
+            <label class="inline-checkbox-label" for="labels-on-left-side"
+              ><input type="checkbox" id="labels-on-left-side" />
+              <span data-i18n="settings.labelsOnLeftSide">Лейблы значений слева листа</span></label
             >
           </div>
         </div>
@@ -291,13 +297,13 @@
         <!-- Базы -->
         <div class="settings-tab-panel" data-settings-panel="bazy" style="display:none">
           <div class="settings-group">
-            <h4>Маленькие базы</h4>
-            <label
-              ><input type="checkbox" id="exclude-small-bases" /> Не сравнивать маленькие
-              базы</label
+            <h4 data-i18n="settings.smallBases">Маленькие базы</h4>
+            <label class="inline-checkbox-label" for="exclude-small-bases"
+              ><input type="checkbox" id="exclude-small-bases" />
+              <span data-i18n="settings.excludeSmallBases">Не сравнивать маленькие базы</span></label
             >
             <div class="inline-number-setting">
-              <label for="small-base-threshold">База &lt;</label>
+              <label for="small-base-threshold" data-i18n="settings.smallBaseThreshold">База &lt;</label>
               <input type="number" id="small-base-threshold" value="50" min="0" step="1" />
             </div>
           </div>
@@ -306,28 +312,28 @@
         <!-- Дизайн -->
         <div class="settings-tab-panel" data-settings-panel="dizain" style="display:none">
           <div class="settings-group">
-            <label>
+            <label class="inline-checkbox-label" for="round-cell-values">
               <input type="checkbox" id="round-cell-values" />
-              Округлять значения в ячейках
+              <span data-i18n="settings.roundCellValues">Округлять значения в ячейках</span>
             </label>
           </div>
 
           <div class="settings-group">
-            <h4>Заливки</h4>
-            <label for="significant-fill-color">Обычная значимость</label>
+            <h4 data-i18n="settings.fillsGroup">Заливки</h4>
+            <label for="significant-fill-color" data-i18n="settings.significantFillColor">Обычная значимость</label>
             <input type="color" id="significant-fill-color" value="#E2F0D9" />
 
-            <label for="lower-than-total-fill-color">Заливка &lt; Тотал</label>
+            <label for="lower-than-total-fill-color" data-i18n="settings.lowerThanTotalFillColor">Заливка &lt; Тотал</label>
             <input type="color" id="lower-than-total-fill-color" value="#FCE4D6" />
 
-            <label
-              ><input type="checkbox" id="fill-only-total-comparisons" /> Заливка только для
-              Тотала</label
+            <label class="inline-checkbox-label" for="fill-only-total-comparisons"
+              ><input type="checkbox" id="fill-only-total-comparisons" />
+              <span data-i18n="settings.fillOnlyTotalComparisons">Заливка только для Тотала</span></label
             >
           </div>
 
           <div class="settings-group">
-            <label for="small-base-fill-color">Заливка маленькой базы</label>
+            <label for="small-base-fill-color" data-i18n="settings.smallBaseFillColor">Заливка маленькой базы</label>
             <input type="color" id="small-base-fill-color" value="#D0D0D0" />
           </div>
         </div>
@@ -335,19 +341,20 @@
         <!-- Persistence and help — always visible, outside tab panels -->
         <div class="settings-footer">
           <div class="settings-group">
-            <label for="settings-storage-mode">Сохранять настройки...</label>
+            <label for="settings-storage-mode" data-i18n="settings.saveSettings">Сохранять настройки...</label>
             <div class="settings-storage-row">
               <select id="settings-storage-mode">
-                <option value="none" selected>Не сохранять</option>
-                <option value="local">Локально</option>
-                <option value="cloud" disabled>В облаке</option>
+                <option value="none" selected data-i18n="storage.none">Не сохранять</option>
+                <option value="local" data-i18n="storage.local">Локально</option>
+                <option value="cloud" disabled data-i18n="storage.cloud">В облаке</option>
               </select>
-              <button type="button" id="reset-settings" class="settings-reset-button">Сброс</button>
+              <button type="button" id="reset-settings" class="settings-reset-button" data-i18n="settings.reset">Сброс</button>
             </div>
           </div>
           <a
             href="https://hedgef0g.github.io/research-insights-toolkit/assets/rit-help-ru.html"
             id="help-link"
+            data-i18n="help.link"
             >Справка об использовании</a
           >
         </div>
