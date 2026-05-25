@@ -807,12 +807,17 @@ b {
   background: var(--rs-color-bg-soft);
   border: 1px solid var(--rs-color-border);
   border-radius: var(--rs-radius-sm);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.settings-tab-nav::-webkit-scrollbar {
+  display: none;
 }
 
 .settings-tab {
-  flex: 1 1 0;
-  min-width: 0;
-  padding: 4px 3px;
+  flex: 0 0 auto;
+  padding: 4px 8px;
   border: none;
   border-radius: 4px;
   background: transparent;
@@ -821,8 +826,6 @@ b {
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .settings-tab:hover {
@@ -830,18 +833,13 @@ b {
   color: var(--rs-color-text);
 }
 
-/* Active settings tab: slightly wider share so Russian labels like "Основные"
-   never truncate; white background + green underline gives a tab-like look
-   without the heavy segmented-button border of the previous style. */
+/* Active tab: natural content width, white background, green underline. */
 .settings-tab.is-active {
-  flex: 1.4 1 auto;
-  padding: 4px 3px;
+  padding: 4px 8px;
   background: var(--rs-color-bg);
   color: var(--rs-color-primary-dark);
   border: 1px solid var(--rs-color-border);
   border-bottom: 2px solid var(--rs-color-primary);
-  overflow: visible;
-  text-overflow: clip;
 }
 
 .settings-footer {
