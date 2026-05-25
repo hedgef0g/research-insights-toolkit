@@ -56,11 +56,19 @@ const STRINGS = {
     "panel.check": "Проверка",
     "panel.inventory": "Оглавление",
 
+    "settings.panelTitle": "Настройки",
+
     "settings.tab.basic": "Основные",
     "settings.tab.comparisons": "Сравнения",
     "settings.tab.banner": "Баннер",
     "settings.tab.bases": "Базы",
     "settings.tab.design": "Дизайн",
+
+    "settings.tab.basic.short": "Основные",
+    "settings.tab.comparisons.short": "Сравнения",
+    "settings.tab.banner.short": "Баннер",
+    "settings.tab.bases.short": "Базы",
+    "settings.tab.design.short": "Дизайн",
 
     "settings.confidenceLevel": "Уровень значимости",
     "settings.preferredBase": "База для расчёта",
@@ -95,6 +103,8 @@ const STRINGS = {
     "status.autorunCleared": "Автозапуск — Текущая таблица: очищено. {sheet}!{range}.",
     "status.autorunClearSkipped": "Автозапуск — Текущая таблица: очистка пропущена — {msg}.",
     "status.autorunReportWriteError": "[Отчёт: ошибка записи — {msg}]",
+
+    "status.settingsReset": "Настройки сброшены к значениям по умолчанию.",
 
     "status.runDone": "Расчёт выполнен. Обработано блоков: {count}.",
     "status.clearDone": "Значимости очищены.",
@@ -191,11 +201,19 @@ const STRINGS = {
     "panel.check": "Check",
     "panel.inventory": "Contents",
 
+    "settings.panelTitle": "Settings",
+
     "settings.tab.basic": "General",
     "settings.tab.comparisons": "Comparisons",
     "settings.tab.banner": "Banner",
     "settings.tab.bases": "Bases",
     "settings.tab.design": "Design",
+
+    "settings.tab.basic.short": "General",
+    "settings.tab.comparisons.short": "Comparisons",
+    "settings.tab.banner.short": "Banner",
+    "settings.tab.bases.short": "Bases",
+    "settings.tab.design.short": "Design",
 
     "settings.confidenceLevel": "Significance level",
     "settings.preferredBase": "Calculation base",
@@ -230,6 +248,8 @@ const STRINGS = {
     "status.autorunCleared": "Autorun — Current table: cleared. {sheet}!{range}.",
     "status.autorunClearSkipped": "Autorun — Current table: clear skipped — {msg}.",
     "status.autorunReportWriteError": "[Report: write error — {msg}]",
+
+    "status.settingsReset": "Settings were reset to defaults.",
 
     "status.runDone": "Calculation complete. Blocks processed: {count}.",
     "status.clearDone": "Significance markers removed.",

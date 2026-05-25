@@ -179,6 +179,7 @@ function formatBannerUserMessagesExcludingCodes(bannerStructure, excludedCodes =
 }
 
 const LOCAL_SETTINGS_STORAGE_KEY = "rit.settings.v1";
+const SETTINGS_COLLAPSED_KEY = "rit.ui.settingsCollapsed";
 
 const SETTINGS_CONTROL_CONFIG = [
   { id: "confidence-level", type: "value", settingName: "confidenceLevel" },
@@ -5404,7 +5405,40 @@ function getInputValue(elementId, fallbackValue) {
  * PURPOSE:
  * Handles mutually exclusive checkbox groups.
  */
+function applySettingsCollapseState(toggleBtn, panelBody, isCollapsed) {
+  toggleBtn.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+  panelBody.classList.toggle("is-collapsed", isCollapsed);
+}
+
+function initializeSettingsCollapse() {
+  const toggleBtn = document.getElementById("settings-toggle");
+  const panelBody = document.getElementById("settings-panel-body");
+
+  if (!toggleBtn || !panelBody) return;
+
+  let isCollapsed = false;
+  try {
+    const saved = localStorage.getItem(SETTINGS_COLLAPSED_KEY);
+    if (saved !== null) isCollapsed = saved === "true";
+  } catch (_) {
+    /* non-fatal */
+  }
+
+  applySettingsCollapseState(toggleBtn, panelBody, isCollapsed);
+
+  toggleBtn.addEventListener("click", () => {
+    const nextCollapsed = toggleBtn.getAttribute("aria-expanded") === "true";
+    applySettingsCollapseState(toggleBtn, panelBody, nextCollapsed);
+    try {
+      localStorage.setItem(SETTINGS_COLLAPSED_KEY, String(nextCollapsed));
+    } catch (_) {
+      /* non-fatal */
+    }
+  });
+}
+
 function initializeSettingsPanel() {
+  initializeSettingsCollapse();
   initializeSettingsTooltips();
   initializePreviousColumnTotalWarningPlacement();
 
@@ -6154,7 +6188,7 @@ function resetSettingsToDefaults() {
   clearSavedLocalSettings();
   refreshSettingsPanelState();
 
-  setStatusMessage("Настройки сброшены к значениям по умолчанию.");
+  setStatusMessage(t("status.settingsReset"));
 }
 
 /**
