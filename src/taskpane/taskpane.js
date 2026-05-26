@@ -35,7 +35,7 @@ import { detectBannerStructure } from "../core/banner-detector";
 
 import { normalizeSelectedRange, hasEmptyDataRowGap, selectionHasMultiTableGap } from "../core/range-normalizer";
 
-import { filterWorkbookCandidates, BATCH_SKIP_REASONS } from "../core/batch-candidate-filter";
+import { filterWorkbookCandidates } from "../core/batch-candidate-filter";
 
 import {
   interpretSelectedRange,
@@ -75,6 +75,14 @@ import {
   formatCheckCalculationBlocks,
   formatCheckBannerSummary,
 } from "./taskpane-check-formatters";
+
+import {
+  runReportSkipReasonLabel,
+  runReportStatusLabel,
+  runReportMetricTypes,
+  formatIssueDetailsForReport,
+  runReportWarningDetails,
+} from "./taskpane-run-report-formatters";
 
 const SCAN_CELL_LIMIT = 250000;
 const INVENTORY_CONTENT_SHEET_NAME = "Content";
@@ -958,73 +966,6 @@ function buildItemMetadataMap(inventoryResults) {
   }
   return map;
 }
-
-function runReportSkipReasonLabel(reason) {
-  switch (reason) {
-    case BATCH_SKIP_REASONS.MISSING_RANGE:      return "Нет диапазона";
-    case BATCH_SKIP_REASONS.CANDIDATE_UNCERTAIN: return "Кандидат неопределён";
-    case BATCH_SKIP_REASONS.CANDIDATE_REJECTED:  return "Не опознан как таблица";
-    default:                                      return "Неизвестный статус";
-  }
-}
-
-function runReportStatusLabel(status) {
-  switch (status) {
-    case "processed": return "Обработано";
-    case "checked":   return "Проверено";
-    case "skipped":   return "Пропущено";
-    case "blocked":   return "Пропущено";
-    case "error":     return "Ошибка";
-    default:          return status || "";
-  }
-}
-
-function runReportMetricTypes(item) {
-  if (!item) return "";
-  const parts = [];
-  if (item.hasProportions) parts.push("Пропорции");
-  if (item.hasMeans)       parts.push("Средние");
-  if (item.hasNps)         parts.push("NPS");
-  return parts.join(", ");
-}
-
-/**
- * Formats issue details from an inventory item into a human-readable string.
- *
- * Prefers userVisibleIssues (full issue objects with message and location) when
- * available. Falls back to qualityIssueCodes (code-only identifiers) for
- * backward compatibility.
- *
- * Does NOT include candidateNotes — callers that need them append separately.
- */
-function formatIssueDetailsForReport(item) {
-  if (!item) return "";
-  if (item.userVisibleIssues && item.userVisibleIssues.length > 0) {
-    return item.userVisibleIssues.map((iss) => `[${iss.severity}] ${iss.message}`).join("; ");
-  }
-  if (item.qualityIssueCodes && item.qualityIssueCodes.length > 0) {
-    return item.qualityIssueCodes.map((q) => q.code).join(", ");
-  }
-  return "";
-}
-
-/**
- * Builds a human-readable warning-detail string for the Run report Details column.
- *
- * Uses formatIssueDetailsForReport() for issue messages, then appends
- * candidateNotes (structural candidate diagnostics).
- */
-function runReportWarningDetails(item) {
-  if (!item) return "";
-  const parts = [];
-  const issueDetails = formatIssueDetailsForReport(item);
-  if (issueDetails) parts.push(issueDetails);
-  if (item.candidateNotes && item.candidateNotes.length > 0) {
-    parts.push(...item.candidateNotes);
-  }
-  return parts.join("; ");
-}
-
 
 const RUN_REPORT_COLUMNS = [
   "Лист",
