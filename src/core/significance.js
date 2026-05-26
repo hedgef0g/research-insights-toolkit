@@ -1500,48 +1500,6 @@ function applyTotalComparisonMarkerToFullCellResultMatrix(
     totalMarker
   );
 }
-/**
- * Applies special Total comparison marker.
- *
- * RULES:
- * - Total column is column 0.
- * - Marker is always written into the segment column.
- * - "T" means segment is significantly higher than Total.
- * - "t" means segment is significantly lower than Total.
- * - Total marker has priority and must appear before segment markers.
- */
-function applyTotalComparisonMarkerToFullMarkerMatrix(fullMarkerMatrix, valueRowIndex, comparison) {
-  const firstColumnIndex = comparison.firstColumnIndex;
-  const secondColumnIndex = comparison.secondColumnIndex;
-
-  const segmentColumnIndex = firstColumnIndex === 0 ? secondColumnIndex : firstColumnIndex;
-  const segmentIsFirstColumn = segmentColumnIndex === firstColumnIndex;
-
-  const segmentIsHigher =
-    (segmentIsFirstColumn && comparison.result.direction === "first_higher") ||
-    (!segmentIsFirstColumn && comparison.result.direction === "second_higher");
-
-  const totalMarker = segmentIsHigher ? "T" : "t";
-
-  fullMarkerMatrix[valueRowIndex][segmentColumnIndex] = prependTotalMarker(
-    fullMarkerMatrix[valueRowIndex][segmentColumnIndex],
-    totalMarker
-  );
-}
-
-/**
- * Puts Total marker before ordinary segment markers.
- *
- * Example:
- * - existing "ab" + "T" -> "Tab"
- * - existing "tbc" + "T" -> "Tbc"
- */
-function prependTotalMarker(existingMarkers, totalMarker) {
-  const markerText = existingMarkers || "";
-  const markerTextWithoutOldTotalMarker = markerText.replace(/[tT]/g, "");
-
-  return `${totalMarker}${markerTextWithoutOldTotalMarker}`;
-}
 
 /**
  * Clears markers from rows that are not allowed to receive markers.
