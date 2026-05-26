@@ -2,11 +2,16 @@
 //
 // Enable from DevTools with either:
 //   window.__RIT_PERF = true
+//   window.__RIT_PERF = "1"
 //   localStorage.setItem('RIT_PERF', '1')
 //
 // Disable with either:
 //   window.__RIT_PERF = false
 //   localStorage.removeItem('RIT_PERF')
+//
+// The runtime window/globalThis flag takes priority over storage. This lets
+// DevTools disable logging for the current taskpane session even if a stored
+// RIT_PERF value exists.
 //
 // The flag is read dynamically on every call, so no taskpane reload is needed.
 //
@@ -16,13 +21,22 @@
 // All exported functions are no-ops when disabled, adding zero overhead to
 // production runs.
 
-function _perfWindowFlagEnabled() {
+function _readPerfRuntimeFlag() {
   try {
-    if (typeof globalThis === "undefined") return false;
-    return globalThis.__RIT_PERF === true;
+    if (typeof globalThis === "undefined") return undefined;
+    return globalThis.__RIT_PERF;
   } catch (_) {
-    return false;
+    return undefined;
   }
+}
+
+function _perfRuntimeFlagEnabled() {
+  const runtimeFlag = _readPerfRuntimeFlag();
+
+  if (runtimeFlag === true || runtimeFlag === "1") return true;
+  if (runtimeFlag === false || runtimeFlag === "0") return false;
+
+  return undefined;
 }
 
 function _perfStorageFlagEnabled() {
@@ -34,7 +48,11 @@ function _perfStorageFlagEnabled() {
 }
 
 function _perfEnabled() {
-  return _perfWindowFlagEnabled() || _perfStorageFlagEnabled();
+  const runtimeEnabled = _perfRuntimeFlagEnabled();
+
+  if (runtimeEnabled !== undefined) return runtimeEnabled;
+
+  return _perfStorageFlagEnabled();
 }
 
 export function perfEnabled() {
