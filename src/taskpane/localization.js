@@ -382,6 +382,12 @@ export function applyI18n() {
     }
   });
 
+  // Update title attributes for elements that declare data-i18n-title
+  // (e.g. action tabs that may be ellipsized at narrow widths).
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    el.title = t(el.dataset.i18nTitle);
+  });
+
   // Update the data-hint-base attribute for check workspace hints so that
   // updateCheckHints() (in taskpane.js) can append the correct mode suffix.
   document.querySelectorAll("[data-hint-i18n]").forEach((el) => {
