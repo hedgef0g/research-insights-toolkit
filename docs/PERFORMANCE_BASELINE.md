@@ -17,12 +17,28 @@ Use this baseline to capture current timing characteristics before 1.0 so later 
 Enable the dev-only instrumentation from the taskpane devtools console:
 
 ```js
+window.__RIT_PERF = true
+```
+
+This runtime flag is read dynamically, so the next flow you run should emit timing logs without reloading the taskpane. This path is useful when Office or the WebView blocks storage access.
+
+The existing storage-backed path still works when storage is available:
+
+```js
 localStorage.setItem('RIT_PERF', '1')
 ```
 
-The flag is read dynamically, so the next flow you run should emit timing logs without reloading the taskpane.
+That flag is also read dynamically, so no taskpane reload is required.
+
+When enabled, the instrumentation emits `[RIT perf]` timing logs through `console.info`, which is usually visible in DevTools without changing the default log filter.
 
 To disable it later:
+
+```js
+window.__RIT_PERF = false
+```
+
+Or, if you enabled it through storage:
 
 ```js
 localStorage.removeItem('RIT_PERF')
