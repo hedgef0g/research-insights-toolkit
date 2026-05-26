@@ -20,7 +20,7 @@ Enable the dev-only instrumentation from the taskpane devtools console:
 localStorage.setItem('RIT_PERF', '1')
 ```
 
-Reload the taskpane after enabling the flag so the current session picks up the setting.
+The flag is read dynamically, so the next flow you run should emit timing logs without reloading the taskpane.
 
 To disable it later:
 
