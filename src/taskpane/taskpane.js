@@ -694,6 +694,12 @@ async function runSignificanceFromSelection() {
       calculationSettings
     );
 
+    const _knownDims = {
+      rowIndex: writeTargetRange.rowIndex,
+      columnIndex: writeTargetRange.columnIndex,
+      columnCount: writeTargetRange.columnCount,
+    };
+
     if (calculationSettings.writeBannerLetters) {
       // Remove any stale RIT markers that a previous run may have written at
       // label-column positions (left of writeTargetRange).  These linger when
@@ -714,20 +720,22 @@ async function runSignificanceFromSelection() {
       // its old marker.  clearBannerMarkersAboveRange reads .text (which returns
       // text from the top-left of each merge) and removes any trailing RIT marker
       // from every banner row above the data range.
-      await clearBannerMarkersAboveRange(context, writeTargetRange);
+      await clearBannerMarkersAboveRange(context, writeTargetRange, _knownDims);
 
       if (calculationSettings.respectBannerStructure && bannerStructure) {
         await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
           context,
           writeTargetRange,
           bannerStructure,
-          calculationSettings
+          calculationSettings,
+          _knownDims
         );
       } else {
         await writeBannerMarkersAboveSelectedRange(
           context,
           writeTargetRange,
-          calculationSettings
+          calculationSettings,
+          _knownDims
         );
       }
     }
@@ -934,6 +942,16 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
     calculationSettings
   );
 
+  const _knownDims = {
+    rowIndex: targetStartRowIndex,
+    columnIndex: targetStartColIndex,
+    columnCount: valuesForCalculation[0].length,
+  };
+  const _pValueWrite = perfNow();
+  let _pStaleLeftClear = _pValueWrite;
+  let _pBannerClear = _pValueWrite;
+  let _pBannerWrite = _pValueWrite;
+
   if (calculationSettings.writeBannerLetters) {
     await clearStaleBannerMarkersLeftOfWriteRange(
       context,
@@ -942,23 +960,27 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
       targetStartRowIndex,
       targetStartColIndex
     );
+    _pStaleLeftClear = perfNow();
 
     // Pre-clear all existing banner markers above the write range before
     // writing fresh ones.  Same reason as in runSignificanceFromSelection:
     // vertically merged banner cells retain stale markers when re-run with
     // different banner/wave settings.
-    await clearBannerMarkersAboveRange(context, writeTargetRange);
+    await clearBannerMarkersAboveRange(context, writeTargetRange, _knownDims);
+    _pBannerClear = perfNow();
 
     if (calculationSettings.respectBannerStructure && bannerStructure) {
       await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
         context,
         writeTargetRange,
         bannerStructure,
-        calculationSettings
+        calculationSettings,
+        _knownDims
       );
     } else {
-      await writeBannerMarkersAboveSelectedRange(context, writeTargetRange, calculationSettings);
+      await writeBannerMarkersAboveSelectedRange(context, writeTargetRange, calculationSettings, _knownDims);
     }
+    _pBannerWrite = perfNow();
   }
 
   await context.sync();
@@ -974,6 +996,13 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
       interpMs: _pInterp - _pLoad,
       calcMs: _pCalc - _pInterp,
       writeMs: _pWrite - _pCalc,
+      writeDetails: {
+        valueWriteMs: _pValueWrite - _pCalc,
+        staleLeftClearMs: _pStaleLeftClear - _pValueWrite,
+        bannerClearMs: _pBannerClear - _pStaleLeftClear,
+        bannerWriteMs: _pBannerWrite - _pBannerClear,
+        finalSyncMs: _pWrite - _pBannerWrite,
+      },
     } : null,
   };
 }
@@ -1371,7 +1400,7 @@ async function runAutoSignificance() {
   // context), we record that table as an error, exit the shared context, and
   // fall back to per-table Excel.run for any remaining candidates.
   const _tLoop = perfNow();
-  const _perfPhases = { loadMs: 0, interpMs: 0, calcMs: 0, writeMs: 0 };
+  const _perfPhases = { loadMs: 0, interpMs: 0, calcMs: 0, writeMs: 0, writeDetails: { valueWriteMs: 0, staleLeftClearMs: 0, bannerClearMs: 0, bannerWriteMs: 0, finalSyncMs: 0 } };
   let _batchEndedAt = 0;
   try {
     await Excel.run(async (context) => {
@@ -1399,6 +1428,13 @@ async function runAutoSignificance() {
             _perfPhases.interpMs += result._phasesMs.interpMs;
             _perfPhases.calcMs += result._phasesMs.calcMs;
             _perfPhases.writeMs += result._phasesMs.writeMs;
+            if (result._phasesMs.writeDetails) {
+              _perfPhases.writeDetails.valueWriteMs += result._phasesMs.writeDetails.valueWriteMs;
+              _perfPhases.writeDetails.staleLeftClearMs += result._phasesMs.writeDetails.staleLeftClearMs;
+              _perfPhases.writeDetails.bannerClearMs += result._phasesMs.writeDetails.bannerClearMs;
+              _perfPhases.writeDetails.bannerWriteMs += result._phasesMs.writeDetails.bannerWriteMs;
+              _perfPhases.writeDetails.finalSyncMs += result._phasesMs.writeDetails.finalSyncMs;
+            }
           }
           reportRows.push({
             sheetName: candidate.sheetName,
@@ -1458,6 +1494,13 @@ async function runAutoSignificance() {
         _perfPhases.interpMs += result._phasesMs.interpMs;
         _perfPhases.calcMs += result._phasesMs.calcMs;
         _perfPhases.writeMs += result._phasesMs.writeMs;
+        if (result._phasesMs.writeDetails) {
+          _perfPhases.writeDetails.valueWriteMs += result._phasesMs.writeDetails.valueWriteMs;
+          _perfPhases.writeDetails.staleLeftClearMs += result._phasesMs.writeDetails.staleLeftClearMs;
+          _perfPhases.writeDetails.bannerClearMs += result._phasesMs.writeDetails.bannerClearMs;
+          _perfPhases.writeDetails.bannerWriteMs += result._phasesMs.writeDetails.bannerWriteMs;
+          _perfPhases.writeDetails.finalSyncMs += result._phasesMs.writeDetails.finalSyncMs;
+        }
       }
       reportRows.push({
         sheetName: candidate.sheetName,
@@ -2106,7 +2149,7 @@ async function runCurrentSheetSignificance() {
   // sync error we record that table as an error, exit the shared context, and
   // continue with per-table Excel.run for any remaining candidates.
   const _tLoop = perfNow();
-  const _perfPhases = { loadMs: 0, interpMs: 0, calcMs: 0, writeMs: 0 };
+  const _perfPhases = { loadMs: 0, interpMs: 0, calcMs: 0, writeMs: 0, writeDetails: { valueWriteMs: 0, staleLeftClearMs: 0, bannerClearMs: 0, bannerWriteMs: 0, finalSyncMs: 0 } };
   let _batchEndedAt = 0;
   try {
     await Excel.run(async (context) => {
@@ -2134,6 +2177,13 @@ async function runCurrentSheetSignificance() {
             _perfPhases.interpMs += result._phasesMs.interpMs;
             _perfPhases.calcMs += result._phasesMs.calcMs;
             _perfPhases.writeMs += result._phasesMs.writeMs;
+            if (result._phasesMs.writeDetails) {
+              _perfPhases.writeDetails.valueWriteMs += result._phasesMs.writeDetails.valueWriteMs;
+              _perfPhases.writeDetails.staleLeftClearMs += result._phasesMs.writeDetails.staleLeftClearMs;
+              _perfPhases.writeDetails.bannerClearMs += result._phasesMs.writeDetails.bannerClearMs;
+              _perfPhases.writeDetails.bannerWriteMs += result._phasesMs.writeDetails.bannerWriteMs;
+              _perfPhases.writeDetails.finalSyncMs += result._phasesMs.writeDetails.finalSyncMs;
+            }
           }
           reportRows.push({
             sheetName: candidate.sheetName,
@@ -2193,6 +2243,13 @@ async function runCurrentSheetSignificance() {
         _perfPhases.interpMs += result._phasesMs.interpMs;
         _perfPhases.calcMs += result._phasesMs.calcMs;
         _perfPhases.writeMs += result._phasesMs.writeMs;
+        if (result._phasesMs.writeDetails) {
+          _perfPhases.writeDetails.valueWriteMs += result._phasesMs.writeDetails.valueWriteMs;
+          _perfPhases.writeDetails.staleLeftClearMs += result._phasesMs.writeDetails.staleLeftClearMs;
+          _perfPhases.writeDetails.bannerClearMs += result._phasesMs.writeDetails.bannerClearMs;
+          _perfPhases.writeDetails.bannerWriteMs += result._phasesMs.writeDetails.bannerWriteMs;
+          _perfPhases.writeDetails.finalSyncMs += result._phasesMs.writeDetails.finalSyncMs;
+        }
       }
       reportRows.push({
         sheetName: candidate.sheetName,
@@ -2925,16 +2982,21 @@ async function clearSignificanceFromSelection() {
  *   "Brand (new)", or "Волна (квартал)" is preserved.
  * - Never writes to the data body or to the label column.
  */
-async function clearBannerMarkersAboveRange(context, targetRange) {
+async function clearBannerMarkersAboveRange(context, targetRange, knownDimensions) {
   const BANNER_UPPER_SCAN_LIMIT = 5;
 
-  targetRange.load(["rowIndex", "columnIndex", "columnCount"]);
-
-  await context.sync();
-
-  const targetStartRowIndex = targetRange.rowIndex;
-  const targetStartColumnIndex = targetRange.columnIndex;
-  const targetColumnCount = targetRange.columnCount;
+  let targetStartRowIndex, targetStartColumnIndex, targetColumnCount;
+  if (knownDimensions) {
+    targetStartRowIndex = knownDimensions.rowIndex;
+    targetStartColumnIndex = knownDimensions.columnIndex;
+    targetColumnCount = knownDimensions.columnCount;
+  } else {
+    targetRange.load(["rowIndex", "columnIndex", "columnCount"]);
+    await context.sync();
+    targetStartRowIndex = targetRange.rowIndex;
+    targetStartColumnIndex = targetRange.columnIndex;
+    targetColumnCount = targetRange.columnCount;
+  }
 
   if (targetStartRowIndex === 0 || targetColumnCount < 1) {
     return;
@@ -4696,20 +4758,25 @@ function initializeSettingsTabs() {
  * If enabled, every selected data column receives its significance marker
  * in the cell directly above the selected range.
  */
-async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calculationSettings) {
+async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calculationSettings, knownDimensions) {
   if (!calculationSettings.writeBannerLetters) {
     return;
   }
 
   const BANNER_UPPER_SCAN_LIMIT = 5;
 
-  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
-
-  await context.sync();
-
-  const selectedStartRowIndex = selectedRange.rowIndex;
-  const selectedStartColumnIndex = selectedRange.columnIndex;
-  const selectedColumnCount = selectedRange.columnCount;
+  let selectedStartRowIndex, selectedStartColumnIndex, selectedColumnCount;
+  if (knownDimensions) {
+    selectedStartRowIndex = knownDimensions.rowIndex;
+    selectedStartColumnIndex = knownDimensions.columnIndex;
+    selectedColumnCount = knownDimensions.columnCount;
+  } else {
+    selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
+    await context.sync();
+    selectedStartRowIndex = selectedRange.rowIndex;
+    selectedStartColumnIndex = selectedRange.columnIndex;
+    selectedColumnCount = selectedRange.columnCount;
+  }
 
   if (selectedStartRowIndex === 0) {
     return;
@@ -4860,17 +4927,23 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
   context,
   selectedRange,
   bannerStructure,
-  calculationSettings
+  calculationSettings,
+  knownDimensions
 ) {
   const BANNER_UPPER_SCAN_LIMIT = 5;
 
-  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
-
-  await context.sync();
-
-  const selectedStartRowIndex = selectedRange.rowIndex;
-  const selectedStartColumnIndex = selectedRange.columnIndex;
-  const selectedColumnCount = selectedRange.columnCount;
+  let selectedStartRowIndex, selectedStartColumnIndex, selectedColumnCount;
+  if (knownDimensions) {
+    selectedStartRowIndex = knownDimensions.rowIndex;
+    selectedStartColumnIndex = knownDimensions.columnIndex;
+    selectedColumnCount = knownDimensions.columnCount;
+  } else {
+    selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
+    await context.sync();
+    selectedStartRowIndex = selectedRange.rowIndex;
+    selectedStartColumnIndex = selectedRange.columnIndex;
+    selectedColumnCount = selectedRange.columnCount;
+  }
 
   if (selectedStartRowIndex === 0) {
     setStatusMessage(
