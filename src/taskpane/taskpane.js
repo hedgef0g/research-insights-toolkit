@@ -96,6 +96,8 @@ import {
   getContentRowReference,
 } from "./taskpane-inventory-formatters";
 
+import { perfNow, perfElapsed, perfLog } from "./taskpane-performance";
+
 const SCAN_CELL_LIMIT = 250000;
 const INVENTORY_CONTENT_SHEET_NAME = "Content";
 const RUN_REPORT_SHEET_NAME = "Run report";
@@ -444,6 +446,7 @@ function initActionScopeShell() {
  * - NPS + SD/Variance + Base
  */
 async function runSignificanceFromSelection() {
+  const _t0 = perfNow();
   await Excel.run(async (context) => {
     const calculationSettings = readCalculationSettingsFromPanel();
     if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
@@ -516,6 +519,7 @@ async function runSignificanceFromSelection() {
       return;
     }
 
+    const _tInterp = perfNow();
     const interpretation = await interpretSelectedRange(
       context,
       selectedRange,
@@ -681,6 +685,7 @@ async function runSignificanceFromSelection() {
 
     keepMarkersOnlyInAllowedRows(fullCellResultMatrix, allowedMarkerRows);
 
+    const _tWrite = perfNow();
     writeCellResultsToSelectedRange(
       writeTargetRange,
       textForCalculation,
@@ -743,6 +748,11 @@ async function runSignificanceFromSelection() {
       statusMessages.push(bannerUserMessages);
     }
 
+    perfLog("runSignificanceFromSelection", {
+      interpretMs: _tWrite - _tInterp,
+      writeMs: perfElapsed(_tWrite),
+      totalMs: perfElapsed(_t0),
+    });
     setStatusMessage(
       appendSelectedRangeGuardrailMessages(statusMessages, selectedRangeGuardrailWarnings).join(
         "\n"
@@ -1115,6 +1125,7 @@ function writeRunReportContent(worksheet, reportRows, runLabel) {
  *   that content forward.
  */
 async function writeRunReportSheet(context, reportRows, runLabel) {
+  const _t0 = perfNow();
   const worksheet = await ensureRunReportWorksheet(context);
 
   const existingUsed = worksheet.getUsedRangeOrNullObject();
@@ -1145,6 +1156,7 @@ async function writeRunReportSheet(context, reportRows, runLabel) {
   await context.sync();
 
   if (worksheet.position === worksheets.count - 1) {
+    perfLog("writeRunReportSheet", { totalMs: perfElapsed(_t0), tier: 1 });
     return worksheet; // Tier 1 succeeded — sheet is already last.
   }
 
@@ -1167,6 +1179,7 @@ async function writeRunReportSheet(context, reportRows, runLabel) {
 
   if (lastSheet === null) {
     // The Run report is the only sheet; it is trivially last.
+    perfLog("writeRunReportSheet", { totalMs: perfElapsed(_t0), tier: "only-sheet" });
     return worksheet;
   }
 
@@ -1186,6 +1199,7 @@ async function writeRunReportSheet(context, reportRows, runLabel) {
   copy.name = RUN_REPORT_SHEET_NAME;
   await context.sync();
 
+  perfLog("writeRunReportSheet", { totalMs: perfElapsed(_t0), tier: 2 });
   return copy;
 }
 
@@ -1201,6 +1215,7 @@ async function writeRunReportSheet(context, reportRows, runLabel) {
  * significance status panel when done.
  */
 async function runAutoSignificance() {
+  const _t0 = perfNow();
   const calculationSettings = readCalculationSettingsFromPanel();
 
   if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
@@ -1244,6 +1259,7 @@ async function runAutoSignificance() {
   }
 
   // Collect inventory to identify eligible candidates.
+  const _tScan = perfNow();
   let inventoryResults;
   try {
     await Excel.run(async (context) => {
@@ -1315,6 +1331,7 @@ async function runAutoSignificance() {
   let processed = 0;
   let errors = 0;
 
+  const _tLoop = perfNow();
   for (const candidate of eligible) {
     const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
     try {
@@ -1373,6 +1390,7 @@ async function runAutoSignificance() {
     }
   }
 
+  const _tLoopDone = perfNow();
   const summaryLines = [
     "Автозапуск завершён.",
     `Обработано таблиц: ${processed}.`,
@@ -1384,6 +1402,12 @@ async function runAutoSignificance() {
     summaryLines.push("", ...detailLines);
   }
 
+  perfLog("runAutoSignificance", {
+    scanMs: _tLoop - _tScan,
+    loopMs: _tLoopDone - _tLoop,
+    tablesProcessed: processed,
+    totalMs: perfElapsed(_t0),
+  });
   setStatusMessage(summaryLines.join("\n"));
 
   if (addReport) {
@@ -1411,6 +1435,7 @@ async function runAutoSignificance() {
  * Delegates the significance pipeline to runSignificanceForRange.
  */
 async function runAutoCurrentTableSignificance() {
+  const _t0 = perfNow();
   const calculationSettings = readCalculationSettingsFromPanel();
 
   if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
@@ -1520,6 +1545,7 @@ async function runAutoCurrentTableSignificance() {
   const { sheetName, rangeAddress } = resolverResult;
   const resolvedTableTitle = resolveContentDisplayTitle(resolverResult.candidateMeta, 1);
 
+  const _tRun = perfNow();
   let result;
   try {
     result = await runSignificanceForRange(sheetName, rangeAddress, calculationSettings);
@@ -1556,6 +1582,11 @@ async function runAutoCurrentTableSignificance() {
       ? t("status.autorunProcessed", { sheet: sheetName, range: rangeAddress, count: result.blocksProcessed })
       : t("status.autorunSkipped", { msg: result.message || t("status.resolverFallback") });
 
+  perfLog("runAutoCurrentTableSignificance", {
+    resolveMs: _tRun - _t0,
+    runMs: perfElapsed(_tRun),
+    totalMs: perfElapsed(_t0),
+  });
   setStatusMessage(statusMsg);
 
   if (addReport) {
@@ -1856,6 +1887,7 @@ async function clearAutoSignificance() {
  * Settings validation is identical to runAutoSignificance().
  */
 async function runCurrentSheetSignificance() {
+  const _t0 = perfNow();
   const calculationSettings = readCalculationSettingsFromPanel();
 
   if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
@@ -1898,6 +1930,7 @@ async function runCurrentSheetSignificance() {
     return;
   }
 
+  const _tScan = perfNow();
   let inventoryResults;
   try {
     await Excel.run(async (context) => {
@@ -1965,6 +1998,7 @@ async function runCurrentSheetSignificance() {
   let processed = 0;
   let errors = 0;
 
+  const _tLoop = perfNow();
   for (const candidate of eligible) {
     const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
     try {
@@ -2023,6 +2057,7 @@ async function runCurrentSheetSignificance() {
     }
   }
 
+  const _tLoopDone = perfNow();
   const summaryLines = [
     "Лист — запуск завершён.",
     `Обработано таблиц: ${processed}.`,
@@ -2034,6 +2069,12 @@ async function runCurrentSheetSignificance() {
     summaryLines.push("", ...detailLines);
   }
 
+  perfLog("runCurrentSheetSignificance", {
+    scanMs: _tLoop - _tScan,
+    loopMs: _tLoopDone - _tLoop,
+    tablesProcessed: processed,
+    totalMs: perfElapsed(_t0),
+  });
   setStatusMessage(summaryLines.join("\n"));
 
   if (addReport) {
@@ -4234,7 +4275,9 @@ async function writeInventoryContentSheet(context, inventoryResults) {
 
 async function runTableInventory() {
   await Excel.run(async (context) => {
+    const _t0 = perfNow();
     const inventoryResults = await collectWorkbookInventoryResults(context, readCalculationSettingsFromPanel());
+    const _tScan = perfNow();
     const addBacklinks = readBacklinkSettingFromPanel();
     const contentMode = readContentOutputModeFromPanel();
 
@@ -4260,6 +4303,11 @@ async function runTableInventory() {
     contentWorksheet.activate();
     await context.sync();
 
+    perfLog("runTableInventory", {
+      scanMs: _tScan - _t0,
+      contentWriteMs: perfElapsed(_tScan),
+      totalMs: perfElapsed(_t0),
+    });
     setInventoryMessage(
       formatWorkbookInventoryMessage({
         scannedSheets: inventoryResults.scannedSheets,
