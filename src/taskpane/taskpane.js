@@ -763,206 +763,222 @@ async function runSignificanceFromSelection() {
 
 
 /**
- * Runs the full significance pipeline for a single named range on a named sheet.
+ * Core significance pipeline for a single named range, using a caller-supplied
+ * Office.js RequestContext.
  *
- * Mirrors the core calculation path of runSignificanceFromSelection() without
- * touching the selected-range UI state. Returns a compact result object so the
- * caller can aggregate per-table outcomes without crashing on the first failure.
+ * Extracted so sheet/workbook autorun loops can share one Excel.run context
+ * across all tables, amortising per-context initialisation overhead. Callers
+ * that need a self-contained execution unit use runSignificanceForRange below,
+ * which wraps this function in its own Excel.run.
  *
  * Returns { status, blocksProcessed, message, rangeAddress }.
  * status: "processed" | "skipped" | "blocked" | "error"
- *
- * NOTE: runSignificanceFromSelection() and this helper share the same pipeline
- * logic. A future refactor could unify them once the auto-runner pattern is
- * proven stable. Tracked as a follow-up tech-debt item.
  */
-async function runSignificanceForRange(sheetName, rangeAddress, calculationSettings) {
-  return await Excel.run(async (context) => {
-    const worksheet = context.workbook.worksheets.getItem(sheetName);
-    const sourceRange = worksheet.getRange(rangeAddress);
+async function runSignificanceForRangeInContext(context, sheetName, rangeAddress, calculationSettings) {
+  const worksheet = context.workbook.worksheets.getItem(sheetName);
+  const sourceRange = worksheet.getRange(rangeAddress);
 
-    sourceRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+  sourceRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
-    await context.sync();
+  await context.sync();
 
-    const selectedValues = sourceRange.values;
-    const selectedText = sourceRange.text;
+  const selectedValues = sourceRange.values;
+  const selectedText = sourceRange.text;
 
-    if (!selectedValues || selectedValues.length < 2 || selectedValues[0].length < 2) {
-      return { status: "skipped", message: "слишком мало данных", rangeAddress };
-    }
+  if (!selectedValues || selectedValues.length < 2 || selectedValues[0].length < 2) {
+    return { status: "skipped", message: "слишком мало данных", rangeAddress };
+  }
 
-    const interpretation = await interpretSelectedRange(
-      context,
-      sourceRange,
-      selectedValues,
-      selectedText,
-      calculationSettings
-    );
+  const interpretation = await interpretSelectedRange(
+    context,
+    sourceRange,
+    selectedValues,
+    selectedText,
+    calculationSettings
+  );
 
-    if (interpretation.state === "blocked") {
-      const codes =
-        interpretation.blockingReasons && interpretation.blockingReasons.length > 0
-          ? ` [${interpretation.blockingReasons.join(", ")}]`
-          : "";
-      return {
-        status: "blocked",
-        message: `${interpretation.blockingMessage}${codes}`,
-        rangeAddress,
-      };
-    }
-
-    const {
-      valuesForCalculation,
-      textForCalculation,
-      leftLabelValues,
-      bannerContext: interpretedBannerContext,
-    } = interpretation;
-
-    let { writeTargetRange } = interpretation;
-
-    if (
-      !valuesForCalculation ||
-      valuesForCalculation.length < 2 ||
-      !valuesForCalculation[0] ||
-      valuesForCalculation[0].length < 2
-    ) {
-      return { status: "skipped", message: "нет данных для расчёта", rangeAddress };
-    }
-
-    writeTargetRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
-
-    await context.sync();
-
-    const targetStartRowIndex = writeTargetRange.rowIndex;
-
-    if (calculationSettings.writeBannerLetters && targetStartRowIndex === 0) {
-      return {
-        status: "skipped",
-        message: "данные в первой строке — баннер недоступен",
-        rangeAddress,
-      };
-    }
-
-    writeTargetRange.values = valuesForCalculation;
-    writeTargetRange.format.font.bold = false;
-    writeTargetRange.format.fill.clear();
-    writeTargetRange.format.horizontalAlignment = "Center";
-    writeTargetRange.format.verticalAlignment = "Center";
-
-    await context.sync();
-
-    const detectionResult = detectMetricRowsFromLeftLabels(valuesForCalculation, leftLabelValues);
-    const calculationBlocks = buildCalculationBlocks(detectionResult, { preferredBase: calculationSettings.preferredBase });
-
-    if (!calculationBlocks || calculationBlocks.length === 0) {
-      return { status: "skipped", message: "нет блоков расчёта", rangeAddress };
-    }
-
-    let bannerStructure = null;
-
-    if (calculationSettings.respectBannerStructure) {
-      const bannerContext = interpretedBannerContext;
-      bannerStructure = detectBannerStructure(bannerContext, calculationSettings);
-      if (bannerContext && bannerContext.messages && bannerContext.messages.length > 0) {
-        bannerStructure.messages = [...bannerContext.messages, ...(bannerStructure.messages || [])];
-      }
-    }
-
-    const fullCellResultMatrix = createEmptyCellResultMatrix(
-      valuesForCalculation.length,
-      valuesForCalculation[0].length
-    );
-
-    for (const calculationBlock of calculationBlocks) {
-      const smallBaseResult = applySmallBaseRulesForCalculationBlock(
-        valuesForCalculation,
-        calculationBlock,
-        fullCellResultMatrix,
-        calculationSettings
-      );
-
-      if (smallBaseResult.errorMessage) {
-        return { status: "error", message: smallBaseResult.errorMessage, rangeAddress };
-      }
-
-      const blockCalculationSettings = {
-        ...calculationSettings,
-        excludedColumnIndexes: smallBaseResult.excludedColumnIndexes,
-        bannerStructure,
-      };
-
-      const blockResults = calculateBlockResults(
-        valuesForCalculation,
-        calculationBlock,
-        blockCalculationSettings
-      );
-
-      const bannerStructureError = getFirstBannerStructureError(bannerStructure);
-
-      if (bannerStructureError) {
-        return { status: "error", message: bannerStructureError.text, rangeAddress };
-      }
-
-      if (!blockResults) {
-        continue;
-      }
-
-      applyComparisonResultsToFullCellResultMatrix(
-        blockResults,
-        fullCellResultMatrix,
-        blockCalculationSettings
-      );
-    }
-
-    const allowedMarkerRows = getAllowedMarkerRowIndexes(calculationBlocks);
-
-    keepMarkersOnlyInAllowedRows(fullCellResultMatrix, allowedMarkerRows);
-
-    writeCellResultsToSelectedRange(
-      writeTargetRange,
-      textForCalculation,
-      fullCellResultMatrix,
-      detectionResult,
-      calculationSettings
-    );
-
-    if (calculationSettings.writeBannerLetters) {
-      await clearStaleBannerMarkersLeftOfWriteRange(
-        context,
-        writeTargetRange.worksheet,
-        sourceRange.columnIndex,
-        writeTargetRange.rowIndex,
-        writeTargetRange.columnIndex
-      );
-
-      // Pre-clear all existing banner markers above the write range before
-      // writing fresh ones.  Same reason as in runSignificanceFromSelection:
-      // vertically merged banner cells retain stale markers when re-run with
-      // different banner/wave settings.
-      await clearBannerMarkersAboveRange(context, writeTargetRange);
-
-      if (calculationSettings.respectBannerStructure && bannerStructure) {
-        await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
-          context,
-          writeTargetRange,
-          bannerStructure,
-          calculationSettings
-        );
-      } else {
-        await writeBannerMarkersAboveSelectedRange(context, writeTargetRange, calculationSettings);
-      }
-    }
-
-    await context.sync();
-
+  if (interpretation.state === "blocked") {
+    const codes =
+      interpretation.blockingReasons && interpretation.blockingReasons.length > 0
+        ? ` [${interpretation.blockingReasons.join(", ")}]`
+        : "";
     return {
-      status: "processed",
-      blocksProcessed: calculationBlocks.length,
-      message: `обработано блоков: ${calculationBlocks.length}`,
+      status: "blocked",
+      message: `${interpretation.blockingMessage}${codes}`,
       rangeAddress,
     };
-  });
+  }
+
+  const {
+    valuesForCalculation,
+    textForCalculation,
+    leftLabelValues,
+    bannerContext: interpretedBannerContext,
+  } = interpretation;
+
+  const { writeTargetRange } = interpretation;
+
+  if (
+    !valuesForCalculation ||
+    valuesForCalculation.length < 2 ||
+    !valuesForCalculation[0] ||
+    valuesForCalculation[0].length < 2
+  ) {
+    return { status: "skipped", message: "нет данных для расчёта", rangeAddress };
+  }
+
+  // Compute write-target row/column indices from the already-loaded sourceRange
+  // properties rather than issuing a separate load+sync on writeTargetRange.
+  // sourceRange.rowIndex and .columnIndex are loaded in the sync above;
+  // interpretation.dataRowOffset / dataColOffset are pure-JS values from the
+  // normalization path, so no additional round-trip is required.
+  const targetStartRowIndex = sourceRange.rowIndex + interpretation.dataRowOffset;
+  const targetStartColIndex = sourceRange.columnIndex + interpretation.dataColOffset;
+
+  if (calculationSettings.writeBannerLetters && targetStartRowIndex === 0) {
+    return {
+      status: "skipped",
+      message: "данные в первой строке — баннер недоступен",
+      rangeAddress,
+    };
+  }
+
+  writeTargetRange.values = valuesForCalculation;
+  writeTargetRange.format.font.bold = false;
+  writeTargetRange.format.fill.clear();
+  writeTargetRange.format.horizontalAlignment = "Center";
+  writeTargetRange.format.verticalAlignment = "Center";
+
+  await context.sync();
+
+  const detectionResult = detectMetricRowsFromLeftLabels(valuesForCalculation, leftLabelValues);
+  const calculationBlocks = buildCalculationBlocks(detectionResult, { preferredBase: calculationSettings.preferredBase });
+
+  if (!calculationBlocks || calculationBlocks.length === 0) {
+    return { status: "skipped", message: "нет блоков расчёта", rangeAddress };
+  }
+
+  let bannerStructure = null;
+
+  if (calculationSettings.respectBannerStructure) {
+    const bannerContext = interpretedBannerContext;
+    bannerStructure = detectBannerStructure(bannerContext, calculationSettings);
+    if (bannerContext && bannerContext.messages && bannerContext.messages.length > 0) {
+      bannerStructure.messages = [...bannerContext.messages, ...(bannerStructure.messages || [])];
+    }
+  }
+
+  const fullCellResultMatrix = createEmptyCellResultMatrix(
+    valuesForCalculation.length,
+    valuesForCalculation[0].length
+  );
+
+  for (const calculationBlock of calculationBlocks) {
+    const smallBaseResult = applySmallBaseRulesForCalculationBlock(
+      valuesForCalculation,
+      calculationBlock,
+      fullCellResultMatrix,
+      calculationSettings
+    );
+
+    if (smallBaseResult.errorMessage) {
+      return { status: "error", message: smallBaseResult.errorMessage, rangeAddress };
+    }
+
+    const blockCalculationSettings = {
+      ...calculationSettings,
+      excludedColumnIndexes: smallBaseResult.excludedColumnIndexes,
+      bannerStructure,
+    };
+
+    const blockResults = calculateBlockResults(
+      valuesForCalculation,
+      calculationBlock,
+      blockCalculationSettings
+    );
+
+    const bannerStructureError = getFirstBannerStructureError(bannerStructure);
+
+    if (bannerStructureError) {
+      return { status: "error", message: bannerStructureError.text, rangeAddress };
+    }
+
+    if (!blockResults) {
+      continue;
+    }
+
+    applyComparisonResultsToFullCellResultMatrix(
+      blockResults,
+      fullCellResultMatrix,
+      blockCalculationSettings
+    );
+  }
+
+  const allowedMarkerRows = getAllowedMarkerRowIndexes(calculationBlocks);
+
+  keepMarkersOnlyInAllowedRows(fullCellResultMatrix, allowedMarkerRows);
+
+  writeCellResultsToSelectedRange(
+    writeTargetRange,
+    textForCalculation,
+    fullCellResultMatrix,
+    detectionResult,
+    calculationSettings
+  );
+
+  if (calculationSettings.writeBannerLetters) {
+    await clearStaleBannerMarkersLeftOfWriteRange(
+      context,
+      writeTargetRange.worksheet,
+      sourceRange.columnIndex,
+      targetStartRowIndex,
+      targetStartColIndex
+    );
+
+    // Pre-clear all existing banner markers above the write range before
+    // writing fresh ones.  Same reason as in runSignificanceFromSelection:
+    // vertically merged banner cells retain stale markers when re-run with
+    // different banner/wave settings.
+    await clearBannerMarkersAboveRange(context, writeTargetRange);
+
+    if (calculationSettings.respectBannerStructure && bannerStructure) {
+      await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
+        context,
+        writeTargetRange,
+        bannerStructure,
+        calculationSettings
+      );
+    } else {
+      await writeBannerMarkersAboveSelectedRange(context, writeTargetRange, calculationSettings);
+    }
+  }
+
+  await context.sync();
+
+  return {
+    status: "processed",
+    blocksProcessed: calculationBlocks.length,
+    message: `обработано блоков: ${calculationBlocks.length}`,
+    rangeAddress,
+  };
+}
+
+
+/**
+ * Runs the full significance pipeline for a single named range on a named sheet.
+ *
+ * Thin wrapper around runSignificanceForRangeInContext that provides its own
+ * Excel.run context. Used by current-table autorun and as a per-table fallback
+ * when the shared-context batch in sheet/workbook autorun encounters an
+ * Office.js error that corrupts the shared context.
+ *
+ * Returns { status, blocksProcessed, message, rangeAddress }.
+ * status: "processed" | "skipped" | "blocked" | "error"
+ */
+async function runSignificanceForRange(sheetName, rangeAddress, calculationSettings) {
+  return Excel.run((context) =>
+    runSignificanceForRangeInContext(context, sheetName, rangeAddress, calculationSettings)
+  );
 }
 
 
@@ -1331,30 +1347,86 @@ async function runAutoSignificance() {
   let processed = 0;
   let errors = 0;
 
+  // Process all eligible tables in a single Excel.run to amortise per-context
+  // overhead. If any table causes an Office.js sync error (corrupting the shared
+  // context), we record that table as an error, exit the shared context, and
+  // fall back to per-table Excel.run for any remaining candidates.
   const _tLoop = perfNow();
-  for (const candidate of eligible) {
+  let _batchEndedAt = 0;
+  try {
+    await Excel.run(async (context) => {
+      for (let _bi = 0; _bi < eligible.length; _bi++) {
+        const candidate = eligible[_bi];
+        const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
+        try {
+          const result = await runSignificanceForRangeInContext(
+            context,
+            candidate.sheetName,
+            candidate.rangeAddress,
+            calculationSettings
+          );
+          if (result.status === "processed") {
+            processed++;
+          } else if (result.status === "skipped" || result.status === "blocked") {
+            skipped++;
+            detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`);
+          } else {
+            errors++;
+            detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`);
+          }
+          reportRows.push({
+            sheetName: candidate.sheetName,
+            title: candidate.title,
+            rangeAddress: candidate.rangeAddress,
+            status: result.status,
+            message: result.message || "",
+            selectedBase: item ? (item.selectedBaseSubtypeLabel || "") : "",
+            metricTypes: runReportMetricTypes(item),
+            warnings: item ? (item.warningsCount ?? "") : "",
+            critical: item ? (item.criticalCount ?? "") : "",
+            warningDetails: runReportWarningDetails(item),
+            blocksProcessed: result.blocksProcessed != null ? result.blocksProcessed : "",
+          });
+        } catch (err) {
+          errors++;
+          const errMsg = err.message || "неизвестная ошибка";
+          detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${errMsg}`);
+          reportRows.push({
+            sheetName: candidate.sheetName,
+            title: candidate.title,
+            rangeAddress: candidate.rangeAddress,
+            status: "error",
+            message: errMsg,
+            selectedBase: item ? (item.selectedBaseSubtypeLabel || "") : "",
+            metricTypes: runReportMetricTypes(item),
+            warnings: item ? (item.warningsCount ?? "") : "",
+            critical: item ? (item.criticalCount ?? "") : "",
+            warningDetails: runReportWarningDetails(item),
+            blocksProcessed: "",
+          });
+          _batchEndedAt = _bi + 1;
+          throw err; // shared context may be corrupted; exit batch
+        }
+      }
+      _batchEndedAt = eligible.length;
+    });
+  } catch (_batchErr) {
+    // shared context aborted; fall back to per-table for any remaining candidates
+  }
+  for (let _fi = _batchEndedAt; _fi < eligible.length; _fi++) {
+    const candidate = eligible[_fi];
     const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
     try {
-      const result = await runSignificanceForRange(
-        candidate.sheetName,
-        candidate.rangeAddress,
-        calculationSettings
-      );
-
+      const result = await runSignificanceForRange(candidate.sheetName, candidate.rangeAddress, calculationSettings);
       if (result.status === "processed") {
         processed++;
       } else if (result.status === "skipped" || result.status === "blocked") {
         skipped++;
-        detailLines.push(
-          `- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
-        );
+        detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`);
       } else {
         errors++;
-        detailLines.push(
-          `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
-        );
+        detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`);
       }
-
       reportRows.push({
         sheetName: candidate.sheetName,
         title: candidate.title,
@@ -1371,9 +1443,7 @@ async function runAutoSignificance() {
     } catch (err) {
       errors++;
       const errMsg = err.message || "неизвестная ошибка";
-      detailLines.push(
-        `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${errMsg}`
-      );
+      detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${errMsg}`);
       reportRows.push({
         sheetName: candidate.sheetName,
         title: candidate.title,
@@ -1998,30 +2068,86 @@ async function runCurrentSheetSignificance() {
   let processed = 0;
   let errors = 0;
 
+  // Process all eligible tables in a single Excel.run to amortise per-context
+  // overhead. Same fallback strategy as runAutoSignificance: on any Office.js
+  // sync error we record that table as an error, exit the shared context, and
+  // continue with per-table Excel.run for any remaining candidates.
   const _tLoop = perfNow();
-  for (const candidate of eligible) {
+  let _batchEndedAt = 0;
+  try {
+    await Excel.run(async (context) => {
+      for (let _bi = 0; _bi < eligible.length; _bi++) {
+        const candidate = eligible[_bi];
+        const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
+        try {
+          const result = await runSignificanceForRangeInContext(
+            context,
+            candidate.sheetName,
+            candidate.rangeAddress,
+            calculationSettings
+          );
+          if (result.status === "processed") {
+            processed++;
+          } else if (result.status === "skipped" || result.status === "blocked") {
+            skipped++;
+            detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`);
+          } else {
+            errors++;
+            detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`);
+          }
+          reportRows.push({
+            sheetName: candidate.sheetName,
+            title: candidate.title,
+            rangeAddress: candidate.rangeAddress,
+            status: result.status,
+            message: result.message || "",
+            selectedBase: item ? (item.selectedBaseSubtypeLabel || "") : "",
+            metricTypes: runReportMetricTypes(item),
+            warnings: item ? (item.warningsCount ?? "") : "",
+            critical: item ? (item.criticalCount ?? "") : "",
+            warningDetails: runReportWarningDetails(item),
+            blocksProcessed: result.blocksProcessed != null ? result.blocksProcessed : "",
+          });
+        } catch (err) {
+          errors++;
+          const errMsg = err.message || "неизвестная ошибка";
+          detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${errMsg}`);
+          reportRows.push({
+            sheetName: candidate.sheetName,
+            title: candidate.title,
+            rangeAddress: candidate.rangeAddress,
+            status: "error",
+            message: errMsg,
+            selectedBase: item ? (item.selectedBaseSubtypeLabel || "") : "",
+            metricTypes: runReportMetricTypes(item),
+            warnings: item ? (item.warningsCount ?? "") : "",
+            critical: item ? (item.criticalCount ?? "") : "",
+            warningDetails: runReportWarningDetails(item),
+            blocksProcessed: "",
+          });
+          _batchEndedAt = _bi + 1;
+          throw err; // shared context may be corrupted; exit batch
+        }
+      }
+      _batchEndedAt = eligible.length;
+    });
+  } catch (_batchErr) {
+    // shared context aborted; fall back to per-table for any remaining candidates
+  }
+  for (let _fi = _batchEndedAt; _fi < eligible.length; _fi++) {
+    const candidate = eligible[_fi];
     const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
     try {
-      const result = await runSignificanceForRange(
-        candidate.sheetName,
-        candidate.rangeAddress,
-        calculationSettings
-      );
-
+      const result = await runSignificanceForRange(candidate.sheetName, candidate.rangeAddress, calculationSettings);
       if (result.status === "processed") {
         processed++;
       } else if (result.status === "skipped" || result.status === "blocked") {
         skipped++;
-        detailLines.push(
-          `- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
-        );
+        detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`);
       } else {
         errors++;
-        detailLines.push(
-          `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
-        );
+        detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`);
       }
-
       reportRows.push({
         sheetName: candidate.sheetName,
         title: candidate.title,
@@ -2038,9 +2164,7 @@ async function runCurrentSheetSignificance() {
     } catch (err) {
       errors++;
       const errMsg = err.message || "неизвестная ошибка";
-      detailLines.push(
-        `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${errMsg}`
-      );
+      detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${errMsg}`);
       reportRows.push({
         sheetName: candidate.sheetName,
         title: candidate.title,
