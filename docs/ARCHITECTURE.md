@@ -94,6 +94,211 @@ Changes to these files require extra care:
 - Ensure the selected range bounds are respected during reading and writing.
 - Selected range guardrails currently live in taskpane as a warning-only MVP. Future selected range normalization should be designed before implementation.
 
+## Taskpane Module Boundaries
+
+Recent extraction PRs reduced the size of `src/taskpane/taskpane.js`, but taskpane decomposition is not complete. The current goal is disciplined boundaries: keep Excel orchestration and workflow ownership in `taskpane.js`, while extracted helpers stay narrow and do not silently absorb business flow.
+
+### Guardrails
+
+- `src/taskpane/taskpane.js` still owns Office.js orchestration, `Excel.run` flows, `context.sync` sequencing, range and worksheet reads/writes, workflow wiring, and generated sheet writing.
+- Generated sheet names `Content` and `Run report` remain taskpane orchestration concerns, not formatter-module concerns.
+- Formatter modules should remain pure or near-pure. They may shape strings, labels, and compact presentation models, but must not call `Excel.run`, `context.sync`, or write workbook ranges.
+- `taskpane-status.js` and `taskpane-settings.js` may touch DOM and `localStorage`, but must not own Excel workflow logic.
+- `src/core/*` modules remain platform-neutral and must not import taskpane modules.
+- Do not mix architecture extraction with behavior changes. If an extraction needs logic changes to "make it fit", stop and split that into a separate task.
+
+### `src/taskpane/taskpane.js`
+
+Responsibility:
+Owns the taskpane controller layer. It wires buttons and tabs, runs the main Excel workflows, coordinates Run / Clear / Check / inventory flows, and decides when generated sheets are created or updated.
+
+What belongs there:
+- `Office.onReady(...)` startup and event wiring.
+- `Excel.run(...)` entry points and orchestration helpers.
+- Workbook and worksheet reads/writes.
+- Flow control that combines settings, selected-range interpretation, core detection/calculation, banner writing, report writing, and status updates.
+- Generated sheet orchestration for `Content` and `Run report`.
+
+What must not be moved there:
+- Statistical calculation internals from `src/core/significance.js`.
+- Reusable pure formatting helpers that only shape text for Check, inventory, or report output.
+- Generic settings persistence helpers that can stay isolated in `taskpane-settings.js`.
+
+Examples currently in it:
+- `runSignificanceFromSelection`
+- `runCheckTable`
+- `runWorkbookCheck`
+- `runTableInventory`
+- `writeBannerMarkersAboveSelectedRangeUsingBannerStructure`
+
+### `src/taskpane/taskpane-status.js`
+
+Responsibility:
+Owns small taskpane status-panel and message-formatting helpers for user-visible status, check, inventory, banner, and selected-range guardrail messaging.
+
+What belongs there:
+- DOM writes to status, check, and inventory panels.
+- Compact message composition for user-facing taskpane text.
+- Shared message-code filtering for banner and resolver output.
+
+What must not be moved there:
+- `Excel.run` flows, worksheet reads, or workbook writes.
+- Detection, normalization, or significance decisions.
+- Workflow branching such as deciding whether Run or Check should continue.
+
+Examples currently in it:
+- `setStatusMessage`
+- `setCheckMessage`
+- `setInventoryMessage`
+- `formatBannerUserMessages`
+- `appendSelectedRangeGuardrailMessages`
+- `buildCheckResolverMessage`
+
+### `src/taskpane/taskpane-settings.js`
+
+Responsibility:
+Owns taskpane settings metadata, defaults, panel hydration, and local persistence helpers.
+
+What belongs there:
+- Canonical settings control metadata and default values.
+- Applying settings to DOM controls and reading persisted settings.
+- Settings panel collapse state and `localStorage` persistence helpers.
+
+What must not be moved there:
+- Excel workflow logic.
+- Range interpretation, table scanning, or workbook mutation.
+- Cross-flow orchestration decisions about Run / Check / autorun behavior.
+
+Examples currently in it:
+- `SETTINGS_CONTROL_CONFIG`
+- `DEFAULT_CALCULATION_SETTINGS`
+- `loadSavedSettingsIntoPanel`
+- `applySettingsToPanel`
+- `saveSettingsToLocalStorage`
+- `initializeSettingsCollapse`
+
+### `src/taskpane/taskpane-check-formatters.js`
+
+Responsibility:
+Formats Check-related summaries into user-visible text fragments and compact display lines for taskpane output.
+
+What belongs there:
+- Pure or near-pure string/label formatting.
+- Small presentation summaries derived from already-computed blocks, issues, and banner metadata.
+
+What must not be moved there:
+- `Excel.run`, `context.sync`, or range access.
+- Table detection, banner detection, normalization, or statistical logic.
+- Decisions about whether a Check flow should read or write a sheet.
+
+Examples currently in it:
+- `formatSkippedCandidateDetail`
+- `checkMetricTypesFromBlocks`
+- `formatCheckUserVisibleIssues`
+- `formatCheckCalculationBlocks`
+- `formatCheckBannerSummary`
+
+### `src/taskpane/taskpane-run-report-formatters.js`
+
+Responsibility:
+Formats labels and detail strings for generated Run report sheet rows.
+
+What belongs there:
+- Pure mapping from status / reason / item metadata into report-facing text.
+- Small report-detail assembly helpers used by taskpane orchestration before writing the report sheet.
+
+What must not be moved there:
+- Report sheet creation or workbook writes.
+- Inventory scanning, selected-range interpretation, or significance calculation.
+- Any helper that needs `Excel.run` or worksheet context.
+
+Examples currently in it:
+- `runReportSkipReasonLabel`
+- `runReportStatusLabel`
+- `runReportMetricTypes`
+- `formatIssueDetailsForReport`
+- `runReportWarningDetails`
+
+### `src/taskpane/localization.js`
+
+Responsibility:
+Owns lightweight taskpane UI localization and language persistence.
+
+What belongs there:
+- Translation dictionaries and language selection state.
+- `data-i18n` and related DOM text refresh helpers.
+- Language persistence independent of calculation settings persistence.
+
+What must not be moved there:
+- Excel workflow logic.
+- Task-specific Run / Check orchestration.
+- Formatting helpers whose main purpose is report/check content rather than language lookup.
+
+Examples currently in it:
+- `t`
+- `setLanguage`
+- `loadSavedLanguage`
+- `applyI18n`
+- `SUPPORTED_LANGUAGES`
+
+### `src/taskpane/active-cell-resolver.js`
+
+Responsibility:
+Provides the read-only adapter that resolves "current table" scope from the active cell by scanning the active sheet and mapping the cursor to a candidate table.
+
+What belongs there:
+- Active-cell based table resolution.
+- Generated-sheet exclusion for `Content` and `Run report`.
+- Read-only candidate lookup and ambiguity / blocked results for current-table flows.
+
+What must not be moved there:
+- Run / Clear write-back logic.
+- Report sheet writing.
+- Statistical calculation or workbook mutation.
+
+Examples currently in it:
+- `resolveCurrentTableFromActiveCell`
+- `RESOLVER_GENERATED_SHEET_NAMES`
+- `RESOLVER_SCAN_CELL_LIMIT`
+
+### `src/taskpane/selected-range-interpreter.js`
+
+Responsibility:
+Owns the Excel/taskpane adapter that converts a raw Office.js selection into the stable interpretation object shared by Run and Check.
+
+What belongs there:
+- Marker stripping and normalized selection interpretation.
+- Loading left labels and banner rows from the worksheet when needed.
+- Embedded label / helper-column trimming that aligns `valuesForCalculation`, `bannerContext`, and `writeTargetRange`.
+- Read-only adapter logic that prepares a stable contract for later workflow steps.
+
+What must not be moved there:
+- Statistical calculation, block building, or banner-structure algorithms from core.
+- Taskpane DOM updates or status-panel writes.
+- Excel write-back, report sheet writing, or broader workflow orchestration.
+
+Examples currently in it:
+- `interpretSelectedRange`
+- `loadLabelValuesForSelectedRange`
+- `detectLeadingEmptyColumns`
+- `detectEmbeddedLabelColumns`
+- `loadBannerContextForSelectedRange`
+- `sanitizeBannerContextForDetection`
+
+## Safe Next Extraction Candidates
+
+Cautious candidates:
+- Inventory / Content formatting helpers that only shape row text, summaries, or column values before taskpane writes them.
+- Small status or Check display formatters that currently build user-visible strings inside `taskpane.js`.
+- Narrow settings tooltip helpers, if extracted without moving settings-state orchestration or Excel workflow branching.
+
+Do not extract yet:
+- `runSignificanceFromSelection` / `runSignificanceForRange` unification.
+- Generic `Excel.run` wrappers or `context.sync` wrappers.
+- Writer or report-sheet writing flows.
+- Selected-range normalization behavior.
+- Calculation or statistical logic.
+
 ## Excel Writer Performance Guardrails
 - **Do not return `excel-writer.js` to per-cell writes.** Maintain block-level or optimized writes to avoid degrading Excel performance.
 
