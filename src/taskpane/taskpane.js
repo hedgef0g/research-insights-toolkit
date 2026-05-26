@@ -775,12 +775,14 @@ async function runSignificanceFromSelection() {
  * status: "processed" | "skipped" | "blocked" | "error"
  */
 async function runSignificanceForRangeInContext(context, sheetName, rangeAddress, calculationSettings) {
+  const _p0 = perfNow();
   const worksheet = context.workbook.worksheets.getItem(sheetName);
   const sourceRange = worksheet.getRange(rangeAddress);
 
   sourceRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
   await context.sync();
+  const _pLoad = perfNow();
 
   const selectedValues = sourceRange.values;
   const selectedText = sourceRange.text;
@@ -827,6 +829,8 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
     return { status: "skipped", message: "нет данных для расчёта", rangeAddress };
   }
 
+  const _pInterp = perfNow();
+
   // Compute write-target row/column indices from the already-loaded sourceRange
   // properties rather than issuing a separate load+sync on writeTargetRange.
   // sourceRange.rowIndex and .columnIndex are loaded in the sync above;
@@ -849,8 +853,10 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
   writeTargetRange.format.horizontalAlignment = "Center";
   writeTargetRange.format.verticalAlignment = "Center";
 
-  await context.sync();
-
+  // No intermediate sync here. The pre-write format ops and
+  // writeCellResultsToSelectedRange are all writes with no intervening Excel
+  // reads, so they can share the final context.sync below. Removing this
+  // round-trip saves one Office.js sync per table in the autorun batch loop.
   const detectionResult = detectMetricRowsFromLeftLabels(valuesForCalculation, leftLabelValues);
   const calculationBlocks = buildCalculationBlocks(detectionResult, { preferredBase: calculationSettings.preferredBase });
 
@@ -918,6 +924,8 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
 
   keepMarkersOnlyInAllowedRows(fullCellResultMatrix, allowedMarkerRows);
 
+  const _pCalc = perfNow();
+
   writeCellResultsToSelectedRange(
     writeTargetRange,
     textForCalculation,
@@ -954,12 +962,19 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
   }
 
   await context.sync();
+  const _pWrite = perfNow();
 
   return {
     status: "processed",
     blocksProcessed: calculationBlocks.length,
     message: `обработано блоков: ${calculationBlocks.length}`,
     rangeAddress,
+    _phasesMs: _p0 !== 0 ? {
+      loadMs: _pLoad - _p0,
+      interpMs: _pInterp - _pLoad,
+      calcMs: _pCalc - _pInterp,
+      writeMs: _pWrite - _pCalc,
+    } : null,
   };
 }
 
@@ -976,9 +991,13 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
  * status: "processed" | "skipped" | "blocked" | "error"
  */
 async function runSignificanceForRange(sheetName, rangeAddress, calculationSettings) {
-  return Excel.run((context) =>
+  const result = await Excel.run((context) =>
     runSignificanceForRangeInContext(context, sheetName, rangeAddress, calculationSettings)
   );
+  if (result._phasesMs) {
+    perfLog("runSignificanceForRange", { ...result._phasesMs, rangeAddress });
+  }
+  return result;
 }
 
 
@@ -1352,6 +1371,7 @@ async function runAutoSignificance() {
   // context), we record that table as an error, exit the shared context, and
   // fall back to per-table Excel.run for any remaining candidates.
   const _tLoop = perfNow();
+  const _perfPhases = { loadMs: 0, interpMs: 0, calcMs: 0, writeMs: 0 };
   let _batchEndedAt = 0;
   try {
     await Excel.run(async (context) => {
@@ -1373,6 +1393,12 @@ async function runAutoSignificance() {
           } else {
             errors++;
             detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`);
+          }
+          if (result._phasesMs) {
+            _perfPhases.loadMs += result._phasesMs.loadMs;
+            _perfPhases.interpMs += result._phasesMs.interpMs;
+            _perfPhases.calcMs += result._phasesMs.calcMs;
+            _perfPhases.writeMs += result._phasesMs.writeMs;
           }
           reportRows.push({
             sheetName: candidate.sheetName,
@@ -1427,6 +1453,12 @@ async function runAutoSignificance() {
         errors++;
         detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`);
       }
+      if (result._phasesMs) {
+        _perfPhases.loadMs += result._phasesMs.loadMs;
+        _perfPhases.interpMs += result._phasesMs.interpMs;
+        _perfPhases.calcMs += result._phasesMs.calcMs;
+        _perfPhases.writeMs += result._phasesMs.writeMs;
+      }
       reportRows.push({
         sheetName: candidate.sheetName,
         title: candidate.title,
@@ -1476,6 +1508,7 @@ async function runAutoSignificance() {
     scanMs: _tLoop - _tScan,
     loopMs: _tLoopDone - _tLoop,
     tablesProcessed: processed,
+    ...(processed > 0 ? { perTablePhaseMs: _perfPhases } : {}),
     totalMs: perfElapsed(_t0),
   });
   setStatusMessage(summaryLines.join("\n"));
@@ -2073,6 +2106,7 @@ async function runCurrentSheetSignificance() {
   // sync error we record that table as an error, exit the shared context, and
   // continue with per-table Excel.run for any remaining candidates.
   const _tLoop = perfNow();
+  const _perfPhases = { loadMs: 0, interpMs: 0, calcMs: 0, writeMs: 0 };
   let _batchEndedAt = 0;
   try {
     await Excel.run(async (context) => {
@@ -2094,6 +2128,12 @@ async function runCurrentSheetSignificance() {
           } else {
             errors++;
             detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`);
+          }
+          if (result._phasesMs) {
+            _perfPhases.loadMs += result._phasesMs.loadMs;
+            _perfPhases.interpMs += result._phasesMs.interpMs;
+            _perfPhases.calcMs += result._phasesMs.calcMs;
+            _perfPhases.writeMs += result._phasesMs.writeMs;
           }
           reportRows.push({
             sheetName: candidate.sheetName,
@@ -2148,6 +2188,12 @@ async function runCurrentSheetSignificance() {
         errors++;
         detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`);
       }
+      if (result._phasesMs) {
+        _perfPhases.loadMs += result._phasesMs.loadMs;
+        _perfPhases.interpMs += result._phasesMs.interpMs;
+        _perfPhases.calcMs += result._phasesMs.calcMs;
+        _perfPhases.writeMs += result._phasesMs.writeMs;
+      }
       reportRows.push({
         sheetName: candidate.sheetName,
         title: candidate.title,
@@ -2197,6 +2243,7 @@ async function runCurrentSheetSignificance() {
     scanMs: _tLoop - _tScan,
     loopMs: _tLoopDone - _tLoop,
     tablesProcessed: processed,
+    ...(processed > 0 ? { perTablePhaseMs: _perfPhases } : {}),
     totalMs: perfElapsed(_t0),
   });
   setStatusMessage(summaryLines.join("\n"));
