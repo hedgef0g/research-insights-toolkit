@@ -46,27 +46,23 @@ import { resolveCurrentTableFromActiveCell } from "./active-cell-resolver";
 
 import { t, setLanguage, loadSavedLanguage, applyI18n } from "./localization";
 
-const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
-  "GLOBAL_TOTAL_USED",
-  "BANNER_AUTO_PREVIOUS_COLUMN_APPLIED",
-  "BANNER_TOTAL_ONLY_NO_TOTAL_PAIRS",
-  "BANNER_MULTIPLE_LOCAL_TOTALS",
-  "BANNER_TOTAL_OUTSIDE_SELECTION",
-  "BANNER_MALFORMED_STRUCTURE",
-  "BANNER_NO_ROWS_ABOVE_SELECTION",
-]);
+import {
+  setStatusMessage,
+  setCheckMessage,
+  setInventoryMessage,
+  nonContiguousSelectionMessage,
+  formatBannerUserMessages,
+  formatBannerUserMessagesExcludingCodes,
+  appendSelectedRangeGuardrailMessages,
+  formatStatusWithSelectedRangeGuardrails,
+  buildCheckResolverMessage,
+} from "./taskpane-status";
 
 const SCAN_CELL_LIMIT = 250000;
 const INVENTORY_CONTENT_SHEET_NAME = "Content";
 const RUN_REPORT_SHEET_NAME = "Run report";
 const GENERATED_SHEET_NAMES = new Set([INVENTORY_CONTENT_SHEET_NAME, RUN_REPORT_SHEET_NAME]);
 
-// Shown when the user has a non-contiguous (multi-area) selection active.
-// context.workbook.getSelectedRange() throws a RichApi.Error for such selections.
-// Resolved via t() at call sites so the message respects the active UI language.
-function nonContiguousSelectionMessage() {
-  return t("status.nonContiguousSelection");
-}
 const INVENTORY_CONTENT_COLUMNS = [
   "#",
   "Sheet",
@@ -104,77 +100,6 @@ const INVENTORY_FULL_CHECK_COLUMNS = [
   "Label split",
   "Label cols",
 ];
-
-function formatBannerUserMessages(bannerStructure) {
-  if (!bannerStructure || !bannerStructure.messages) {
-    return "";
-  }
-
-  const visibleMessages = bannerStructure.messages.filter((message) =>
-    USER_VISIBLE_BANNER_MESSAGE_CODES.has(message.code)
-  );
-
-  if (visibleMessages.length === 0) {
-    return "";
-  }
-
-  if (visibleMessages.length === 1) {
-    return visibleMessages[0].text;
-  }
-
-  return ["Сообщения:", ...visibleMessages.map((message) => `- ${message.text}`)].join("\n");
-}
-
-function formatSelectedRangeGuardrailMessages(warnings) {
-  if (!warnings || warnings.length === 0) {
-    return "";
-  }
-
-  const uniqueTexts = Array.from(new Set(warnings.map((warning) => warning.text).filter(Boolean)));
-
-  if (uniqueTexts.length === 1) {
-    return uniqueTexts[0];
-  }
-
-  return ["Предупреждения:", ...uniqueTexts.map((text) => `- ${text}`)].join("\n");
-}
-
-function appendSelectedRangeGuardrailMessages(statusMessages, warnings) {
-  const guardrailMessage = formatSelectedRangeGuardrailMessages(warnings);
-
-  if (!guardrailMessage) {
-    return statusMessages;
-  }
-
-  return [...statusMessages, "", guardrailMessage];
-}
-
-function formatStatusWithSelectedRangeGuardrails(message, warnings) {
-  return appendSelectedRangeGuardrailMessages([message], warnings).join("\n");
-}
-
-function formatBannerUserMessagesExcludingCodes(bannerStructure, excludedCodes = []) {
-  if (!bannerStructure || !bannerStructure.messages) {
-    return "";
-  }
-
-  const excludedCodeSet = new Set(excludedCodes);
-
-  const visibleMessages = bannerStructure.messages.filter(
-    (message) =>
-      USER_VISIBLE_BANNER_MESSAGE_CODES.has(message.code) && !excludedCodeSet.has(message.code)
-  );
-
-  if (visibleMessages.length === 0) {
-    return "";
-  }
-
-  if (visibleMessages.length === 1) {
-    return visibleMessages[0].text;
-  }
-
-  return ["Сообщения:", ...visibleMessages.map((message) => `- ${message.text}`)].join("\n");
-}
 
 const LOCAL_SETTINGS_STORAGE_KEY = "rit.settings.v1";
 const SETTINGS_COLLAPSED_KEY = "rit.ui.settingsCollapsed";
@@ -3431,28 +3356,6 @@ async function runCheckSelectedRange() {
   });
 }
 
-/**
- * Converts a non-ok resolver result into a user-facing message for the Check panel.
- *
- * Falls back to the resolver's own message where available; provides a generic
- * fallback for unexpected statuses.
- */
-function buildCheckResolverMessage(resolverResult) {
-  if (resolverResult.message) return resolverResult.message;
-  switch (resolverResult.status) {
-    case "no-table":
-      return t("status.resolverNoTable");
-    case "generated-sheet":
-      return t("status.resolverGeneratedSheet");
-    case "ambiguous-boundary":
-      return t("status.resolverAmbiguousBoundary");
-    case "blocked":
-      return t("status.resolverBlocked");
-    default:
-      return t("status.resolverFallback");
-  }
-}
-
 function formatCheckUserVisibleIssues(issues) {
   if (!Array.isArray(issues) || issues.length === 0) {
     return [];
@@ -3600,19 +3503,6 @@ function formatCheckBannerSummary(bannerStructure) {
   }
 
   return lines;
-}
-
-function setCheckMessage(message) {
-  const checkPanel = document.getElementById("check-panel");
-  const checkResult = document.getElementById("check-result");
-
-  if (checkPanel) {
-    checkPanel.style.display = "block";
-  }
-
-  if (checkResult) {
-    checkResult.textContent = message || "";
-  }
 }
 
 function getInventoryCandidateStatusLabel(candidateStatus) {
@@ -4882,13 +4772,6 @@ async function runTableInventory() {
   });
 }
 
-function setInventoryMessage(message) {
-  const panel = document.getElementById("inventory-panel");
-  const result = document.getElementById("inventory-result");
-  if (panel) panel.style.display = "block";
-  if (result) result.textContent = message || "";
-}
-
 /**
  * Reads calculation settings from the task pane UI.
  *
@@ -5472,19 +5355,6 @@ function initializePreviousColumnComparisonSettings() {
   }
 
   refreshSettingsPanelState();
-}
-
-function setStatusMessage(message) {
-  const statusPanel = document.getElementById("status-panel");
-  const outputElement = document.getElementById("significance-result");
-
-  if (statusPanel) {
-    statusPanel.style.display = "block";
-  }
-
-  if (outputElement) {
-    outputElement.textContent = message || "";
-  }
 }
 
 /**
