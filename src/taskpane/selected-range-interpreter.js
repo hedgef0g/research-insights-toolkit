@@ -437,26 +437,35 @@ function sanitizeBannerContextForDetection(bannerContext) {
  * If labelsOnLeftSide is enabled, reads labels from the leftmost sheet columns.
  *
  * Exported for use by runMetricDetectionDiagnostics.
+ *
+ * @param {object|null} meta - Optional preloaded range metadata { rowIndex, columnIndex, rowCount }.
+ *   When provided, skips a redundant load+sync for those properties.
  */
-export async function loadLabelValuesForSelectedRange(context, selectedRange, calculationSettings) {
+export async function loadLabelValuesForSelectedRange(context, selectedRange, calculationSettings, meta = null) {
   if (calculationSettings.labelsOnLeftSide) {
-    return loadLabelsFromLeftSideOfSheet(context, selectedRange);
+    return loadLabelsFromLeftSideOfSheet(context, selectedRange, meta);
   }
 
-  return loadLabelsImmediatelyLeftOfSelection(context, selectedRange);
+  return loadLabelsImmediatelyLeftOfSelection(context, selectedRange, meta);
 }
 
 /**
  * Reads labels immediately to the left of selected range.
  */
-async function loadLabelsImmediatelyLeftOfSelection(context, selectedRange) {
-  selectedRange.load(["rowIndex", "columnIndex", "rowCount"]);
+async function loadLabelsImmediatelyLeftOfSelection(context, selectedRange, meta = null) {
+  let selectedStartRowIndex, selectedStartColumnIndex, selectedRowCount;
 
-  await context.sync();
-
-  const selectedStartRowIndex = selectedRange.rowIndex;
-  const selectedStartColumnIndex = selectedRange.columnIndex;
-  const selectedRowCount = selectedRange.rowCount;
+  if (meta) {
+    selectedStartRowIndex = meta.rowIndex;
+    selectedStartColumnIndex = meta.columnIndex;
+    selectedRowCount = meta.rowCount;
+  } else {
+    selectedRange.load(["rowIndex", "columnIndex", "rowCount"]);
+    await context.sync();
+    selectedStartRowIndex = selectedRange.rowIndex;
+    selectedStartColumnIndex = selectedRange.columnIndex;
+    selectedRowCount = selectedRange.rowCount;
+  }
 
   if (selectedStartColumnIndex === 0) {
     return [];
@@ -486,14 +495,20 @@ async function loadLabelsImmediatelyLeftOfSelection(context, selectedRange) {
  * Supports wide horizontal tables where metric labels stay on the far left,
  * while the user selects data columns far to the right.
  */
-async function loadLabelsFromLeftSideOfSheet(context, selectedRange) {
-  selectedRange.load(["rowIndex", "rowCount", "columnIndex"]);
+async function loadLabelsFromLeftSideOfSheet(context, selectedRange, meta = null) {
+  let selectedStartRowIndex, selectedRowCount, selectedStartColumnIndex;
 
-  await context.sync();
-
-  const selectedStartRowIndex = selectedRange.rowIndex;
-  const selectedRowCount = selectedRange.rowCount;
-  const selectedStartColumnIndex = selectedRange.columnIndex;
+  if (meta) {
+    selectedStartRowIndex = meta.rowIndex;
+    selectedRowCount = meta.rowCount;
+    selectedStartColumnIndex = meta.columnIndex;
+  } else {
+    selectedRange.load(["rowIndex", "rowCount", "columnIndex"]);
+    await context.sync();
+    selectedStartRowIndex = selectedRange.rowIndex;
+    selectedRowCount = selectedRange.rowCount;
+    selectedStartColumnIndex = selectedRange.columnIndex;
+  }
 
   if (selectedStartColumnIndex === 0) {
     return [];
@@ -522,16 +537,22 @@ async function loadLabelsFromLeftSideOfSheet(context, selectedRange) {
  * - lower banner row directly above selection;
  * - up to maxBannerScanRows rows above it.
  */
-async function loadBannerContextForSelectedRange(context, selectedRange, calculationSettings) {
+async function loadBannerContextForSelectedRange(context, selectedRange, calculationSettings, meta = null) {
   const maxBannerScanRows = 5;
 
-  selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
+  let selectedStartRowIndex, selectedStartColumnIndex, selectedColumnCount;
 
-  await context.sync();
-
-  const selectedStartRowIndex = selectedRange.rowIndex;
-  const selectedStartColumnIndex = selectedRange.columnIndex;
-  const selectedColumnCount = selectedRange.columnCount;
+  if (meta) {
+    selectedStartRowIndex = meta.rowIndex;
+    selectedStartColumnIndex = meta.columnIndex;
+    selectedColumnCount = meta.columnCount;
+  } else {
+    selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
+    await context.sync();
+    selectedStartRowIndex = selectedRange.rowIndex;
+    selectedStartColumnIndex = selectedRange.columnIndex;
+    selectedColumnCount = selectedRange.columnCount;
+  }
 
   if (selectedStartRowIndex === 0) {
     return {
@@ -632,7 +653,8 @@ export async function interpretSelectedRange(
   selectedRange,
   selectedValues,
   selectedText,
-  calculationSettings
+  calculationSettings,
+  selectedRangeMeta = null
 ) {
   const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
   const normalized = normalizeSelectedRange(cleanedValues, selectedText);
@@ -791,10 +813,19 @@ export async function interpretSelectedRange(
         // Fallback: normalization did not extract label columns (selection
         // excluded the label column). Load labels from the worksheet using the
         // data body range so row alignment matches the normalized values.
+        const dataBodyMeta = selectedRangeMeta
+          ? {
+              rowIndex: selectedRangeMeta.rowIndex + normalized.dataRowOffset,
+              columnIndex: selectedRangeMeta.columnIndex + effectiveDataColOffset,
+              rowCount: valuesForCalculation.length,
+              columnCount: valuesForCalculation[0].length,
+            }
+          : null;
         leftLabelValues = await loadLabelValuesForSelectedRange(
           context,
           dataBodyRange,
-          calculationSettings
+          calculationSettings,
+          dataBodyMeta
         );
       }
     }
@@ -810,8 +841,16 @@ export async function interpretSelectedRange(
       buildRunBannerContext(effectiveBannerContext)
     );
     if (bannerContext === null && calculationSettings.respectBannerStructure) {
+      const dataBodyMeta = selectedRangeMeta
+        ? {
+            rowIndex: selectedRangeMeta.rowIndex + normalized.dataRowOffset,
+            columnIndex: selectedRangeMeta.columnIndex + effectiveDataColOffset,
+            rowCount: valuesForCalculation.length,
+            columnCount: valuesForCalculation[0].length,
+          }
+        : null;
       bannerContext = sanitizeBannerContextForDetection(
-        await loadBannerContextForSelectedRange(context, dataBodyRange, calculationSettings)
+        await loadBannerContextForSelectedRange(context, dataBodyRange, calculationSettings, dataBodyMeta)
       );
     }
 
@@ -883,13 +922,15 @@ export async function interpretSelectedRange(
     leftLabelValues = await loadLabelValuesForSelectedRange(
       context,
       selectedRange,
-      calculationSettings
+      calculationSettings,
+      selectedRangeMeta
     );
   } else {
     leftLabelValues = await loadLabelValuesForSelectedRange(
       context,
       selectedRange,
-      calculationSettings
+      calculationSettings,
+      selectedRangeMeta
     );
     valuesForCalculation = cleanedValues;
     textForCalculation = selectedText;
@@ -903,10 +944,22 @@ export async function interpretSelectedRange(
   // Sanitize immediately so any RIT markers written by a previous Run are
   // stripped before the context is used by either detectBannerStructure (Run)
   // or buildTablePreviewModel (Check).
+  //
+  // When selectedRangeMeta is available (autorun path), compute adjusted meta
+  // for writeTargetRange so the banner loader can skip its own load+sync.
   let bannerContext = null;
   if (calculationSettings.respectBannerStructure) {
+    const bannerColOffset = embeddedLabelCols > 0 ? embeddedLabelCols : leadingEmptyCols;
+    const bannerRangeMeta = selectedRangeMeta
+      ? {
+          rowIndex: selectedRangeMeta.rowIndex,
+          columnIndex: selectedRangeMeta.columnIndex + bannerColOffset,
+          rowCount: selectedRangeMeta.rowCount,
+          columnCount: selectedRangeMeta.columnCount - bannerColOffset,
+        }
+      : null;
     bannerContext = sanitizeBannerContextForDetection(
-      await loadBannerContextForSelectedRange(context, writeTargetRange, calculationSettings)
+      await loadBannerContextForSelectedRange(context, writeTargetRange, calculationSettings, bannerRangeMeta)
     );
   }
 

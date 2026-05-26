@@ -791,12 +791,20 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
     return { status: "skipped", message: "слишком мало данных", rangeAddress };
   }
 
+  const selectedRangeMeta = {
+    rowIndex: sourceRange.rowIndex,
+    columnIndex: sourceRange.columnIndex,
+    rowCount: sourceRange.rowCount,
+    columnCount: sourceRange.columnCount,
+  };
+
   const interpretation = await interpretSelectedRange(
     context,
     sourceRange,
     selectedValues,
     selectedText,
-    calculationSettings
+    calculationSettings,
+    selectedRangeMeta
   );
 
   if (interpretation.state === "blocked") {
