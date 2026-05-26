@@ -90,7 +90,6 @@ import {
   getInventoryCandidateStatusLabel,
   getContentCandidateStatusLabel,
   formatInventoryItemLines,
-  isContentTitleFallbackLabel,
   resolveContentDisplayTitle,
   buildClientContentRows,
   getContentTableHyperlinkTarget,
@@ -3681,10 +3680,6 @@ function buildContentRowMap(sheetResults, mode) {
   return map;
 }
 
-/**
- * Builds a hyperlink documentReference pointing to the given 1-based row
- * in the Content sheet (column A).
- */
 /**
  * Returns the first title-like text from a row, or "" if the row is not
  * title-like.  A row qualifies as title-like when it has at most maxNonEmpty
