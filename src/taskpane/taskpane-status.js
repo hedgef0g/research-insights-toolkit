@@ -125,6 +125,21 @@ export function formatStatusWithSelectedRangeGuardrails(message, warnings) {
   return appendSelectedRangeGuardrailMessages([message], warnings).join("\n");
 }
 
+export function runningStatusMessage(action, scope) {
+  const prefix = {
+    run:     "Расчёт начат…",
+    clear:   "Очистка начата…",
+    check:   "Проверка начата…",
+    content: "Оглавление создаётся…",
+  }[action];
+  const detail = {
+    table:   "Идёт обработка текущей таблицы.",
+    sheet:   "Идёт обработка таблиц на листе.",
+    workbook:"Идёт обработка таблиц в книге.",
+  }[scope] || "";
+  return detail ? `${prefix} ${detail}` : prefix;
+}
+
 export function buildCheckResolverMessage(resolverResult) {
   if (resolverResult.message) return resolverResult.message;
   switch (resolverResult.status) {
