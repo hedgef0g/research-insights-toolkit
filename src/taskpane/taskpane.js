@@ -746,17 +746,6 @@ async function runSignificanceFromSelection() {
     };
 
     if (calculationSettings.writeBannerLetters) {
-      // Remove any stale RIT markers that a previous run may have written at
-      // label-column positions (left of writeTargetRange).  These linger when
-      // the user re-runs without clearing first after the dataColOffset fix.
-      await clearStaleBannerMarkersLeftOfWriteRange(
-        context,
-        writeTargetRange.worksheet,
-        selectedRange.columnIndex,
-        writeTargetRange.rowIndex,
-        writeTargetRange.columnIndex
-      );
-
       // Pre-clear all existing banner markers above the write range before
       // writing fresh ones.  Without this, stale markers survive in vertically
       // merged banner cells: the write helpers only update cells they target on
@@ -765,7 +754,11 @@ async function runSignificanceFromSelection() {
       // its old marker.  clearBannerMarkersAboveRange reads .text (which returns
       // text from the top-left of each merge) and removes any trailing RIT marker
       // from every banner row above the data range.
-      await clearBannerMarkersAboveRange(context, writeTargetRange, _knownDims);
+      //
+      // sourceStartColIndex widens the scan to cover any columns between the
+      // selection start and the write target start, cleaning stale RIT markers
+      // that an earlier run may have written when dataColOffset was smaller.
+      await clearBannerMarkersAboveRange(context, writeTargetRange, _knownDims, selectedRange.columnIndex);
 
       if (calculationSettings.respectBannerStructure && bannerStructure) {
         await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
@@ -1000,20 +993,18 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
   let _pBannerWrite = _pValueWrite;
 
   if (calculationSettings.writeBannerLetters) {
-    await clearStaleBannerMarkersLeftOfWriteRange(
-      context,
-      writeTargetRange.worksheet,
-      sourceRange.columnIndex,
-      targetStartRowIndex,
-      targetStartColIndex
-    );
-    _pStaleLeftClear = perfNow();
+    // staleLeftClear phase: no separate sync needed.  clearBannerMarkersAboveRange
+    // below receives sourceRange.columnIndex so it widens its scan to cover any
+    // columns between the source start and the write target start — absorbing the
+    // former clearStaleBannerMarkersLeftOfWriteRange work into a single sync.
+    _pStaleLeftClear = _pValueWrite;
 
-    // Pre-clear all existing banner markers above the write range before
-    // writing fresh ones.  Same reason as in runSignificanceFromSelection:
-    // vertically merged banner cells retain stale markers when re-run with
-    // different banner/wave settings.
-    await clearBannerMarkersAboveRange(context, writeTargetRange, _knownDims);
+    // Pre-clear all existing banner markers above the write range before writing
+    // fresh ones.  sourceRange.columnIndex widens the scan left so stale markers
+    // in label/leading-empty columns (written when dataColOffset was smaller) are
+    // also removed.  This first sync also flushes any pending data-body writes
+    // queued above.
+    await clearBannerMarkersAboveRange(context, writeTargetRange, _knownDims, sourceRange.columnIndex);
     _pBannerClear = perfNow();
 
     if (calculationSettings.respectBannerStructure && bannerStructure) {
@@ -3084,7 +3075,7 @@ async function clearSignificanceFromSelection() {
  *   "Brand (new)", or "Волна (квартал)" is preserved.
  * - Never writes to the data body or to the label column.
  */
-async function clearBannerMarkersAboveRange(context, targetRange, knownDimensions) {
+async function clearBannerMarkersAboveRange(context, targetRange, knownDimensions, sourceStartColIndex) {
   const BANNER_UPPER_SCAN_LIMIT = 5;
 
   let targetStartRowIndex, targetStartColumnIndex, targetColumnCount;
@@ -3110,11 +3101,22 @@ async function clearBannerMarkersAboveRange(context, targetRange, knownDimension
     return;
   }
 
+  // When sourceStartColIndex is provided and falls left of the write target,
+  // widen the scan to cover columns between the source start and the write
+  // target.  This absorbs the stale-left marker cleanup (previously handled
+  // by clearStaleBannerMarkersLeftOfWriteRange) into a single sync that also
+  // flushes any pending data writes, eliminating a separate round-trip.
+  const scanStartColIndex =
+    sourceStartColIndex !== undefined && sourceStartColIndex < targetStartColumnIndex
+      ? sourceStartColIndex
+      : targetStartColumnIndex;
+  const scanColCount = targetStartColumnIndex + targetColumnCount - scanStartColIndex;
+
   const bannerScanRange = targetRange.worksheet.getRangeByIndexes(
     targetStartRowIndex - totalScanRowCount,
-    targetStartColumnIndex,
+    scanStartColIndex,
     totalScanRowCount,
-    targetColumnCount
+    scanColCount
   );
 
   bannerScanRange.load("text");
@@ -3127,8 +3129,8 @@ async function clearBannerMarkersAboveRange(context, targetRange, knownDimension
   for (let rowOffset = 0; rowOffset < totalScanRowCount; rowOffset++) {
     const rowTexts = bannerTexts[rowOffset] || [];
 
-    for (let columnIndex = 0; columnIndex < targetColumnCount; columnIndex++) {
-      const currentText = rowTexts[columnIndex];
+    for (let colOffset = 0; colOffset < scanColCount; colOffset++) {
+      const currentText = rowTexts[colOffset];
 
       if (currentText === null || currentText === undefined || currentText === "") {
         continue;
@@ -3140,7 +3142,7 @@ async function clearBannerMarkersAboveRange(context, targetRange, knownDimension
 
       cellWriteQueue.push({
         rowIndex: targetStartRowIndex - totalScanRowCount + rowOffset,
-        colIndex: targetStartColumnIndex + columnIndex,
+        colIndex: scanStartColIndex + colOffset,
         text: removeTrailingBannerMarker(currentText),
       });
     }
@@ -5513,96 +5515,6 @@ function appendOrReplaceTrailingBannerMarker(rawText, label) {
   }
 
   return `${text} ${marker}`.trim();
-}
-
-/**
- * Clears RIT-generated banner markers from banner cells that are within the
- * full selected range but LEFT of writeTargetRange (i.e., label-column
- * positions that were stripped by detectEmbeddedLabelColumns).
- *
- * This removes stale markers written by pre-fix runs so they do not appear
- * alongside the correctly-placed new markers after an in-place Run without
- * an explicit Clear between runs.
- *
- * Only acts when writeTargetRange is narrower than the original selection
- * (i.e., at least one label column was stripped on the left).
- *
- * @param {Excel.RequestContext} context
- * @param {Excel.Worksheet} worksheet
- * @param {number} selectedRangeColIndex  - column index of the original selectedRange
- * @param {number} writeTargetRowIndex    - rowIndex of writeTargetRange (first data row)
- * @param {number} writeTargetColIndex    - columnIndex of writeTargetRange (first data col)
- */
-async function clearStaleBannerMarkersLeftOfWriteRange(
-  context,
-  worksheet,
-  selectedRangeColIndex,
-  writeTargetRowIndex,
-  writeTargetColIndex
-) {
-  const leftColumnCount = writeTargetColIndex - selectedRangeColIndex;
-
-  // Nothing to clean: write target starts at the selection boundary, or data
-  // starts in row 0 (no banner rows above it).
-  if (leftColumnCount <= 0 || writeTargetRowIndex === 0) {
-    return;
-  }
-
-  const BANNER_SCAN_LIMIT = 6;
-  const totalScanRows = Math.min(BANNER_SCAN_LIMIT, writeTargetRowIndex);
-
-  const bannerScanRange = worksheet.getRangeByIndexes(
-    writeTargetRowIndex - totalScanRows,
-    selectedRangeColIndex,
-    totalScanRows,
-    leftColumnCount
-  );
-  bannerScanRange.load("text");
-  await context.sync();
-
-  const writeQueue = [];
-
-  for (let rowOffset = 0; rowOffset < totalScanRows; rowOffset++) {
-    const rowTexts = bannerScanRange.text[rowOffset] || [];
-
-    for (let colOffset = 0; colOffset < leftColumnCount; colOffset++) {
-      const cellText = rowTexts[colOffset] || "";
-
-      if (!getTrailingBannerMarker(cellText)) {
-        continue;
-      }
-
-      writeQueue.push({
-        rowIndex: writeTargetRowIndex - totalScanRows + rowOffset,
-        colIndex: selectedRangeColIndex + colOffset,
-        text: removeTrailingBannerMarker(cellText),
-      });
-    }
-  }
-
-  if (writeQueue.length === 0) {
-    return;
-  }
-
-  // Batch adjacent same-row writes into range operations.
-  const writesByRow = new Map();
-  for (const item of writeQueue) {
-    if (!writesByRow.has(item.rowIndex)) writesByRow.set(item.rowIndex, []);
-    writesByRow.get(item.rowIndex).push(item);
-  }
-  for (const [rowIndex, items] of writesByRow) {
-    items.sort((a, b) => a.colIndex - b.colIndex);
-    let i = 0;
-    while (i < items.length) {
-      let j = i;
-      while (j + 1 < items.length && items[j + 1].colIndex === items[j].colIndex + 1) j++;
-      const texts = items.slice(i, j + 1).map(x => x.text);
-      worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1).values = [texts];
-      i = j + 1;
-    }
-  }
-
-  await context.sync();
 }
 
 /**
