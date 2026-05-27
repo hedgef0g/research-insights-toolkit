@@ -111,7 +111,8 @@ export function detectBannerStructure(bannerContext, settings = {}) {
   const columnDescriptors = buildColumnDescriptors({
     selectedColumnCount,
     lowerBannerRow: normalizedLowerBannerRow,
-    groupLevel: groupLevelResult.groupLevel,
+    upperScanRows,
+    fallbackGroupLevel: groupLevelResult.groupLevel,
   });
 
   markUpperLevelTotalsForSparseLowerLabels(columnDescriptors, upperScanRows);
@@ -209,22 +210,62 @@ function getLowerBannerRow(bannerContext) {
 /**
  * Builds column descriptors.
  */
-function buildColumnDescriptors({ selectedColumnCount, lowerBannerRow, groupLevel }) {
+function buildColumnDescriptors({
+  selectedColumnCount,
+  lowerBannerRow,
+  upperScanRows = [],
+  fallbackGroupLevel = null,
+}) {
   const descriptors = [];
+  const resolvedUpperRows = buildResolvedUpperBannerRows(
+    upperScanRows,
+    lowerBannerRow,
+    selectedColumnCount
+  );
 
   for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
     const lowerLabel = normalizeRawBannerCellValue(lowerBannerRow[columnIndex]);
     const normalizedLowerLabel = normalizeBannerLabel(lowerLabel);
-
-    const groupLabel = groupLevel
-      ? normalizeRawBannerCellValue(groupLevel.labels[columnIndex])
+    const columnBannerEntries = buildColumnBannerEntries(
+      resolvedUpperRows,
+      lowerLabel,
+      normalizedLowerLabel,
+      columnIndex
+    );
+    const comparisonGroupEntries = deriveComparisonGroupEntries(
+      columnBannerEntries,
+      resolvedUpperRows.length > 0
+    );
+    const effectiveComparisonGroupEntries = shouldClearStandaloneSparseTotalGroupEntries(
+      columnBannerEntries,
+      comparisonGroupEntries,
+      lowerLabel
+    )
+      ? []
+      : comparisonGroupEntries;
+    const fallbackGroupLabel = fallbackGroupLevel
+      ? normalizeRawBannerCellValue(fallbackGroupLevel.labels[columnIndex])
       : DEFAULT_GROUP_LABEL;
-
-    const normalizedGroupLabel = normalizeBannerLabel(groupLabel);
-
-    const comparisonGroupKey = groupLevel
-      ? buildGroupKey(groupLabel, groupLevel.spansByColumnIndex[columnIndex])
-      : DEFAULT_GROUP_KEY;
+    const groupLabel =
+      effectiveComparisonGroupEntries.length > 0
+        ? effectiveComparisonGroupEntries[effectiveComparisonGroupEntries.length - 1].label
+        : fallbackGroupLabel;
+    const comparisonGroupKey =
+      effectiveComparisonGroupEntries.length > 0
+        ? buildHierarchicalGroupKey(effectiveComparisonGroupEntries)
+        : fallbackGroupLevel
+          ? buildGroupKey(
+              fallbackGroupLabel,
+              fallbackGroupLevel.spansByColumnIndex[columnIndex]
+            )
+          : DEFAULT_GROUP_KEY;
+    const comparisonGroupPath = effectiveComparisonGroupEntries.map((entry) => entry.label);
+    const groupLevelRowOffset =
+      effectiveComparisonGroupEntries.length > 0
+        ? effectiveComparisonGroupEntries[effectiveComparisonGroupEntries.length - 1].rowOffset
+        : fallbackGroupLevel
+          ? fallbackGroupLevel.rowOffset
+          : null;
 
     const isTotal = isTotalBannerLabel(normalizedLowerLabel);
 
@@ -234,11 +275,12 @@ function buildColumnDescriptors({ selectedColumnCount, lowerBannerRow, groupLeve
       lowerLabel,
       normalizedLowerLabel,
 
-      bannerPath: groupLevel ? [groupLabel, lowerLabel] : [lowerLabel],
-      displayLabel: groupLevel ? `${groupLabel} / ${lowerLabel}` : lowerLabel,
+      bannerPath: columnBannerEntries.map((entry) => entry.label),
+      displayLabel: formatColumnDisplayLabel(columnBannerEntries, lowerLabel),
 
       comparisonGroupKey,
-      comparisonGroupLabel: groupLevel ? groupLabel : DEFAULT_GROUP_LABEL,
+      comparisonGroupLabel: groupLabel,
+      comparisonGroupPath,
 
       isTotal,
       totalType: isTotal ? TOTAL_TYPE.LOCAL : null,
@@ -248,13 +290,194 @@ function buildColumnDescriptors({ selectedColumnCount, lowerBannerRow, groupLeve
 
       source: {
         lowerLevelRowOffset: 0,
-        groupLevelRowOffset: groupLevel ? groupLevel.rowOffset : null,
+        groupLevelRowOffset,
         mergeArea: null,
       },
     });
   }
 
   return descriptors;
+}
+
+function buildResolvedUpperBannerRows(upperScanRows, lowerBannerRow, selectedColumnCount) {
+  const resolvedRows = [];
+
+  for (let rowIndex = 0; rowIndex < upperScanRows.length; rowIndex++) {
+    const row = normalizeBannerRowLength(upperScanRows[rowIndex], selectedColumnCount);
+    const spans = selectBestResolvedUpperRowSpans(
+      row,
+      lowerBannerRow,
+      selectedColumnCount
+    );
+    const labels = Array(selectedColumnCount).fill("");
+    const spansByColumnIndex = {};
+
+    for (const span of spans) {
+      for (const columnIndex of span.columnIndexes) {
+        labels[columnIndex] = span.label;
+        spansByColumnIndex[columnIndex] = span;
+      }
+    }
+
+    resolvedRows.push({
+      rowOffset: -(rowIndex + 1),
+      labels,
+      spansByColumnIndex,
+    });
+  }
+
+  return resolvedRows;
+}
+
+function selectBestResolvedUpperRowSpans(row, lowerBannerRow, selectedColumnCount) {
+  const repeatedLabelResult = detectRepeatedLabelGroupLevelInRow(row, selectedColumnCount, 0);
+  const repeatedSpans = repeatedLabelResult.groupLevel ? repeatedLabelResult.groupLevel.spans : [];
+  const reconstructedSpans = buildResolvedReconstructedSpans(
+    row,
+    lowerBannerRow,
+    selectedColumnCount
+  );
+
+  if (scoreResolvedUpperRowSpans(repeatedSpans) > scoreResolvedUpperRowSpans(reconstructedSpans)) {
+    return repeatedSpans;
+  }
+
+  return reconstructedSpans;
+}
+
+function buildResolvedReconstructedSpans(row, lowerBannerRow, selectedColumnCount) {
+  const rawSpans = buildReconstructedSpansFromUpperRow(row, lowerBannerRow, selectedColumnCount);
+
+  return mergeAdjacentWaveValueSpans(rawSpans, lowerBannerRow);
+}
+
+function scoreResolvedUpperRowSpans(spans) {
+  if (!spans || spans.length === 0) {
+    return 0;
+  }
+
+  return spans.reduce((score, span) => {
+    if (!span || !span.label) {
+      return score;
+    }
+
+    return span.columnIndexes && span.columnIndexes.length > 1
+      ? score + span.columnIndexes.length
+      : score;
+  }, 0);
+}
+
+function buildColumnBannerEntries(
+  resolvedUpperRows,
+  lowerLabel,
+  normalizedLowerLabel,
+  columnIndex
+) {
+  const entries = [];
+
+  for (let rowIndex = resolvedUpperRows.length - 1; rowIndex >= 0; rowIndex--) {
+    const resolvedRow = resolvedUpperRows[rowIndex];
+    const label = normalizeRawBannerCellValue(resolvedRow.labels[columnIndex]);
+    const normalizedLabel = normalizeBannerLabel(label);
+    const span = resolvedRow.spansByColumnIndex[columnIndex] || null;
+
+    if (!label) {
+      continue;
+    }
+
+    if (
+      lowerLabel &&
+      span &&
+      span.startColumnIndex === span.endColumnIndex
+    ) {
+      continue;
+    }
+
+    const previousEntry = entries[entries.length - 1];
+
+    if (previousEntry && previousEntry.normalizedLabel === normalizedLabel) {
+      continue;
+    }
+
+    entries.push({
+      label,
+      normalizedLabel,
+      rowOffset: resolvedRow.rowOffset,
+      span,
+      source: "upper",
+    });
+  }
+
+  if (lowerLabel) {
+    const previousEntry = entries[entries.length - 1];
+
+    if (!previousEntry || previousEntry.normalizedLabel !== normalizedLowerLabel) {
+      entries.push({
+        label: lowerLabel,
+        normalizedLabel: normalizedLowerLabel,
+        rowOffset: 0,
+        span: {
+          startColumnIndex: columnIndex,
+          endColumnIndex: columnIndex,
+        },
+        source: "lower",
+      });
+    }
+  }
+
+  return entries;
+}
+
+function deriveComparisonGroupEntries(columnBannerEntries, hasUpperBannerRows) {
+  if (!columnBannerEntries || columnBannerEntries.length === 0) {
+    return [];
+  }
+
+  const upperEntries = columnBannerEntries.filter((entry) => entry.source === "upper");
+
+  if (!hasUpperBannerRows || upperEntries.length === 0) {
+    return [];
+  }
+
+  if (columnBannerEntries.length === 1) {
+    return [columnBannerEntries[0]];
+  }
+
+  const candidateAncestorEntries = columnBannerEntries.slice(0, -1);
+  const semanticAncestorEntries = candidateAncestorEntries.filter(
+    (entry) => !isTechnicalWaveOrValueLabel(entry.label)
+  );
+
+  if (semanticAncestorEntries.length > 0) {
+    return semanticAncestorEntries;
+  }
+
+  if (candidateAncestorEntries.length > 0) {
+    return candidateAncestorEntries;
+  }
+
+  return [columnBannerEntries[0]];
+}
+
+function shouldClearStandaloneSparseTotalGroupEntries(
+  columnBannerEntries,
+  comparisonGroupEntries,
+  lowerLabel
+) {
+  return (
+    columnBannerEntries.length === 1 &&
+    !lowerLabel &&
+    comparisonGroupEntries.length === 1 &&
+    isTotalBannerLabel(comparisonGroupEntries[0].normalizedLabel)
+  );
+}
+
+function formatColumnDisplayLabel(columnBannerEntries, lowerLabel) {
+  if (!columnBannerEntries || columnBannerEntries.length === 0) {
+    return lowerLabel;
+  }
+
+  return columnBannerEntries.map((entry) => entry.label).join(" / ");
 }
 
 /**
@@ -279,11 +502,8 @@ function buildGroupsFromColumnDescriptors(
 
       groupsByKey.set(descriptor.comparisonGroupKey, {
         groupKey: descriptor.comparisonGroupKey,
-        label: descriptor.comparisonGroupLabel,
-        bannerPath:
-          descriptor.comparisonGroupLabel === DEFAULT_GROUP_LABEL
-            ? []
-            : [descriptor.comparisonGroupLabel],
+        label: descriptor.comparisonGroupLabel || DEFAULT_GROUP_LABEL,
+        bannerPath: descriptor.comparisonGroupPath || [],
         columnIndexes: [],
         localTotalColumnIndexes: [],
         hasLocalTotal: false,
@@ -749,6 +969,25 @@ function buildGroupKey(groupLabel, span) {
     span.startColumnIndex,
     span.endColumnIndex,
   ].join(":");
+}
+
+function buildHierarchicalGroupKey(groupEntries) {
+  if (!groupEntries || groupEntries.length === 0) {
+    return DEFAULT_GROUP_KEY;
+  }
+
+  return `group:${groupEntries
+    .map((entry) => {
+      const span = entry.span || {};
+
+      return [
+        entry.normalizedLabel || "unknown",
+        entry.rowOffset,
+        span.startColumnIndex ?? "unknown",
+        span.endColumnIndex ?? "unknown",
+      ].join(":");
+    })
+    .join(">")}`;
 }
 
 /**
