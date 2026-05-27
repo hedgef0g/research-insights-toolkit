@@ -97,7 +97,7 @@ import {
   getContentRowReference,
 } from "./taskpane-inventory-formatters";
 
-import { perfNow, perfElapsed, perfLog } from "./taskpane-performance";
+import { perfNow, perfElapsed, perfLog, perfEnabled } from "./taskpane-performance";
 
 const SCAN_CELL_LIMIT = 250000;
 const INVENTORY_CONTENT_SHEET_NAME = "Content";
@@ -333,6 +333,48 @@ function initLanguageSelector() {
       updateCheckHints();
     });
   });
+}
+
+function createAggregatedWriterPerfDetails() {
+  return {
+    tablesWithWriterDetails: 0,
+    buildMatricesMs: 0,
+    numberFormatWriteMs: 0,
+    valuesWriteMs: 0,
+    boldFormatMs: 0,
+    fillFormatMs: 0,
+    boldCommandCount: 0,
+    fillCommandCount: 0,
+    boldRectCommandCountEstimate: 0,
+    fillRectCommandCountEstimate: 0,
+    maxBoldCommandCount: 0,
+    maxFillCommandCount: 0,
+  };
+}
+
+function mergeWriterPerfDetails(aggregate, writerDetails) {
+  if (!aggregate || !writerDetails) {
+    return;
+  }
+
+  aggregate.tablesWithWriterDetails += 1;
+  aggregate.buildMatricesMs += writerDetails.buildMatricesMs || 0;
+  aggregate.numberFormatWriteMs += writerDetails.numberFormatWriteMs || 0;
+  aggregate.valuesWriteMs += writerDetails.valuesWriteMs || 0;
+  aggregate.boldFormatMs += writerDetails.boldFormatMs || 0;
+  aggregate.fillFormatMs += writerDetails.fillFormatMs || 0;
+  aggregate.boldCommandCount += writerDetails.boldCommandCount || 0;
+  aggregate.fillCommandCount += writerDetails.fillCommandCount || 0;
+  aggregate.boldRectCommandCountEstimate += writerDetails.boldRectCommandCountEstimate || 0;
+  aggregate.fillRectCommandCountEstimate += writerDetails.fillRectCommandCountEstimate || 0;
+  aggregate.maxBoldCommandCount = Math.max(
+    aggregate.maxBoldCommandCount,
+    writerDetails.boldCommandCount || 0
+  );
+  aggregate.maxFillCommandCount = Math.max(
+    aggregate.maxFillCommandCount,
+    writerDetails.fillCommandCount || 0
+  );
 }
 
 // ─── Action + Scope shell (issue #167 PR1) ───────────────────────────────────
@@ -688,12 +730,13 @@ async function runSignificanceFromSelection() {
     keepMarkersOnlyInAllowedRows(fullCellResultMatrix, allowedMarkerRows);
 
     const _tWrite = perfNow();
-    writeCellResultsToSelectedRange(
+    const writerDetails = writeCellResultsToSelectedRange(
       writeTargetRange,
       textForCalculation,
       fullCellResultMatrix,
       detectionResult,
-      calculationSettings
+      calculationSettings,
+      { captureWriterDetails: perfEnabled() }
     );
 
     const _knownDims = {
@@ -761,6 +804,7 @@ async function runSignificanceFromSelection() {
     perfLog("runSignificanceFromSelection", {
       interpretMs: _tWrite - _tInterp,
       writeMs: perfElapsed(_tWrite),
+      ...(writerDetails ? { writerDetails } : {}),
       totalMs: perfElapsed(_t0),
     });
     setStatusMessage(
@@ -936,12 +980,13 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
 
   const _pCalc = perfNow();
 
-  writeCellResultsToSelectedRange(
+  const writerDetails = writeCellResultsToSelectedRange(
     writeTargetRange,
     textForCalculation,
     fullCellResultMatrix,
     detectionResult,
-    calculationSettings
+    calculationSettings,
+    { captureWriterDetails: perfEnabled() }
   );
 
   const _knownDims = {
@@ -1004,6 +1049,7 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
         bannerClearMs: _pBannerClear - _pStaleLeftClear,
         bannerWriteMs: _pBannerWrite - _pBannerClear,
         finalSyncMs: _pWrite - _pBannerWrite,
+        ...(writerDetails ? { writerDetails } : {}),
       },
     } : null,
   };
@@ -1404,7 +1450,20 @@ async function runAutoSignificance() {
   // context), we record that table as an error, exit the shared context, and
   // fall back to per-table Excel.run for any remaining candidates.
   const _tLoop = perfNow();
-  const _perfPhases = { loadMs: 0, interpMs: 0, calcMs: 0, writeMs: 0, writeDetails: { valueWriteMs: 0, staleLeftClearMs: 0, bannerClearMs: 0, bannerWriteMs: 0, finalSyncMs: 0 } };
+  const _perfPhases = {
+    loadMs: 0,
+    interpMs: 0,
+    calcMs: 0,
+    writeMs: 0,
+    writeDetails: {
+      valueWriteMs: 0,
+      staleLeftClearMs: 0,
+      bannerClearMs: 0,
+      bannerWriteMs: 0,
+      finalSyncMs: 0,
+      writerDetails: createAggregatedWriterPerfDetails(),
+    },
+  };
   let _batchEndedAt = 0;
   try {
     await Excel.run(async (context) => {
@@ -1438,6 +1497,10 @@ async function runAutoSignificance() {
               _perfPhases.writeDetails.bannerClearMs += result._phasesMs.writeDetails.bannerClearMs;
               _perfPhases.writeDetails.bannerWriteMs += result._phasesMs.writeDetails.bannerWriteMs;
               _perfPhases.writeDetails.finalSyncMs += result._phasesMs.writeDetails.finalSyncMs;
+              mergeWriterPerfDetails(
+                _perfPhases.writeDetails.writerDetails,
+                result._phasesMs.writeDetails.writerDetails
+              );
             }
           }
           reportRows.push({
@@ -1504,6 +1567,10 @@ async function runAutoSignificance() {
           _perfPhases.writeDetails.bannerClearMs += result._phasesMs.writeDetails.bannerClearMs;
           _perfPhases.writeDetails.bannerWriteMs += result._phasesMs.writeDetails.bannerWriteMs;
           _perfPhases.writeDetails.finalSyncMs += result._phasesMs.writeDetails.finalSyncMs;
+          mergeWriterPerfDetails(
+            _perfPhases.writeDetails.writerDetails,
+            result._phasesMs.writeDetails.writerDetails
+          );
         }
       }
       reportRows.push({
@@ -2159,7 +2226,20 @@ async function runCurrentSheetSignificance() {
   // sync error we record that table as an error, exit the shared context, and
   // continue with per-table Excel.run for any remaining candidates.
   const _tLoop = perfNow();
-  const _perfPhases = { loadMs: 0, interpMs: 0, calcMs: 0, writeMs: 0, writeDetails: { valueWriteMs: 0, staleLeftClearMs: 0, bannerClearMs: 0, bannerWriteMs: 0, finalSyncMs: 0 } };
+  const _perfPhases = {
+    loadMs: 0,
+    interpMs: 0,
+    calcMs: 0,
+    writeMs: 0,
+    writeDetails: {
+      valueWriteMs: 0,
+      staleLeftClearMs: 0,
+      bannerClearMs: 0,
+      bannerWriteMs: 0,
+      finalSyncMs: 0,
+      writerDetails: createAggregatedWriterPerfDetails(),
+    },
+  };
   let _batchEndedAt = 0;
   try {
     await Excel.run(async (context) => {
@@ -2193,6 +2273,10 @@ async function runCurrentSheetSignificance() {
               _perfPhases.writeDetails.bannerClearMs += result._phasesMs.writeDetails.bannerClearMs;
               _perfPhases.writeDetails.bannerWriteMs += result._phasesMs.writeDetails.bannerWriteMs;
               _perfPhases.writeDetails.finalSyncMs += result._phasesMs.writeDetails.finalSyncMs;
+              mergeWriterPerfDetails(
+                _perfPhases.writeDetails.writerDetails,
+                result._phasesMs.writeDetails.writerDetails
+              );
             }
           }
           reportRows.push({
@@ -2259,6 +2343,10 @@ async function runCurrentSheetSignificance() {
           _perfPhases.writeDetails.bannerClearMs += result._phasesMs.writeDetails.bannerClearMs;
           _perfPhases.writeDetails.bannerWriteMs += result._phasesMs.writeDetails.bannerWriteMs;
           _perfPhases.writeDetails.finalSyncMs += result._phasesMs.writeDetails.finalSyncMs;
+          mergeWriterPerfDetails(
+            _perfPhases.writeDetails.writerDetails,
+            result._phasesMs.writeDetails.writerDetails
+          );
         }
       }
       reportRows.push({
