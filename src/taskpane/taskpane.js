@@ -56,6 +56,7 @@ import {
   appendSelectedRangeGuardrailMessages,
   formatStatusWithSelectedRangeGuardrails,
   buildCheckResolverMessage,
+  runningStatusMessage,
 } from "./taskpane-status";
 
 import {
@@ -447,6 +448,7 @@ function initActionScopeShell() {
  */
 async function runSignificanceFromSelection() {
   const _t0 = perfNow();
+  setStatusMessage(runningStatusMessage("run", "table"));
   await Excel.run(async (context) => {
     const calculationSettings = readCalculationSettingsFromPanel();
     if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
@@ -1322,6 +1324,8 @@ async function runAutoSignificance() {
     return;
   }
 
+  setStatusMessage(runningStatusMessage("run", "workbook"));
+
   // Collect inventory to identify eligible candidates.
   const _tScan = perfNow();
   let inventoryResults;
@@ -1624,6 +1628,8 @@ async function runAutoCurrentTableSignificance() {
     return;
   }
 
+  setStatusMessage(runningStatusMessage("run", "table"));
+
   let resolverResult = null;
 
   try {
@@ -1769,6 +1775,7 @@ async function runAutoCurrentTableSignificance() {
  * the arbitrary selected range — the clear target is always the resolver result.
  */
 async function clearAutoCurrentTableSignificance() {
+  setStatusMessage(runningStatusMessage("clear", "table"));
   let resolverResult = null;
 
   try {
@@ -1953,6 +1960,7 @@ async function clearSignificanceForRange(sheetName, rangeAddress) {
  * of running the significance pipeline.
  */
 async function clearAutoSignificance() {
+  setStatusMessage(runningStatusMessage("clear", "workbook"));
   let inventoryResults;
   try {
     await Excel.run(async (context) => {
@@ -2075,6 +2083,8 @@ async function runCurrentSheetSignificance() {
     );
     return;
   }
+
+  setStatusMessage(runningStatusMessage("run", "sheet"));
 
   const _tScan = perfNow();
   let inventoryResults;
@@ -2329,6 +2339,7 @@ async function runCurrentSheetSignificance() {
  * collectActiveSheetInventoryResults(). Content sheet is silently ignored.
  */
 async function clearCurrentSheetSignificance() {
+  setStatusMessage(runningStatusMessage("clear", "sheet"));
   let inventoryResults;
   try {
     await Excel.run(async (context) => {
@@ -2480,6 +2491,7 @@ async function checkTableForRange(sheetName, rangeAddress, calculationSettings) 
  */
 async function runCurrentSheetCheck() {
   const calculationSettings = readCalculationSettingsFromPanel();
+  setCheckMessage(runningStatusMessage("check", "sheet"));
 
   let inventoryResults;
   let activeSheetName = "";
@@ -2665,6 +2677,7 @@ async function runCurrentSheetCheck() {
  */
 async function runWorkbookCheck() {
   const calculationSettings = readCalculationSettingsFromPanel();
+  setCheckMessage(runningStatusMessage("check", "workbook"));
 
   let inventoryResults;
   try {
@@ -2816,6 +2829,7 @@ function calculateBlockResults(cleanedValues, calculationBlock, calculationSetti
  * User-facing cleanup button.
  */
 async function clearSignificanceFromSelection() {
+  setStatusMessage(runningStatusMessage("clear"));
   await Excel.run(async (context) => {
     // getSelectedRange() throws a RichApi.Error for non-contiguous (Ctrl+Click
     // multi-area) selections. Catch that error here and surface a user-facing
@@ -3199,6 +3213,7 @@ async function checkSelectedRangePreview(context, sheetName, rangeAddress, setti
  * in which case it writes a single row to the Run report sheet.
  */
 async function runCheckTable() {
+  setCheckMessage(runningStatusMessage("check"));
   await Excel.run(async (context) => {
     const calculationSettings = readCalculationSettingsFromPanel();
 
@@ -3386,6 +3401,7 @@ async function runCheckTable() {
  * to the workbook.
  */
 async function runCheckSelectedRange() {
+  setCheckMessage(runningStatusMessage("check"));
   await Excel.run(async (context) => {
     const calculationSettings = readCalculationSettingsFromPanel();
 
@@ -4519,6 +4535,7 @@ async function writeInventoryContentSheet(context, inventoryResults) {
 }
 
 async function runTableInventory() {
+  setInventoryMessage(runningStatusMessage("content"));
   await Excel.run(async (context) => {
     const _t0 = perfNow();
     const inventoryResults = await collectWorkbookInventoryResults(context, readCalculationSettingsFromPanel());
