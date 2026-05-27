@@ -3048,10 +3048,22 @@ async function clearBannerMarkersAboveRange(context, targetRange, knownDimension
     return;
   }
 
-  for (const { rowIndex, colIndex, text } of cellWriteQueue) {
-    const cell = targetRange.worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1);
-
-    cell.values = [[text]];
+  // Batch adjacent same-row writes into range operations.
+  const writesByRow = new Map();
+  for (const item of cellWriteQueue) {
+    if (!writesByRow.has(item.rowIndex)) writesByRow.set(item.rowIndex, []);
+    writesByRow.get(item.rowIndex).push(item);
+  }
+  for (const [rowIndex, items] of writesByRow) {
+    items.sort((a, b) => a.colIndex - b.colIndex);
+    let i = 0;
+    while (i < items.length) {
+      let j = i;
+      while (j + 1 < items.length && items[j + 1].colIndex === items[j].colIndex + 1) j++;
+      const texts = items.slice(i, j + 1).map(x => x.text);
+      targetRange.worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1).values = [texts];
+      i = j + 1;
+    }
   }
 
   await context.sync();
@@ -4901,10 +4913,22 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
     });
   }
 
-  for (const { rowIndex, colIndex, text } of cellWriteQueue) {
-    const cell = selectedRange.worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1);
-
-    cell.values = [[text]];
+  // Batch adjacent same-row writes into range operations.
+  const writesByRow = new Map();
+  for (const item of cellWriteQueue) {
+    if (!writesByRow.has(item.rowIndex)) writesByRow.set(item.rowIndex, []);
+    writesByRow.get(item.rowIndex).push(item);
+  }
+  for (const [rowIndex, items] of writesByRow) {
+    items.sort((a, b) => a.colIndex - b.colIndex);
+    let i = 0;
+    while (i < items.length) {
+      let j = i;
+      while (j + 1 < items.length && items[j + 1].colIndex === items[j].colIndex + 1) j++;
+      const texts = items.slice(i, j + 1).map(x => x.text);
+      selectedRange.worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1).values = [texts];
+      i = j + 1;
+    }
   }
 
   await context.sync();
@@ -5051,6 +5075,10 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
     }
 
     // Normal case: lower banner cell is non-empty; write in place.
+    if (nextText === currentText) {
+      continue;
+    }
+
     cellWriteQueue.push({
       rowIndex: selectedStartRowIndex - 1,
       colIndex: selectedStartColumnIndex + columnIndex,
@@ -5058,11 +5086,25 @@ async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
     });
   }
 
-  for (const { rowIndex, colIndex, text } of cellWriteQueue) {
-    const cell = selectedRange.worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1);
-
-    cell.numberFormat = [["@"]];
-    cell.values = [[text]];
+  // Batch adjacent same-row writes into range operations to reduce Office.js
+  // command count per sync (N columns → 1-2 range writes per banner row).
+  const writesByRow = new Map();
+  for (const item of cellWriteQueue) {
+    if (!writesByRow.has(item.rowIndex)) writesByRow.set(item.rowIndex, []);
+    writesByRow.get(item.rowIndex).push(item);
+  }
+  for (const [rowIndex, items] of writesByRow) {
+    items.sort((a, b) => a.colIndex - b.colIndex);
+    let i = 0;
+    while (i < items.length) {
+      let j = i;
+      while (j + 1 < items.length && items[j + 1].colIndex === items[j].colIndex + 1) j++;
+      const texts = items.slice(i, j + 1).map(x => x.text);
+      const range = selectedRange.worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1);
+      range.numberFormat = [texts.map(() => "@")];
+      range.values = [texts];
+      i = j + 1;
+    }
   }
 
   await context.sync();
@@ -5437,8 +5479,22 @@ async function clearStaleBannerMarkersLeftOfWriteRange(
     return;
   }
 
-  for (const { rowIndex, colIndex, text } of writeQueue) {
-    worksheet.getRangeByIndexes(rowIndex, colIndex, 1, 1).values = [[text]];
+  // Batch adjacent same-row writes into range operations.
+  const writesByRow = new Map();
+  for (const item of writeQueue) {
+    if (!writesByRow.has(item.rowIndex)) writesByRow.set(item.rowIndex, []);
+    writesByRow.get(item.rowIndex).push(item);
+  }
+  for (const [rowIndex, items] of writesByRow) {
+    items.sort((a, b) => a.colIndex - b.colIndex);
+    let i = 0;
+    while (i < items.length) {
+      let j = i;
+      while (j + 1 < items.length && items[j + 1].colIndex === items[j].colIndex + 1) j++;
+      const texts = items.slice(i, j + 1).map(x => x.text);
+      worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1).values = [texts];
+      i = j + 1;
+    }
   }
 
   await context.sync();
