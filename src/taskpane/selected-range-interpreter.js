@@ -261,7 +261,7 @@ function isEmbeddedUnitColumn(cleanedValues, col, rowCount) {
  * Returns 0 for strict numeric selections so the existing Run/Clear flow is
  * unchanged.
  */
-function detectEmbeddedLabelColumns(cleanedValues) {
+export function detectEmbeddedLabelColumns(cleanedValues) {
   if (!Array.isArray(cleanedValues) || !Array.isArray(cleanedValues[0])) return 0;
   const colCount = cleanedValues[0].length;
   if (colCount < 2) return 0;
