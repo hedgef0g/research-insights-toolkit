@@ -39,6 +39,7 @@ import { filterWorkbookCandidates } from "../core/batch-candidate-filter";
 
 import {
   interpretSelectedRange,
+  detectEmbeddedLabelColumns,
   detectLeadingEmptyColumns,
 } from "./selected-range-interpreter";
 
@@ -1928,8 +1929,26 @@ async function clearSignificanceForRange(sheetName, rangeAddress) {
       const bodyRowCount = normalized.valuesForCalculation.length;
       let bodyColCount = normalized.valuesForCalculation[0].length;
       let effectiveClearColOffset = normalized.dataColOffset;
+      let textForLeadingEmptyCheck = normalized.textForCalculation;
 
-      const clearLeadingEmptyCols = detectLeadingEmptyColumns(normalized.textForCalculation);
+      // Secondary embedded-label-column check (mirrors interpretSelectedRange
+      // State 2 / clearSignificanceFromSelection).  Protects auto-clear ranges
+      // whose label column has mixed text + numeric-looking values from being
+      // overwritten when normalizeSelectedRange leaves col[0] inside the body.
+      if (normalized.dataColOffset === 0) {
+        const additionalLabelCols = detectEmbeddedLabelColumns(
+          normalized.valuesForCalculation
+        );
+        if (additionalLabelCols > 0) {
+          effectiveClearColOffset += additionalLabelCols;
+          bodyColCount -= additionalLabelCols;
+          textForLeadingEmptyCheck = normalized.textForCalculation.map(
+            (row) => row.slice(additionalLabelCols)
+          );
+        }
+      }
+
+      const clearLeadingEmptyCols = detectLeadingEmptyColumns(textForLeadingEmptyCheck);
       if (clearLeadingEmptyCols > 0) {
         bodyColCount -= clearLeadingEmptyCols;
         effectiveClearColOffset += clearLeadingEmptyCols;
@@ -1943,14 +1962,25 @@ async function clearSignificanceForRange(sheetName, rangeAddress) {
         .getCell(normalized.dataRowOffset, effectiveClearColOffset)
         .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
     } else {
-      const leadingBlankColsForClear = detectLeadingEmptyColumns(selectedText);
+      // Pass-through mirrors interpretSelectedRange / clearSignificanceFromSelection:
+      // prefer detectEmbeddedLabelColumns to keep row labels out of the clear
+      // target on wide tables; fall back to detectLeadingEmptyColumns otherwise.
+      const embeddedLabelColsForClear = detectEmbeddedLabelColumns(cleanedValues);
+      const leadingBlankColsForClear =
+        embeddedLabelColsForClear === 0
+          ? detectLeadingEmptyColumns(selectedText)
+          : 0;
+      const skipLeftCols =
+        embeddedLabelColsForClear > 0
+          ? embeddedLabelColsForClear
+          : leadingBlankColsForClear;
 
-      if (leadingBlankColsForClear > 0) {
+      if (skipLeftCols > 0) {
         clearTargetRange = sourceRange
-          .getCell(0, leadingBlankColsForClear)
+          .getCell(0, skipLeftCols)
           .getResizedRange(
             sourceRange.rowCount - 1,
-            sourceRange.columnCount - leadingBlankColsForClear - 1
+            sourceRange.columnCount - skipLeftCols - 1
           );
       } else {
         clearTargetRange = sourceRange;
@@ -2962,14 +2992,35 @@ async function clearSignificanceFromSelection() {
       const bodyRowCount = normalized.valuesForCalculation.length;
       let bodyColCount = normalized.valuesForCalculation[0].length;
       let effectiveClearColOffset = normalized.dataColOffset;
+      let textForLeadingEmptyCheck = normalized.textForCalculation;
 
-      // Mirror the tertiary strip in interpretSelectedRange State 2: the
-      // normalizer may leave leading all-blank helper columns (e.g. column B
-      // in a mean-only table) inside the normalized body.  Clear must exclude
+      // Secondary embedded-label-column check (mirrors interpretSelectedRange
+      // State 2).  The normalizer leaves the label column inside
+      // valuesForCalculation when col[0] text fraction is uncertain (mix of
+      // text and numeric-looking labels, e.g. "Нет", "1", "2", "BASE").
+      // detectEmbeddedLabelColumns recognises that shape by looking for at
+      // least one genuine text cell in col[0]; without it, Clear's target
+      // would still include the row-label column and overwrite label text.
+      if (normalized.dataColOffset === 0) {
+        const additionalLabelCols = detectEmbeddedLabelColumns(
+          normalized.valuesForCalculation
+        );
+        if (additionalLabelCols > 0) {
+          effectiveClearColOffset += additionalLabelCols;
+          bodyColCount -= additionalLabelCols;
+          textForLeadingEmptyCheck = normalized.textForCalculation.map(
+            (row) => row.slice(additionalLabelCols)
+          );
+        }
+      }
+
+      // Tertiary strip mirrors interpretSelectedRange State 2: the normalizer
+      // may leave leading all-blank helper columns (e.g. column B in a
+      // mean-only table) inside the normalized body.  Clear must exclude
       // those same columns so it does not widen the clear target beyond the
       // real data body.
       const clearLeadingEmptyCols = detectLeadingEmptyColumns(
-        normalized.textForCalculation
+        textForLeadingEmptyCheck
       );
       if (clearLeadingEmptyCols > 0) {
         bodyColCount -= clearLeadingEmptyCols;
@@ -2985,19 +3036,31 @@ async function clearSignificanceFromSelection() {
         .getCell(normalized.dataRowOffset, effectiveClearColOffset)
         .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
     } else {
-      // Pass-through: the selection is a clean numeric-only range.
-      // Detect leading all-blank helper columns and exclude them from the
-      // clear target so that Clear does not remove fill/formatting from helper
-      // cells.  Uses the same detectLeadingEmptyColumns function as Run's
-      // interpretSelectedRange passThrough path.
-      const leadingBlankColsForClear = detectLeadingEmptyColumns(selectedText);
+      // Pass-through.  Mirror interpretSelectedRange pass-through path
+      // (selected-range-interpreter.js): first try detectEmbeddedLabelColumns
+      // (recognises a leftmost column with at least one genuine text cell,
+      // optionally followed by uniform unit columns), and only fall back to
+      // detectLeadingEmptyColumns when no embedded label column was found.
+      // This excludes row labels from the clear target on wide tables whose
+      // col[0] text fraction sits just below the normalizer pass-through gate
+      // (e.g. labels "Нет"/"1"/"2"/"BASE") so the original strict workflow
+      // for pure numeric selections is preserved.
+      const embeddedLabelColsForClear = detectEmbeddedLabelColumns(cleanedValues);
+      const leadingBlankColsForClear =
+        embeddedLabelColsForClear === 0
+          ? detectLeadingEmptyColumns(selectedText)
+          : 0;
+      const skipLeftCols =
+        embeddedLabelColsForClear > 0
+          ? embeddedLabelColsForClear
+          : leadingBlankColsForClear;
 
-      if (leadingBlankColsForClear > 0) {
+      if (skipLeftCols > 0) {
         clearTargetRange = selectedRange
-          .getCell(0, leadingBlankColsForClear)
+          .getCell(0, skipLeftCols)
           .getResizedRange(
             selectedRange.rowCount - 1,
-            selectedRange.columnCount - leadingBlankColsForClear - 1
+            selectedRange.columnCount - skipLeftCols - 1
           );
       } else {
         clearTargetRange = selectedRange;
