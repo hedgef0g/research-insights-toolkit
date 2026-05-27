@@ -125,6 +125,24 @@ function isTextOnlyCell(cell) {
   return !isNumericCell(cell);
 }
 
+function isLikelyOrdinalScaleLabelCell(cell) {
+  if (typeof cell === "number") {
+    return Number.isInteger(cell) && cell >= 0 && cell <= 10;
+  }
+
+  if (typeof cell !== "string") {
+    return false;
+  }
+
+  const trimmed = cell.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return false;
+  }
+
+  const value = Number(trimmed);
+  return Number.isInteger(value) && value >= 0 && value <= 10;
+}
+
 function cleanStructuralTextCell(cell) {
   if (typeof cell !== "string") {
     return cell;
@@ -474,8 +492,13 @@ function detectLabelColumns(values, bodyStartRow, bodyEndRow, colCount) {
   }
 
   const col0Frac = computeTextFraction(values, bodyStartRow, bodyEndRow, 0, 0);
+  const col0LooksLikeRatingScale = isLikelyRatingScaleLabelColumn(
+    values,
+    bodyStartRow,
+    bodyEndRow
+  );
 
-  if (col0Frac < LABEL_NUMERIC_THRESHOLD) {
+  if (col0Frac < LABEL_NUMERIC_THRESHOLD && !col0LooksLikeRatingScale) {
     if (isExtendedNpsScaleLabelColumn(values, bodyStartRow, bodyEndRow, colCount)) {
       if (colCount >= 3 && isUniformUnitColumn(values, bodyStartRow, bodyEndRow)) {
         return { labelColCount: 2, labelSplitConfidence: "confident" };
@@ -485,7 +508,7 @@ function detectLabelColumns(values, bodyStartRow, bodyEndRow, colCount) {
     return { labelColCount: 0, labelSplitConfidence: "confident" };
   }
 
-  if (col0Frac < LABEL_TEXT_FRACTION_THRESHOLD) {
+  if (col0Frac < LABEL_TEXT_FRACTION_THRESHOLD && !col0LooksLikeRatingScale) {
     if (isExtendedNpsScaleLabelColumn(values, bodyStartRow, bodyEndRow, colCount)) {
       if (colCount >= 3 && isUniformUnitColumn(values, bodyStartRow, bodyEndRow)) {
         return { labelColCount: 2, labelSplitConfidence: "confident" };
@@ -609,6 +632,41 @@ function isExtendedNpsScaleLabelColumn(values, bodyStartRow, bodyEndRow, colCoun
     hasNps &&
     hasBase
   );
+}
+
+function isLikelyRatingScaleLabelColumn(values, bodyStartRow, bodyEndRow) {
+  let totalNonEmpty = 0;
+  let textOnlyCount = 0;
+  let ordinalScaleCount = 0;
+
+  for (let row = bodyStartRow; row <= bodyEndRow; row++) {
+    const rowArr = values[row];
+    if (!rowArr) continue;
+
+    const cell = rowArr[0];
+    if (isCellEmpty(cell)) continue;
+
+    totalNonEmpty++;
+
+    if (isTextOnlyCell(cell)) {
+      textOnlyCount++;
+      continue;
+    }
+
+    if (isLikelyOrdinalScaleLabelCell(cell)) {
+      ordinalScaleCount++;
+    }
+  }
+
+  if (totalNonEmpty === 0) {
+    return false;
+  }
+
+  const labelLikeFraction = (textOnlyCount + ordinalScaleCount) / totalNonEmpty;
+  const allCellsAreLabelLike = textOnlyCount + ordinalScaleCount === totalNonEmpty;
+  const minText = allCellsAreLabelLike ? 1 : 2;
+
+  return textOnlyCount >= minText && ordinalScaleCount >= 3 && labelLikeFraction >= 0.8;
 }
 
 // ─── Body validation ──────────────────────────────────────────────────────────
