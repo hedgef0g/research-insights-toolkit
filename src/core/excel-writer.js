@@ -12,14 +12,19 @@ export function writeCellResultsToSelectedRange(
   selectedText,
   cellResultMatrix,
   detectionResult,
-  calculationSettings
+  calculationSettings,
+  options = {}
 ) {
   const rowCount = cellResultMatrix.length;
   const columnCount = cellResultMatrix[0] ? cellResultMatrix[0].length : 0;
 
   if (!rowCount || !columnCount) {
-    return;
+    return null;
   }
+
+  const shouldCaptureWriterDetails = Boolean(options.captureWriterDetails);
+  const writerDetails = shouldCaptureWriterDetails ? createWriterDetails() : null;
+  const buildMatricesStartedAt = shouldCaptureWriterDetails ? Date.now() : 0;
 
   const rowTypeByIndex = buildDetectedRowTypeByIndexMap(detectionResult);
 
@@ -111,13 +116,34 @@ export function writeCellResultsToSelectedRange(
     fillReasonMask.push(fillReasonRow);
   }
 
+  if (writerDetails) {
+    writerDetails.buildMatricesMs = Date.now() - buildMatricesStartedAt;
+  }
+
   // Main performance win:
   // one values write + one numberFormat write instead of per-cell writes.
+  const numberFormatWriteStartedAt = writerDetails ? Date.now() : 0;
   selectedRange.numberFormat = nextNumberFormats;
-  selectedRange.values = nextValues;
+  if (writerDetails) {
+    writerDetails.numberFormatWriteMs = Date.now() - numberFormatWriteStartedAt;
+  }
 
-  applyGroupedBoldFormatting(selectedRange, boldMask);
-  applyGroupedFillFormatting(selectedRange, fillReasonMask, cellResultMatrix, calculationSettings);
+  const valuesWriteStartedAt = writerDetails ? Date.now() : 0;
+  selectedRange.values = nextValues;
+  if (writerDetails) {
+    writerDetails.valuesWriteMs = Date.now() - valuesWriteStartedAt;
+  }
+
+  applyGroupedBoldFormatting(selectedRange, boldMask, writerDetails);
+  applyGroupedFillFormatting(
+    selectedRange,
+    fillReasonMask,
+    cellResultMatrix,
+    calculationSettings,
+    writerDetails
+  );
+
+  return writerDetails;
 }
 
 /**
@@ -291,9 +317,15 @@ export function resolveNumericOutput(displayString) {
   return { value: parsed.numericValue, format: `0.${"0".repeat(decimalPlaces)}` };
 }
 
-function applyGroupedBoldFormatting(selectedRange, boldMask) {
+function applyGroupedBoldFormatting(selectedRange, boldMask, writerDetails = null) {
+  const formatStartedAt = writerDetails ? Date.now() : 0;
+  const boldRunsByRow = writerDetails ? [] : null;
+  const boldRunSpansByRow = writerDetails ? [] : null;
+
   for (let rowIndex = 0; rowIndex < boldMask.length; rowIndex++) {
     const row = boldMask[rowIndex];
+    let rowRunCount = 0;
+    const rowRunSpans = writerDetails ? [] : null;
 
     let runStart = null;
 
@@ -308,6 +340,11 @@ function applyGroupedBoldFormatting(selectedRange, boldMask) {
       if ((!shouldBeBold || columnIndex === row.length) && runStart !== null) {
         const runEnd = columnIndex - 1;
         const runWidth = runEnd - runStart + 1;
+        rowRunCount += 1;
+
+        if (rowRunSpans) {
+          rowRunSpans.push({ start: runStart, end: runEnd });
+        }
 
         selectedRange
           .getCell(rowIndex, runStart)
@@ -316,6 +353,18 @@ function applyGroupedBoldFormatting(selectedRange, boldMask) {
         runStart = null;
       }
     }
+
+    if (boldRunsByRow) {
+      boldRunsByRow.push(rowRunCount);
+      boldRunSpansByRow.push(rowRunSpans);
+    }
+  }
+
+  if (writerDetails) {
+    writerDetails.boldFormatMs = Date.now() - formatStartedAt;
+    writerDetails.boldRunCountByRow = boldRunsByRow;
+    writerDetails.boldCommandCount = sumCounts(boldRunsByRow);
+    writerDetails.boldRectCommandCountEstimate = estimateRectangleCommandCount(boldRunSpansByRow);
   }
 }
 
@@ -323,10 +372,17 @@ function applyGroupedFillFormatting(
   selectedRange,
   fillReasonMask,
   cellResultMatrix,
-  calculationSettings
+  calculationSettings,
+  writerDetails = null
 ) {
+  const formatStartedAt = writerDetails ? Date.now() : 0;
+  const fillRunsByRow = writerDetails ? [] : null;
+  const fillRunSpansByRow = writerDetails ? [] : null;
+
   for (let rowIndex = 0; rowIndex < fillReasonMask.length; rowIndex++) {
     const row = fillReasonMask[rowIndex];
+    let rowRunCount = 0;
+    const rowRunSpans = writerDetails ? [] : null;
 
     let runStart = null;
     let currentRunColor = "";
@@ -356,6 +412,15 @@ function applyGroupedFillFormatting(
       if (runStart !== null) {
         const runEnd = columnIndex - 1;
         const runWidth = runEnd - runStart + 1;
+        rowRunCount += 1;
+
+        if (rowRunSpans) {
+          rowRunSpans.push({
+            start: runStart,
+            end: runEnd,
+            color: currentRunColor,
+          });
+        }
 
         selectedRange
           .getCell(rowIndex, runStart)
@@ -370,5 +435,67 @@ function applyGroupedFillFormatting(
         currentRunColor = fillColor;
       }
     }
+
+    if (fillRunsByRow) {
+      fillRunsByRow.push(rowRunCount);
+      fillRunSpansByRow.push(rowRunSpans);
+    }
   }
+
+  if (writerDetails) {
+    writerDetails.fillFormatMs = Date.now() - formatStartedAt;
+    writerDetails.fillRunCountByRow = fillRunsByRow;
+    writerDetails.fillCommandCount = sumCounts(fillRunsByRow);
+    writerDetails.fillRectCommandCountEstimate = estimateRectangleCommandCount(fillRunSpansByRow);
+  }
+}
+
+function createWriterDetails() {
+  return {
+    buildMatricesMs: 0,
+    numberFormatWriteMs: 0,
+    valuesWriteMs: 0,
+    boldFormatMs: 0,
+    fillFormatMs: 0,
+    boldCommandCount: 0,
+    fillCommandCount: 0,
+    boldRunCountByRow: [],
+    fillRunCountByRow: [],
+    boldRectCommandCountEstimate: 0,
+    fillRectCommandCountEstimate: 0,
+  };
+}
+
+function sumCounts(counts) {
+  return counts.reduce((sum, count) => sum + count, 0);
+}
+
+function estimateRectangleCommandCount(runSpansByRow) {
+  let rectangleCount = 0;
+  let previousRowSignatureCounts = new Map();
+
+  for (const rowRunSpans of runSpansByRow) {
+    const currentRowSignatureCounts = new Map();
+
+    for (const runSpan of rowRunSpans) {
+      const signature = buildRunSpanSignature(runSpan);
+      const nextCount = (currentRowSignatureCounts.get(signature) || 0) + 1;
+      currentRowSignatureCounts.set(signature, nextCount);
+
+      const previousCount = previousRowSignatureCounts.get(signature) || 0;
+
+      if (nextCount > previousCount) {
+        rectangleCount += 1;
+      }
+    }
+
+    previousRowSignatureCounts = currentRowSignatureCounts;
+  }
+
+  return rectangleCount;
+}
+
+function buildRunSpanSignature(runSpan) {
+  const colorKey = runSpan.color || "";
+  return `${runSpan.start}:${runSpan.end}:${colorKey}`;
 }
