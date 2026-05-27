@@ -442,6 +442,70 @@ describe("detectBannerStructure - group level selection", () => {
     assert.strictEqual(labelMap.get(2), "a", "first column of second group must get label a");
     assert.strictEqual(labelMap.get(3), "b", "second column of second group must get label b");
   });
+
+  it("keeps real three-level subgroup splits separate when an earlier mixed-depth segment uses vertically merged wave labels", () => {
+    const bannerContext = {
+      selectedColumnCount: 6,
+      lowerBannerRow: ["", "", "w6 (ноябрь 23)", "w7", "w6 (ноябрь 23)", "w7"],
+      upperScanRows: [
+        ["w6 (ноябрь 23)", "w7", "Мужской", "", "Женский", ""],
+        ["Пол", "", "Пол", "", "", ""],
+      ],
+    };
+
+    const result = detectBannerStructure(bannerContext, { autoDetectWaveBanners: false });
+
+    assert.deepStrictEqual(
+      result.groups.map((group) => ({
+        label: group.label,
+        bannerPath: group.bannerPath,
+        columnIndexes: group.columnIndexes,
+      })),
+      [
+        {
+          label: "Пол",
+          bannerPath: ["Пол"],
+          columnIndexes: [0, 1],
+        },
+        {
+          label: "Мужской",
+          bannerPath: ["Пол", "Мужской"],
+          columnIndexes: [2, 3],
+        },
+        {
+          label: "Женский",
+          bannerPath: ["Пол", "Женский"],
+          columnIndexes: [4, 5],
+        },
+      ]
+    );
+
+    const labelMap = buildBannerLocalSignificanceLabelMap(result, {
+      autoDetectWaveBanners: false,
+    });
+
+    assert.deepStrictEqual(
+      Array.from({ length: 6 }, (_, columnIndex) => labelMap.get(columnIndex) || ""),
+      ["a", "b", "a", "b", "a", "b"]
+    );
+
+    const pairs = buildColumnComparisonPairs(
+      6,
+      { respectBannerStructure: true, autoDetectWaveBanners: false },
+      new Set(),
+      result
+    );
+
+    const bannerGroupPairs = pairs
+      .filter((pair) => pair.comparisonType === "bannerGroup")
+      .map((pair) => [pair.firstColumnIndex, pair.secondColumnIndex, pair.groupLabel]);
+
+    assert.deepStrictEqual(bannerGroupPairs, [
+      [0, 1, "Пол"],
+      [2, 3, "Мужской"],
+      [4, 5, "Женский"],
+    ]);
+  });
 });
 
 describe("detectBannerStructure - sparse lower banner totals", () => {
