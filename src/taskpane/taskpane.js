@@ -1322,6 +1322,8 @@ async function runAutoSignificance() {
     return;
   }
 
+  setStatusMessage("Расчёт начат… Идёт обработка таблиц в книге.");
+
   // Collect inventory to identify eligible candidates.
   const _tScan = perfNow();
   let inventoryResults;
@@ -2075,6 +2077,8 @@ async function runCurrentSheetSignificance() {
     );
     return;
   }
+
+  setStatusMessage("Расчёт начат… Идёт обработка таблиц на листе.");
 
   const _tScan = perfNow();
   let inventoryResults;
