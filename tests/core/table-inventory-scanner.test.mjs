@@ -145,8 +145,9 @@ describe("scanWorksheetForTables", () => {
     // If items.length === 0, the scanner correctly found nothing to over-promise on.
   });
 
-  it("candidate with preview warnings is surfaced as uncertain", () => {
-    // All-100 rows trigger a quality warning in the preview model.
+  it("candidate with preview warnings remains available when there are no blocking issues", () => {
+    // All-100 rows still trigger a quality warning in the preview model, but
+    // warnings alone must not make the candidate unavailable for Check/Autorun.
     const values = [
       ["Label1", 100, 100, 100],
       ["Label2", 100, 100, 100],
@@ -155,14 +156,12 @@ describe("scanWorksheetForTables", () => {
     const items = scanWorksheetForTables({ values, ...OFFSET });
     assert.ok(items.length >= 1, "expected at least one item");
     const item = items[0];
-    // Warnings must be reflected in the candidate status.
-    if (item.warningsCount > 0) {
-      assert.strictEqual(
-        item.candidateStatus,
-        "uncertain",
-        "item with preview warnings must be uncertain, not available"
-      );
-    }
+    assert.ok(item.warningsCount > 0, "expected preview warnings to remain visible");
+    assert.strictEqual(
+      item.candidateStatus,
+      "available",
+      "item with warnings but no blocking issues must remain available"
+    );
   });
 
   it("side-by-side tables in one row band appear as one candidate and expose no canRunSignificance", () => {
@@ -709,9 +708,9 @@ describe("scanWorksheetForTables — preferredBase setting threading", () => {
     );
   });
 
-  it("real availability-affecting warning (SUSPICIOUS_ALL_100) still makes candidate uncertain", () => {
-    // All-100 rows trigger SUSPICIOUS_ALL_100 — a non-advisory warning that should
-    // still downgrade candidateStatus to uncertain.
+  it("SUSPICIOUS_ALL_100 stays visible but does not make candidate uncertain", () => {
+    // Service/test-like all-100 rows should remain a warning for QA, but should
+    // not block a structurally valid table from workbook Check/Autorun.
     const allHundredValues = [
       ["Label1",       100, 100, 100],
       ["Label2",       100, 100, 100],
@@ -724,8 +723,8 @@ describe("scanWorksheetForTables — preferredBase setting threading", () => {
     assert.ok(items[0].warningsCount > 0, "warningsCount must include advisory warnings for display");
     assert.strictEqual(
       items[0].candidateStatus,
-      "uncertain",
-      "SUSPICIOUS_ALL_100 must still make candidateStatus uncertain"
+      "available",
+      "SUSPICIOUS_ALL_100 must remain visible without making candidateStatus uncertain"
     );
   });
 });
@@ -755,9 +754,9 @@ describe("scanWorksheetForTables — advisory issue codes do not affect candidat
     );
   });
 
-  it("BASE_BLANK_VALUES: is NOT advisory and still makes candidateStatus uncertain", () => {
-    // A base row with blank cells → BASE_BLANK_VALUES is a real data-quality warning
-    // that genuinely signals the table may not calculate significance correctly.
+  it("BASE_BLANK_VALUES: warning remains visible without making candidateStatus uncertain", () => {
+    // Partial blank base cells should remain visible to QA, but valid columns are
+    // still runnable so the table must stay available.
     const values = [
       ["Agree",    0.4,  0.6, 0.5],
       ["Disagree", 0.6,  0.4, 0.5],
@@ -771,8 +770,28 @@ describe("scanWorksheetForTables — advisory issue codes do not affect candidat
     );
     assert.strictEqual(
       items[0].candidateStatus,
-      "uncertain",
-      "BASE_BLANK_VALUES must still downgrade candidateStatus to uncertain"
+      "available",
+      "BASE_BLANK_VALUES must remain visible without downgrading candidateStatus"
+    );
+  });
+
+  it("missing row-label warning remains visible without making candidate uncertain", () => {
+    const values = [
+      ["", 10, 20, 30],
+      ["Label2", 40, 50, 60],
+      ["Base", 100, 100, 100],
+    ];
+
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1);
+    assert.ok(
+      items[0].qualityIssueCodes.some((entry) => entry.code === "MISSING_ROW_LABEL_WITH_DATA"),
+      "MISSING_ROW_LABEL_WITH_DATA must remain visible in diagnostics"
+    );
+    assert.strictEqual(
+      items[0].candidateStatus,
+      "available",
+      "missing-label warnings must not make an otherwise valid candidate uncertain"
     );
   });
 });

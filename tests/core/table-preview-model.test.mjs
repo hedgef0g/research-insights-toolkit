@@ -368,6 +368,43 @@ describe("buildTablePreviewModel - normalized full-table regression coverage", (
       `unexpected warning set: ${JSON.stringify(model.warnings)}`
     );
   });
+
+  it("preserves mixed ordinal/text label columns in normalized wide category tables", () => {
+    const rawText = [
+      ["Children age", "", "", ""],
+      ["", "w6", "w7", "w8"],
+      ["0", "10%", "11%", "12%"],
+      ["1", "20%", "21%", "22%"],
+      ["2", "30%", "31%", "32%"],
+      ["3", "15%", "16%", "17%"],
+      ["4", "10%", "9%", "8%"],
+      ["5", "8%", "7%", "6%"],
+      ["6 и более", "7%", "5%", "3%"],
+      ["BASE", "100", "100", "100"],
+    ];
+    const cleanedValues = rawText.map((row, rowIndex) =>
+      rowIndex >= 2 ? ["", ...row.slice(1)] : [...row]
+    );
+
+    const { normalized, model } = buildNormalizedPreviewModel(rawText, cleanedValues);
+    const proportionBlock = findBlock(model, "proportion");
+
+    assert.deepStrictEqual(
+      normalized.leftLabelValues.map((row) => row[0]),
+      ["0", "1", "2", "3", "4", "5", "6 и более", "BASE"]
+    );
+    assert.deepStrictEqual(
+      model.rowDiagnostics.map((row) => row.primaryLabel),
+      ["0", "1", "2", "3", "4", "5", "6 и более", "BASE"]
+    );
+    assert.ok(proportionBlock, "expected a proportion block for mixed ordinal/text labels");
+    assert.deepStrictEqual(proportionBlock.valueRowIndexes, [0, 1, 2, 3, 4, 5, 6]);
+    assert.strictEqual(proportionBlock.baseRowIndex, 7);
+    assert.ok(
+      !warningCodes(model).includes("MISSING_ROW_LABEL_WITH_DATA"),
+      `unexpected warning set: ${JSON.stringify(model.warnings)}`
+    );
+  });
 });
 
 describe("buildTablePreviewModel - explicit base requirement", () => {

@@ -498,17 +498,17 @@ const ADVISORY_ISSUE_CODES = new Set([
  *                uncertain boundaries; worth checking via Check Table.
  *                Also returned when labelSplitConfidence is "twoColumn" (two-column
  *                row labels with ordinal code + text answer are valid structures).
- * "uncertain"  — table-like but has blocking issues, quality warnings, or an
- *                ambiguous label/data boundary; Check Table may still work but
- *                results should be verified.
+ * "uncertain"  — table-like but has blocking issues or an ambiguous label/data
+ *                boundary; Check Table may still work but results should be
+ *                verified.
  * "rejected"   — no metric rows detected; unlikely to be a RIT research table.
  *
  * This replaces the former canRunSignificance flag which implied Run-readiness.
  * The scanner is a candidate finder only; Check Table is the authoritative step.
  */
-function deriveCandidateStatus({ isLikelyTable, hasBlockingIssues, availabilityWarningCount, labelSplitConfidence }) {
+function deriveCandidateStatus({ isLikelyTable, hasBlockingIssues, labelSplitConfidence }) {
   if (!isLikelyTable) return "rejected";
-  if (hasBlockingIssues || labelSplitConfidence === "uncertain" || availabilityWarningCount > 0) return "uncertain";
+  if (hasBlockingIssues || labelSplitConfidence === "uncertain") return "uncertain";
   return "available";
 }
 
@@ -549,7 +549,6 @@ function buildTableInventoryItem({ band, model, titleInfo, rangeAddress, sheetNa
   const candidateStatus = deriveCandidateStatus({
     isLikelyTable,
     hasBlockingIssues: qualitySummary.hasBlockingIssues,
-    availabilityWarningCount,
     labelSplitConfidence,
   });
 
