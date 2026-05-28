@@ -4751,6 +4751,7 @@ function readCalculationSettingsFromPanel() {
     oneTailedTest: oneTailedTestCheckbox ? oneTailedTestCheckbox.checked : false,
 
     roundCellValues: getCheckboxValue("round-cell-values"),
+    resultFormattingLevel: getInputValue("result-formatting-level", "full"),
 
     compareWithPreviousColumn: getCheckboxValue("compare-with-previous-column"),
     applyPreviousColumnFill: getCheckboxValue("apply-previous-column-fill"),
