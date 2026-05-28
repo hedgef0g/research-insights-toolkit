@@ -2720,13 +2720,372 @@ async function clearSignificanceForSheetBatched(context, worksheetRef, candidate
 }
 
 /**
+ * Workbook-level staged 4-phase Clear pipeline for all eligible candidates.
+ *
+ * Generalises clearSignificanceForSheetBatched to span multiple worksheets
+ * inside a single Excel.run context.  A single Office.js RequestContext can
+ * queue loads and writes against ranges on any number of worksheets, so the
+ * same 4-phase approach that reduces per-sheet sync count to 4 can be applied
+ * across the whole workbook — reducing total syncs from 4×N_sheets to 4.
+ *
+ *   Phase 1 — sync 1: load values+text for ALL source ranges (all sheets).
+ *   Phase 2 — sync 2: compute clear targets in JS; load values+format+dims.
+ *   Phase 3 — sync 3: queue ALL body writes; load ALL banner scan texts.
+ *   Phase 4 — sync 4: queue ALL banner writes; final flush.
+ *
+ * Must be called inside an Excel.run callback (shared context, no nested run).
+ *
+ * @param {Excel.RequestContext} context
+ * @param {Array<{sheetName: string, rangeAddress: string}>} eligible
+ *   All candidates across all sheets (each carries its own sheetName).
+ * @returns {Promise<{
+ *   results: Array<{status, message, _clearDetails}>,
+ *   batchDiags: {syncPhases, sourceRangesLoaded, targetRangesLoaded, bannerRangesLoaded}
+ * }>}
+ */
+async function clearSignificanceForWorkbookBatched(context, eligible) {
+  const BANNER_UPPER_SCAN_LIMIT = 5;
+
+  // One worksheet proxy per unique sheet — avoids redundant getItem calls.
+  const worksheetRefs = new Map();
+  for (const c of eligible) {
+    if (!worksheetRefs.has(c.sheetName)) {
+      worksheetRefs.set(c.sheetName, context.workbook.worksheets.getItem(c.sheetName));
+    }
+  }
+
+  // ── Per-table record ──────────────────────────────────────────────────────
+  const records = eligible.map((c) => ({
+    sheetName: c.sheetName,
+    rangeAddress: c.rangeAddress,
+    status: "pending", // "pending" | "skipped" | "cleared"
+    message: "",
+    // Phase 1
+    sourceRange: null,
+    // Phase 2 inputs (computed in JS after sync 1)
+    clearTargetRange: null,
+    // Phase 2 outputs (loaded after sync 2)
+    knownDims: null, // { rowIndex, columnIndex, columnCount }
+    // Phase 3 — body
+    bodyCellsRead: 0,
+    bodyCellsChanged: 0,
+    bodyHasValueChange: false,
+    bodyHasFormatChange: false,
+    nextValues: null,
+    nextNumberFormats: null,
+    // Phase 3 — banner scan setup
+    bannerScanRange: null,
+    bannerScanRowCount: 0,
+    bannerScanColCount: 0,
+    bannerStartColIndex: 0,
+    bannerStartRowAbs: 0,
+    // Phase 4 — banner results
+    bannerCellsRead: 0,
+    bannerCellsChanged: 0,
+    bannerWriteCommands: 0,
+  }));
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PHASE 1 — Load source range values+text for every table (all sheets)
+  // ══════════════════════════════════════════════════════════════════════════
+  for (const rec of records) {
+    const sr = worksheetRefs.get(rec.sheetName).getRange(rec.rangeAddress);
+    sr.load(["values", "text"]);
+    rec.sourceRange = sr;
+  }
+  await context.sync(); // Sync 1
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PHASE 2 — Compute clear-target ranges in JS; load values+format+dims
+  // ══════════════════════════════════════════════════════════════════════════
+  for (const rec of records) {
+    if (rec.status !== "pending") continue;
+
+    const selectedValues = rec.sourceRange.values;
+    const selectedText = rec.sourceRange.text;
+
+    if (
+      !selectedValues ||
+      selectedValues.length < 1 ||
+      !selectedValues[0] ||
+      selectedValues[0].length < 1
+    ) {
+      rec.status = "skipped";
+      rec.message = "нет данных в диапазоне";
+      continue;
+    }
+
+    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
+    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
+
+    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+      const codes =
+        normalized.blockingReasons && normalized.blockingReasons.length > 0
+          ? ` [${normalized.blockingReasons.join(", ")}]`
+          : "";
+      rec.status = "skipped";
+      rec.message = `${normalized.blockingMessage}${codes}`;
+      continue;
+    }
+
+    let clearTargetRange;
+
+    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
+      const bodyRowCount = normalized.valuesForCalculation.length;
+      let bodyColCount = normalized.valuesForCalculation[0].length;
+      let effectiveClearColOffset = normalized.dataColOffset;
+      let textForLeadingEmptyCheck = normalized.textForCalculation;
+
+      if (normalized.dataColOffset === 0) {
+        const additionalLabelCols = detectEmbeddedLabelColumns(normalized.valuesForCalculation);
+        if (additionalLabelCols > 0) {
+          effectiveClearColOffset += additionalLabelCols;
+          bodyColCount -= additionalLabelCols;
+          textForLeadingEmptyCheck = normalized.textForCalculation.map((row) =>
+            row.slice(additionalLabelCols)
+          );
+        }
+      }
+
+      const clearLeadingEmptyCols = detectLeadingEmptyColumns(textForLeadingEmptyCheck);
+      if (clearLeadingEmptyCols > 0) {
+        bodyColCount -= clearLeadingEmptyCols;
+        effectiveClearColOffset += clearLeadingEmptyCols;
+      }
+
+      if (bodyRowCount < 1 || bodyColCount < 1) {
+        rec.status = "skipped";
+        rec.message = "нет данных после нормализации";
+        continue;
+      }
+
+      clearTargetRange = rec.sourceRange
+        .getCell(normalized.dataRowOffset, effectiveClearColOffset)
+        .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
+    } else {
+      // Pass-through: use JS dimensions — avoids loading unneeded sourceRange properties.
+      const rowCount = selectedValues.length;
+      const colCount = selectedValues[0].length;
+      const embeddedLabelCols = detectEmbeddedLabelColumns(cleanedValues);
+      const leadingBlankCols =
+        embeddedLabelCols === 0 ? detectLeadingEmptyColumns(selectedText) : 0;
+      const skipLeftCols = embeddedLabelCols > 0 ? embeddedLabelCols : leadingBlankCols;
+
+      if (skipLeftCols > 0) {
+        clearTargetRange = rec.sourceRange
+          .getCell(0, skipLeftCols)
+          .getResizedRange(rowCount - 1, colCount - skipLeftCols - 1);
+      } else {
+        clearTargetRange = rec.sourceRange;
+      }
+    }
+
+    rec.clearTargetRange = clearTargetRange;
+    clearTargetRange.load(["values", "numberFormat", "rowIndex", "columnIndex", "columnCount"]);
+  }
+  await context.sync(); // Sync 2
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PHASE 3 — Body cleanup + queue writes + set up banner reads (all sheets)
+  // ══════════════════════════════════════════════════════════════════════════
+  for (const rec of records) {
+    if (rec.status !== "pending") continue;
+
+    const targetValues = rec.clearTargetRange.values;
+    const targetNumberFormats = rec.clearTargetRange.numberFormat;
+
+    rec.knownDims = {
+      rowIndex: rec.clearTargetRange.rowIndex,
+      columnIndex: rec.clearTargetRange.columnIndex,
+      columnCount: rec.clearTargetRange.columnCount,
+    };
+
+    const nextValues = [];
+    const nextNumberFormats = [];
+    let bodyCellsChanged = 0;
+    let bodyHasValueChange = false;
+    let bodyHasFormatChange = false;
+
+    for (let r = 0; r < targetValues.length; r++) {
+      const valueRow = [];
+      const formatRow = [];
+
+      for (let c = 0; c < targetValues[r].length; c++) {
+        const rawValue = targetValues[r][c];
+        const currentFormat = targetNumberFormats[r][c];
+
+        if (typeof rawValue === "number") {
+          valueRow.push(rawValue);
+          formatRow.push(currentFormat);
+          continue;
+        }
+
+        const cleanedText = removeSignificanceMarkersFromText(rawValue);
+        const resolved = resolveNumericOutput(cleanedText);
+
+        if (resolved !== null) {
+          if (resolved.value !== rawValue) bodyHasValueChange = true;
+          if (resolved.format !== currentFormat) bodyHasFormatChange = true;
+          if (resolved.value !== rawValue || resolved.format !== currentFormat) bodyCellsChanged++;
+          valueRow.push(resolved.value);
+          formatRow.push(resolved.format);
+        } else {
+          if (cleanedText !== rawValue) {
+            bodyHasValueChange = true;
+            bodyCellsChanged++;
+          }
+          valueRow.push(cleanedText);
+          formatRow.push("@");
+        }
+      }
+
+      nextValues.push(valueRow);
+      nextNumberFormats.push(formatRow);
+    }
+
+    rec.bodyCellsRead = targetValues.length * (targetValues[0] ? targetValues[0].length : 0);
+    rec.bodyCellsChanged = bodyCellsChanged;
+    rec.bodyHasValueChange = bodyHasValueChange;
+    rec.bodyHasFormatChange = bodyHasFormatChange;
+    rec.nextValues = nextValues;
+    rec.nextNumberFormats = nextNumberFormats;
+
+    // Queue body writes (only when something actually changed).
+    if (bodyHasFormatChange) rec.clearTargetRange.numberFormat = nextNumberFormats;
+    if (bodyHasValueChange) rec.clearTargetRange.values = nextValues;
+    rec.clearTargetRange.format.font.bold = false;
+    rec.clearTargetRange.format.fill.clear();
+
+    // Queue banner scan load for this table's sheet.
+    const wsRef = worksheetRefs.get(rec.sheetName);
+    const { rowIndex: targetStartRowIndex, columnIndex: targetStartColumnIndex, columnCount: targetColumnCount } =
+      rec.knownDims;
+
+    if (targetStartRowIndex > 0 && targetColumnCount >= 1) {
+      const totalScanRowCount = Math.min(BANNER_UPPER_SCAN_LIMIT + 1, targetStartRowIndex);
+      if (totalScanRowCount >= 1) {
+        const bannerScanRange = wsRef.getRangeByIndexes(
+          targetStartRowIndex - totalScanRowCount,
+          targetStartColumnIndex,
+          totalScanRowCount,
+          targetColumnCount
+        );
+        bannerScanRange.load("text");
+        rec.bannerScanRange = bannerScanRange;
+        rec.bannerScanRowCount = totalScanRowCount;
+        rec.bannerScanColCount = targetColumnCount;
+        rec.bannerStartColIndex = targetStartColumnIndex;
+        rec.bannerStartRowAbs = targetStartRowIndex - totalScanRowCount;
+      }
+    }
+  }
+  await context.sync(); // Sync 3 — flushes ALL body writes; reads ALL banner scan texts
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PHASE 4 — Diff banner texts; queue banner writes; final flush (all sheets)
+  // ══════════════════════════════════════════════════════════════════════════
+  for (const rec of records) {
+    if (rec.status !== "pending") continue;
+
+    rec.status = "cleared"; // body writes already flushed in sync 3
+
+    if (!rec.bannerScanRange) continue;
+
+    const bannerTexts = rec.bannerScanRange.text;
+    const { bannerScanRowCount, bannerScanColCount, bannerStartColIndex, bannerStartRowAbs } = rec;
+
+    rec.bannerCellsRead = bannerScanRowCount * bannerScanColCount;
+
+    const writesByRow = new Map();
+    let cellsChanged = 0;
+
+    for (let r = 0; r < bannerScanRowCount; r++) {
+      const row = bannerTexts[r] || [];
+      for (let c = 0; c < bannerScanColCount; c++) {
+        const cur = row[c] || "";
+        const nxt = cur && getTrailingBannerMarker(cur) ? removeTrailingBannerMarker(cur) : cur;
+        if (cur === nxt) continue;
+        const absRow = bannerStartRowAbs + r;
+        const absCol = bannerStartColIndex + c;
+        if (!writesByRow.has(absRow)) writesByRow.set(absRow, []);
+        writesByRow.get(absRow).push({ colIndex: absCol, text: nxt });
+        cellsChanged++;
+      }
+    }
+
+    rec.bannerCellsChanged = cellsChanged;
+
+    if (cellsChanged > 0) {
+      const wsRef = worksheetRefs.get(rec.sheetName);
+      let writeCommands = 0;
+      for (const [rowIndex, items] of writesByRow) {
+        items.sort((a, b) => a.colIndex - b.colIndex);
+        let i = 0;
+        while (i < items.length) {
+          let j = i;
+          while (j + 1 < items.length && items[j + 1].colIndex === items[j].colIndex + 1) j++;
+          const texts = items.slice(i, j + 1).map((x) => x.text);
+          wsRef.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1).values = [texts];
+          writeCommands++;
+          i = j + 1;
+        }
+      }
+      rec.bannerWriteCommands = writeCommands;
+    }
+  }
+  await context.sync(); // Sync 4 — flushes ALL banner writes (all sheets)
+
+  // ── Build result array and batch-level diagnostics ────────────────────────
+  let targetRangesLoaded = 0;
+  let bannerRangesLoaded = 0;
+  for (const rec of records) {
+    if (rec.clearTargetRange !== null) targetRangesLoaded++;
+    if (rec.bannerScanRange !== null) bannerRangesLoaded++;
+  }
+
+  const results = records.map((rec) => {
+    if (rec.status === "cleared") {
+      return {
+        status: "cleared",
+        message: "очищено",
+        _clearDetails: {
+          bodyCellsRead: rec.bodyCellsRead,
+          bodyCellsChanged: rec.bodyCellsChanged,
+          bannerCellsRead: rec.bannerCellsRead,
+          bannerCellsChanged: rec.bannerCellsChanged,
+          bannerWriteCommands: rec.bannerWriteCommands,
+          totalMs: 0,
+        },
+      };
+    }
+    return { status: rec.status, message: rec.message, _clearDetails: null };
+  });
+
+  return {
+    results,
+    batchDiags: {
+      syncPhases: 4,
+      sourceRangesLoaded: eligible.length,
+      targetRangesLoaded,
+      bannerRangesLoaded,
+    },
+  };
+}
+
+/**
  * Auto-clear: removes significance markers from all "available" inventory
  * candidates in the workbook.
  *
- * Candidates are grouped by sheet. Each sheet's tables are processed in a
- * staged 4-sync batch (clearSignificanceForSheetBatched), reducing total
- * sync count from 4×N_tables to 4×N_sheets.  If the batch fails the full
- * sheet falls back to per-table clearSignificanceForRange.
+ * Attempts a workbook-level staged batch first (1 Excel.run, 4 sync phases
+ * for the whole workbook).  If that fails, falls back to the per-sheet staged
+ * batch (1 Excel.run per sheet, 4 sync phases per sheet).  If a per-sheet
+ * batch also fails, remaining tables on that sheet fall back to per-table
+ * clearSignificanceForRange.
+ *
+ * batchMode in RIT_PERF diagnostics reflects which path actually ran:
+ *   "workbook" — workbook-level batch succeeded (contextRuns: 1, syncPhases: 4)
+ *   "sheet"    — workbook batch failed; per-sheet batches ran
+ *   "fallback" — all batches failed; per-table fallback ran
  */
 async function clearAutoSignificance() {
   const _t0 = perfNow();
@@ -2762,6 +3121,7 @@ async function clearAutoSignificance() {
   let errors = 0;
   let contextRuns = 0;
   let sheetsCleared = 0;
+  let batchMode = "workbook";
   const _clearAggregate = {
     syncPhases: 0,
     sourceRangesLoaded: 0,
@@ -2774,30 +3134,105 @@ async function clearAutoSignificance() {
     bannerWriteCommands: 0,
   };
 
-  // Group by sheet; each sheet is cleared in one staged 4-sync batch.
+  // Always build the by-sheet map so the per-sheet fallback loop has it ready.
   const bySheet = groupCandidatesBySheet(eligible);
 
-  for (const [sheetName, sheetCandidates] of bySheet) {
-    let batchEndedAt = 0;
-    let sheetClearedCount = 0;
-    contextRuns++;
+  // ── ATTEMPT 1: workbook-level staged batch (1 context, 4 syncs total) ──────
+  let _wbResults = null;
+  let _wbBatchDiags = null;
 
-    // Staged 4-phase batch: all N tables on this sheet in 4 syncs total.
-    try {
-      await Excel.run(async (context) => {
-        const worksheetRef = context.workbook.worksheets.getItem(sheetName);
-        const { results: batchResults, sheetDiags } = await clearSignificanceForSheetBatched(
-          context,
-          worksheetRef,
-          sheetCandidates
+  try {
+    await Excel.run(async (context) => {
+      const r = await clearSignificanceForWorkbookBatched(context, eligible);
+      _wbResults = r.results;
+      _wbBatchDiags = r.batchDiags;
+    });
+    contextRuns = 1;
+  } catch (_wbErr) {
+    // Workbook-level batch failed; fall through to per-sheet staged batching.
+    batchMode = "sheet";
+  }
+
+  if (_wbResults !== null) {
+    // Workbook batch succeeded — process results.
+    _clearAggregate.syncPhases += _wbBatchDiags.syncPhases;
+    _clearAggregate.sourceRangesLoaded += _wbBatchDiags.sourceRangesLoaded;
+    _clearAggregate.targetRangesLoaded += _wbBatchDiags.targetRangesLoaded;
+    _clearAggregate.bannerRangesLoaded += _wbBatchDiags.bannerRangesLoaded;
+
+    const sheetClearedSet = new Set();
+    for (let _i = 0; _i < _wbResults.length; _i++) {
+      const result = _wbResults[_i];
+      const candidate = eligible[_i];
+      if (result.status === "cleared") {
+        cleared++;
+        sheetClearedSet.add(candidate.sheetName);
+        accumulateClearDetails(_clearAggregate, result._clearDetails);
+      } else if (result.status === "skipped") {
+        skipped++;
+        detailLines.push(
+          `- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
         );
-        _clearAggregate.syncPhases += sheetDiags.syncPhases;
-        _clearAggregate.sourceRangesLoaded += sheetDiags.sourceRangesLoaded;
-        _clearAggregate.targetRangesLoaded += sheetDiags.targetRangesLoaded;
-        _clearAggregate.bannerRangesLoaded += sheetDiags.bannerRangesLoaded;
-        for (let _si = 0; _si < batchResults.length; _si++) {
-          const result = batchResults[_si];
-          const candidate = sheetCandidates[_si];
+      } else {
+        errors++;
+        detailLines.push(
+          `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+        );
+      }
+    }
+    sheetsCleared = sheetClearedSet.size;
+  } else {
+    // ── FALLBACK: per-sheet staged batching ────────────────────────────────
+    for (const [sheetName, sheetCandidates] of bySheet) {
+      let batchEndedAt = 0;
+      let sheetClearedCount = 0;
+      contextRuns++;
+
+      // Staged 4-phase batch: all N tables on this sheet in 4 syncs total.
+      try {
+        await Excel.run(async (context) => {
+          const worksheetRef = context.workbook.worksheets.getItem(sheetName);
+          const { results: batchResults, sheetDiags } = await clearSignificanceForSheetBatched(
+            context,
+            worksheetRef,
+            sheetCandidates
+          );
+          _clearAggregate.syncPhases += sheetDiags.syncPhases;
+          _clearAggregate.sourceRangesLoaded += sheetDiags.sourceRangesLoaded;
+          _clearAggregate.targetRangesLoaded += sheetDiags.targetRangesLoaded;
+          _clearAggregate.bannerRangesLoaded += sheetDiags.bannerRangesLoaded;
+          for (let _si = 0; _si < batchResults.length; _si++) {
+            const result = batchResults[_si];
+            const candidate = sheetCandidates[_si];
+            if (result.status === "cleared") {
+              cleared++;
+              sheetClearedCount++;
+              accumulateClearDetails(_clearAggregate, result._clearDetails);
+            } else if (result.status === "skipped") {
+              skipped++;
+              detailLines.push(
+                `- ${sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
+              );
+            } else {
+              errors++;
+              detailLines.push(
+                `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+              );
+            }
+          }
+          batchEndedAt = sheetCandidates.length;
+        });
+      } catch (_batchErr) {
+        // Per-sheet batch failed; fall back to per-table for all candidates on this sheet.
+        if (batchMode === "sheet") batchMode = "fallback";
+      }
+
+      for (let _fi = batchEndedAt; _fi < sheetCandidates.length; _fi++) {
+        const candidate = sheetCandidates[_fi];
+        contextRuns++;
+        _clearAggregate.syncPhases += 4; // per-table fallback: 4 syncs each
+        try {
+          const result = await clearSignificanceForRange(sheetName, candidate.rangeAddress);
           if (result.status === "cleared") {
             cleared++;
             sheetClearedCount++;
@@ -2813,43 +3248,16 @@ async function clearAutoSignificance() {
               `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
             );
           }
-        }
-        batchEndedAt = sheetCandidates.length;
-      });
-    } catch (_batchErr) {
-      // Staged batch failed; fall back to per-table for all candidates on this sheet.
-    }
-
-    for (let _fi = batchEndedAt; _fi < sheetCandidates.length; _fi++) {
-      const candidate = sheetCandidates[_fi];
-      contextRuns++;
-      _clearAggregate.syncPhases += 4; // per-table fallback: 4 syncs each
-      try {
-        const result = await clearSignificanceForRange(sheetName, candidate.rangeAddress);
-        if (result.status === "cleared") {
-          cleared++;
-          sheetClearedCount++;
-          accumulateClearDetails(_clearAggregate, result._clearDetails);
-        } else if (result.status === "skipped") {
-          skipped++;
-          detailLines.push(
-            `- ${sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
-          );
-        } else {
+        } catch (err) {
           errors++;
           detailLines.push(
-            `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+            `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
           );
         }
-      } catch (err) {
-        errors++;
-        detailLines.push(
-          `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
-        );
       }
-    }
 
-    if (sheetClearedCount > 0) sheetsCleared++;
+      if (sheetClearedCount > 0) sheetsCleared++;
+    }
   }
 
   const summaryLines = [
@@ -2864,6 +3272,7 @@ async function clearAutoSignificance() {
   }
 
   perfLog("clearAutoSignificance", {
+    batchMode,
     tablesCleared: cleared,
     sheetsCleared,
     contextRuns,
