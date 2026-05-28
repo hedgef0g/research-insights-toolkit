@@ -2396,8 +2396,10 @@ function accumulateClearDetails(aggregate, details) {
  * @param {Excel.RequestContext} context
  * @param {Excel.Worksheet} worksheetRef  Worksheet proxy for this sheet.
  * @param {Array<{rangeAddress: string}>} candidates  Tables on this sheet.
- * @returns {Promise<Array<{status, message, _clearDetails}>>}
- *   One result per candidate, in the same order.
+ * @returns {Promise<{
+ *   results: Array<{status, message, _clearDetails}>,
+ *   sheetDiags: {syncPhases, sourceRangesLoaded, targetRangesLoaded, bannerRangesLoaded}
+ * }>}
  */
 async function clearSignificanceForSheetBatched(context, worksheetRef, candidates) {
   const BANNER_UPPER_SCAN_LIMIT = 5;
@@ -2680,8 +2682,15 @@ async function clearSignificanceForSheetBatched(context, worksheetRef, candidate
   }
   await context.sync(); // Sync 4 — flushes ALL banner writes
 
-  // ── Build result array ────────────────────────────────────────────────────
-  return records.map((rec) => {
+  // ── Build result array and sheet-level diagnostics ───────────────────────
+  let targetRangesLoaded = 0;
+  let bannerRangesLoaded = 0;
+  for (const rec of records) {
+    if (rec.clearTargetRange !== null) targetRangesLoaded++;
+    if (rec.bannerScanRange !== null) bannerRangesLoaded++;
+  }
+
+  const results = records.map((rec) => {
     if (rec.status === "cleared") {
       return {
         status: "cleared",
@@ -2698,6 +2707,16 @@ async function clearSignificanceForSheetBatched(context, worksheetRef, candidate
     }
     return { status: rec.status, message: rec.message, _clearDetails: null };
   });
+
+  return {
+    results,
+    sheetDiags: {
+      syncPhases: 4,
+      sourceRangesLoaded: candidates.length,
+      targetRangesLoaded,
+      bannerRangesLoaded,
+    },
+  };
 }
 
 /**
@@ -2742,7 +2761,12 @@ async function clearAutoSignificance() {
   let cleared = 0;
   let errors = 0;
   let contextRuns = 0;
+  let sheetsCleared = 0;
   const _clearAggregate = {
+    syncPhases: 0,
+    sourceRangesLoaded: 0,
+    targetRangesLoaded: 0,
+    bannerRangesLoaded: 0,
     bodyCellsRead: 0,
     bodyCellsChanged: 0,
     bannerCellsRead: 0,
@@ -2755,22 +2779,28 @@ async function clearAutoSignificance() {
 
   for (const [sheetName, sheetCandidates] of bySheet) {
     let batchEndedAt = 0;
+    let sheetClearedCount = 0;
     contextRuns++;
 
     // Staged 4-phase batch: all N tables on this sheet in 4 syncs total.
     try {
       await Excel.run(async (context) => {
         const worksheetRef = context.workbook.worksheets.getItem(sheetName);
-        const batchResults = await clearSignificanceForSheetBatched(
+        const { results: batchResults, sheetDiags } = await clearSignificanceForSheetBatched(
           context,
           worksheetRef,
           sheetCandidates
         );
+        _clearAggregate.syncPhases += sheetDiags.syncPhases;
+        _clearAggregate.sourceRangesLoaded += sheetDiags.sourceRangesLoaded;
+        _clearAggregate.targetRangesLoaded += sheetDiags.targetRangesLoaded;
+        _clearAggregate.bannerRangesLoaded += sheetDiags.bannerRangesLoaded;
         for (let _si = 0; _si < batchResults.length; _si++) {
           const result = batchResults[_si];
           const candidate = sheetCandidates[_si];
           if (result.status === "cleared") {
             cleared++;
+            sheetClearedCount++;
             accumulateClearDetails(_clearAggregate, result._clearDetails);
           } else if (result.status === "skipped") {
             skipped++;
@@ -2793,10 +2823,12 @@ async function clearAutoSignificance() {
     for (let _fi = batchEndedAt; _fi < sheetCandidates.length; _fi++) {
       const candidate = sheetCandidates[_fi];
       contextRuns++;
+      _clearAggregate.syncPhases += 4; // per-table fallback: 4 syncs each
       try {
         const result = await clearSignificanceForRange(sheetName, candidate.rangeAddress);
         if (result.status === "cleared") {
           cleared++;
+          sheetClearedCount++;
           accumulateClearDetails(_clearAggregate, result._clearDetails);
         } else if (result.status === "skipped") {
           skipped++;
@@ -2816,6 +2848,8 @@ async function clearAutoSignificance() {
         );
       }
     }
+
+    if (sheetClearedCount > 0) sheetsCleared++;
   }
 
   const summaryLines = [
@@ -2831,10 +2865,18 @@ async function clearAutoSignificance() {
 
   perfLog("clearAutoSignificance", {
     tablesCleared: cleared,
+    sheetsCleared,
     contextRuns,
     sheetCount: bySheet.size,
-    batchSyncPhases: 4,
-    ...(cleared > 0 ? { clearAggregate: _clearAggregate } : {}),
+    syncPhases: _clearAggregate.syncPhases,
+    sourceRangesLoaded: _clearAggregate.sourceRangesLoaded,
+    targetRangesLoaded: _clearAggregate.targetRangesLoaded,
+    bannerRangesLoaded: _clearAggregate.bannerRangesLoaded,
+    bodyCellsRead: _clearAggregate.bodyCellsRead,
+    bodyCellsChanged: _clearAggregate.bodyCellsChanged,
+    bannerCellsRead: _clearAggregate.bannerCellsRead,
+    bannerCellsChanged: _clearAggregate.bannerCellsChanged,
+    bannerWriteCommands: _clearAggregate.bannerWriteCommands,
     totalMs: perfElapsed(_t0),
   });
   setStatusMessage(summaryLines.join("\n"));
@@ -3210,7 +3252,12 @@ async function clearCurrentSheetSignificance() {
   let cleared = 0;
   let errors = 0;
   let contextRuns = 0;
+  let sheetsCleared = 0;
   const _clearAggregate = {
+    syncPhases: 0,
+    sourceRangesLoaded: 0,
+    targetRangesLoaded: 0,
+    bannerRangesLoaded: 0,
     bodyCellsRead: 0,
     bodyCellsChanged: 0,
     bannerCellsRead: 0,
@@ -3223,22 +3270,28 @@ async function clearCurrentSheetSignificance() {
 
   for (const [sheetName, sheetCandidates] of bySheet) {
     let batchEndedAt = 0;
+    let sheetClearedCount = 0;
     contextRuns++;
 
     // Staged 4-phase batch: all N tables on this sheet in 4 syncs total.
     try {
       await Excel.run(async (context) => {
         const worksheetRef = context.workbook.worksheets.getItem(sheetName);
-        const batchResults = await clearSignificanceForSheetBatched(
+        const { results: batchResults, sheetDiags } = await clearSignificanceForSheetBatched(
           context,
           worksheetRef,
           sheetCandidates
         );
+        _clearAggregate.syncPhases += sheetDiags.syncPhases;
+        _clearAggregate.sourceRangesLoaded += sheetDiags.sourceRangesLoaded;
+        _clearAggregate.targetRangesLoaded += sheetDiags.targetRangesLoaded;
+        _clearAggregate.bannerRangesLoaded += sheetDiags.bannerRangesLoaded;
         for (let _si = 0; _si < batchResults.length; _si++) {
           const result = batchResults[_si];
           const candidate = sheetCandidates[_si];
           if (result.status === "cleared") {
             cleared++;
+            sheetClearedCount++;
             accumulateClearDetails(_clearAggregate, result._clearDetails);
           } else if (result.status === "skipped") {
             skipped++;
@@ -3261,10 +3314,12 @@ async function clearCurrentSheetSignificance() {
     for (let _fi = batchEndedAt; _fi < sheetCandidates.length; _fi++) {
       const candidate = sheetCandidates[_fi];
       contextRuns++;
+      _clearAggregate.syncPhases += 4; // per-table fallback: 4 syncs each
       try {
         const result = await clearSignificanceForRange(sheetName, candidate.rangeAddress);
         if (result.status === "cleared") {
           cleared++;
+          sheetClearedCount++;
           accumulateClearDetails(_clearAggregate, result._clearDetails);
         } else if (result.status === "skipped") {
           skipped++;
@@ -3284,6 +3339,8 @@ async function clearCurrentSheetSignificance() {
         );
       }
     }
+
+    if (sheetClearedCount > 0) sheetsCleared++;
   }
 
   const summaryLines = [
@@ -3299,10 +3356,18 @@ async function clearCurrentSheetSignificance() {
 
   perfLog("clearCurrentSheetSignificance", {
     tablesCleared: cleared,
+    sheetsCleared,
     contextRuns,
     sheetCount: bySheet.size,
-    batchSyncPhases: 4,
-    ...(cleared > 0 ? { clearAggregate: _clearAggregate } : {}),
+    syncPhases: _clearAggregate.syncPhases,
+    sourceRangesLoaded: _clearAggregate.sourceRangesLoaded,
+    targetRangesLoaded: _clearAggregate.targetRangesLoaded,
+    bannerRangesLoaded: _clearAggregate.bannerRangesLoaded,
+    bodyCellsRead: _clearAggregate.bodyCellsRead,
+    bodyCellsChanged: _clearAggregate.bodyCellsChanged,
+    bannerCellsRead: _clearAggregate.bannerCellsRead,
+    bannerCellsChanged: _clearAggregate.bannerCellsChanged,
+    bannerWriteCommands: _clearAggregate.bannerWriteCommands,
     totalMs: perfElapsed(_t0),
   });
   setStatusMessage(summaryLines.join("\n"));
