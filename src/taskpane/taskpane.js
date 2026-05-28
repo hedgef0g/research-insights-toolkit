@@ -110,6 +110,8 @@ import { perfNow, perfElapsed, perfLog, perfEnabled } from "./taskpane-performan
 const INVENTORY_CONTENT_SHEET_NAME = "Content";
 const RUN_REPORT_SHEET_NAME = "Run report";
 const GENERATED_SHEET_NAMES = new Set([INVENTORY_CONTENT_SHEET_NAME, RUN_REPORT_SHEET_NAME]);
+const BANNER_SCAN_AREA_STATS = Symbol("bannerScanAreaStats");
+const BANNER_AGGREGATE_STATE = Symbol("bannerAggregateState");
 
 const INVENTORY_CONTENT_COLUMNS = [
   "#",
@@ -457,20 +459,94 @@ function mergeFillRangeAreasProjection(target, source) {
 }
 
 function createAggregatedBannerPerfDetails() {
-  return {
+  const details = {
     tablesWithBannerDetails: 0,
     rowsScanned: 0,
     cellsRead: 0,
     cellsPlanned: 0,
     cellsChanged: 0,
     writeCommands: 0,
+    changedCellRuns: 0,
+    avgRunLength: 0,
+    maxRunLength: 0,
+    oneCellWriteCommands: 0,
+    multiCellWriteCommands: 0,
+    markeredWriteCommands: 0,
+    clearOnlyWriteCommands: 0,
+    numberFormatCommands: 0,
+    changedRows: 0,
+    avgChangedCellsPerChangedRow: 0,
+    maxChangedCellsInRow: 0,
+    maxChangedCellsPerTable: 0,
+    maxChangedRowsPerTable: 0,
     skippedNoOpWrites: 0,
+    readSyncMs: 0,
+    planMs: 0,
+    queueWriteMs: 0,
     syncCount: 0,
     maxWriteCommands: 0,
+    tablesWithOverlappingBannerAreas: 0,
+    perSheetBannerTablesMax: 0,
   };
+
+  Object.defineProperty(details, BANNER_AGGREGATE_STATE, {
+    value: {
+      areasBySheet: new Map(),
+      overlappingTableIds: new Set(),
+      nextTableId: 1,
+    },
+    enumerable: false,
+  });
+
+  return details;
 }
 
-function mergeBannerPerfDetails(aggregate, bannerDetails) {
+function roundBannerDiagnosticRatio(value) {
+  return Math.round(value * 100) / 100;
+}
+
+function bannerScanAreasOverlap(a, b) {
+  if (!a || !b) {
+    return false;
+  }
+
+  const aRowEnd = a.rowIndex + a.rowCount;
+  const bRowEnd = b.rowIndex + b.rowCount;
+  const aColEnd = a.columnIndex + a.columnCount;
+  const bColEnd = b.columnIndex + b.columnCount;
+
+  return a.rowIndex < bRowEnd && b.rowIndex < aRowEnd && a.columnIndex < bColEnd && b.columnIndex < aColEnd;
+}
+
+function mergeBannerScanAreaDiagnostics(aggregate, bannerDetails, sheetName) {
+  const state = aggregate ? aggregate[BANNER_AGGREGATE_STATE] : null;
+  const area = bannerDetails ? bannerDetails[BANNER_SCAN_AREA_STATS] : null;
+  if (!state || !area || !sheetName) {
+    return;
+  }
+
+  const tableId = state.nextTableId++;
+  const sheetAreas = state.areasBySheet.get(sheetName) || [];
+  let overlapsExistingArea = false;
+
+  for (const existing of sheetAreas) {
+    if (bannerScanAreasOverlap(area, existing.area)) {
+      overlapsExistingArea = true;
+      state.overlappingTableIds.add(existing.tableId);
+    }
+  }
+
+  if (overlapsExistingArea) {
+    state.overlappingTableIds.add(tableId);
+  }
+
+  sheetAreas.push({ tableId, area });
+  state.areasBySheet.set(sheetName, sheetAreas);
+  aggregate.tablesWithOverlappingBannerAreas = state.overlappingTableIds.size;
+  aggregate.perSheetBannerTablesMax = Math.max(aggregate.perSheetBannerTablesMax, sheetAreas.length);
+}
+
+function mergeBannerPerfDetails(aggregate, bannerDetails, sheetName) {
   if (!aggregate || !bannerDetails) {
     return;
   }
@@ -481,11 +557,41 @@ function mergeBannerPerfDetails(aggregate, bannerDetails) {
   aggregate.cellsPlanned += bannerDetails.cellsPlanned || 0;
   aggregate.cellsChanged += bannerDetails.cellsChanged || 0;
   aggregate.writeCommands += bannerDetails.writeCommands || 0;
+  aggregate.changedCellRuns += bannerDetails.changedCellRuns || 0;
+  aggregate.oneCellWriteCommands += bannerDetails.oneCellWriteCommands || 0;
+  aggregate.multiCellWriteCommands += bannerDetails.multiCellWriteCommands || 0;
+  aggregate.markeredWriteCommands += bannerDetails.markeredWriteCommands || 0;
+  aggregate.clearOnlyWriteCommands += bannerDetails.clearOnlyWriteCommands || 0;
+  aggregate.numberFormatCommands += bannerDetails.numberFormatCommands || 0;
+  aggregate.changedRows += bannerDetails.changedRows || 0;
   aggregate.skippedNoOpWrites += bannerDetails.skippedNoOpWrites || 0;
+  aggregate.readSyncMs += bannerDetails.readSyncMs || 0;
+  aggregate.planMs += bannerDetails.planMs || 0;
+  aggregate.queueWriteMs += bannerDetails.queueWriteMs || 0;
   aggregate.syncCount += bannerDetails.syncCount || 0;
   if ((bannerDetails.writeCommands || 0) > aggregate.maxWriteCommands) {
     aggregate.maxWriteCommands = bannerDetails.writeCommands;
   }
+  if ((bannerDetails.maxRunLength || 0) > aggregate.maxRunLength) {
+    aggregate.maxRunLength = bannerDetails.maxRunLength;
+  }
+  if ((bannerDetails.maxChangedCellsInRow || 0) > aggregate.maxChangedCellsInRow) {
+    aggregate.maxChangedCellsInRow = bannerDetails.maxChangedCellsInRow;
+  }
+  if ((bannerDetails.cellsChanged || 0) > aggregate.maxChangedCellsPerTable) {
+    aggregate.maxChangedCellsPerTable = bannerDetails.cellsChanged;
+  }
+  if ((bannerDetails.changedRows || 0) > aggregate.maxChangedRowsPerTable) {
+    aggregate.maxChangedRowsPerTable = bannerDetails.changedRows;
+  }
+  aggregate.avgRunLength = aggregate.changedCellRuns
+    ? roundBannerDiagnosticRatio(aggregate.cellsChanged / aggregate.changedCellRuns)
+    : 0;
+  aggregate.avgChangedCellsPerChangedRow = aggregate.changedRows
+    ? roundBannerDiagnosticRatio(aggregate.cellsChanged / aggregate.changedRows)
+    : 0;
+
+  mergeBannerScanAreaDiagnostics(aggregate, bannerDetails, sheetName);
 }
 
 // ─── Action + Scope shell (issue #167 PR1) ───────────────────────────────────
@@ -1615,7 +1721,8 @@ async function runAutoSignificance() {
               );
               mergeBannerPerfDetails(
                 _perfPhases.writeDetails.bannerDetails,
-                result._phasesMs.writeDetails.bannerDetails
+                result._phasesMs.writeDetails.bannerDetails,
+                candidate.sheetName
               );
             }
           }
@@ -1689,7 +1796,8 @@ async function runAutoSignificance() {
           );
           mergeBannerPerfDetails(
             _perfPhases.writeDetails.bannerDetails,
-            result._phasesMs.writeDetails.bannerDetails
+            result._phasesMs.writeDetails.bannerDetails,
+            candidate.sheetName
           );
         }
       }
@@ -2425,7 +2533,8 @@ async function runCurrentSheetSignificance() {
               );
               mergeBannerPerfDetails(
                 _perfPhases.writeDetails.bannerDetails,
-                result._phasesMs.writeDetails.bannerDetails
+                result._phasesMs.writeDetails.bannerDetails,
+                candidate.sheetName
               );
             }
           }
@@ -2499,7 +2608,8 @@ async function runCurrentSheetSignificance() {
           );
           mergeBannerPerfDetails(
             _perfPhases.writeDetails.bannerDetails,
-            result._phasesMs.writeDetails.bannerDetails
+            result._phasesMs.writeDetails.bannerDetails,
+            candidate.sheetName
           );
         }
       }
@@ -5134,8 +5244,10 @@ async function applyBannerMarkerUpdatesForRange(
     totalScanRowCount,
     scanColCount
   );
+  const readSyncStartMs = perfNow();
   bannerScanRange.load("text");
   await context.sync();
+  const readSyncEndMs = perfNow();
   let syncCount = 1;
 
   const bannerTexts = bannerScanRange.text;
@@ -5275,7 +5387,23 @@ async function applyBannerMarkerUpdatesForRange(
     }
   }
 
+  const changedRows = writesByRow.size;
+  let maxChangedCellsInRow = 0;
+  for (const items of writesByRow.values()) {
+    if (items.length > maxChangedCellsInRow) {
+      maxChangedCellsInRow = items.length;
+    }
+  }
+
+  const queueWriteStartMs = perfNow();
   let writeCommands = 0;
+  let changedCellRuns = 0;
+  let oneCellWriteCommands = 0;
+  let multiCellWriteCommands = 0;
+  let markeredWriteCommands = 0;
+  let clearOnlyWriteCommands = 0;
+  let numberFormatCommands = 0;
+  let maxRunLength = 0;
 
   if (cellsChanged > 0) {
     const worksheet = writeTargetRange.worksheet;
@@ -5298,13 +5426,29 @@ async function applyBannerMarkerUpdatesForRange(
         const slice = items.slice(i, j + 1);
         const texts = slice.map((x) => x.text);
         const range = worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1);
+        const runLength = texts.length;
 
         if (useStructure && slice[0].markered) {
           range.numberFormat = [texts.map(() => "@")];
+          numberFormatCommands++;
         }
         range.values = [texts];
 
         writeCommands++;
+        changedCellRuns++;
+        if (runLength === 1) {
+          oneCellWriteCommands++;
+        } else {
+          multiCellWriteCommands++;
+        }
+        if (slice[0].markered) {
+          markeredWriteCommands++;
+        } else {
+          clearOnlyWriteCommands++;
+        }
+        if (runLength > maxRunLength) {
+          maxRunLength = runLength;
+        }
         i = j + 1;
       }
     }
@@ -5312,15 +5456,46 @@ async function applyBannerMarkerUpdatesForRange(
     // flushes the queued banner writes alongside any other pending ops.
   }
 
-  return {
+  const queueWriteEndMs = perfNow();
+  const details = {
     rowsScanned: totalScanRowCount,
     cellsRead: totalScanRowCount * scanColCount,
     cellsPlanned,
     cellsChanged,
     writeCommands,
+    changedCellRuns,
+    avgRunLength: changedCellRuns
+      ? roundBannerDiagnosticRatio(cellsChanged / changedCellRuns)
+      : 0,
+    maxRunLength,
+    oneCellWriteCommands,
+    multiCellWriteCommands,
+    markeredWriteCommands,
+    clearOnlyWriteCommands,
+    numberFormatCommands,
+    changedRows,
+    avgChangedCellsPerChangedRow: changedRows
+      ? roundBannerDiagnosticRatio(cellsChanged / changedRows)
+      : 0,
+    maxChangedCellsInRow,
     skippedNoOpWrites,
+    readSyncMs: readSyncEndMs - readSyncStartMs,
+    planMs: queueWriteStartMs - readSyncEndMs,
+    queueWriteMs: queueWriteEndMs - queueWriteStartMs,
     syncCount,
   };
+
+  Object.defineProperty(details, BANNER_SCAN_AREA_STATS, {
+    value: {
+      rowIndex: targetStartRowIndex - totalScanRowCount,
+      columnIndex: scanStartColIndex,
+      rowCount: totalScanRowCount,
+      columnCount: scanColCount,
+    },
+    enumerable: false,
+  });
+
+  return details;
 }
 
 /**
