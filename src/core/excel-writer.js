@@ -25,6 +25,7 @@ export function writeCellResultsToSelectedRange(
   const shouldCaptureWriterDetails = Boolean(options.captureWriterDetails);
   const writerDetails = shouldCaptureWriterDetails ? createWriterDetails() : null;
   const buildMatricesStartedAt = shouldCaptureWriterDetails ? Date.now() : 0;
+  const shouldApplyVisualFormatting = calculationSettings.resultFormattingLevel !== "markersOnly";
 
   const rowTypeByIndex = buildDetectedRowTypeByIndexMap(detectionResult);
 
@@ -134,14 +135,16 @@ export function writeCellResultsToSelectedRange(
     writerDetails.valuesWriteMs = Date.now() - valuesWriteStartedAt;
   }
 
-  applyGroupedBoldFormatting(selectedRange, boldMask, writerDetails);
-  applyGroupedFillFormatting(
-    selectedRange,
-    fillReasonMask,
-    cellResultMatrix,
-    calculationSettings,
-    writerDetails
-  );
+  if (shouldApplyVisualFormatting) {
+    applyGroupedBoldFormatting(selectedRange, boldMask, writerDetails);
+    applyGroupedFillFormatting(
+      selectedRange,
+      fillReasonMask,
+      cellResultMatrix,
+      calculationSettings,
+      writerDetails
+    );
+  }
 
   return writerDetails;
 }

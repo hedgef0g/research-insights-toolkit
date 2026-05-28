@@ -13,6 +13,7 @@ export const SETTINGS_CONTROL_CONFIG = [
   },
 
   { id: "round-cell-values", type: "checked", settingName: "roundCellValues" },
+  { id: "result-formatting-level", type: "value", settingName: "resultFormattingLevel" },
 
   {
     id: "compare-with-previous-column",
@@ -75,6 +76,7 @@ export const DEFAULT_CALCULATION_SETTINGS = {
   oneTailedTest: false,
 
   roundCellValues: false,
+  resultFormattingLevel: "full",
 
   compareWithPreviousColumn: false,
   applyPreviousColumnFill: false,
