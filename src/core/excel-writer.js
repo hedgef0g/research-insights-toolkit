@@ -136,17 +136,23 @@ export function writeCellResultsToSelectedRange(
   }
 
   if (shouldApplyVisualFormatting) {
-    applyGroupedBoldFormatting(selectedRange, boldMask, writerDetails);
+    const formattingContext = resolveFormattingContext(selectedRange, options);
+
+    applyGroupedBoldFormatting(selectedRange, boldMask, formattingContext, writerDetails);
     applyGroupedFillFormatting(
       selectedRange,
       fillReasonMask,
       cellResultMatrix,
       calculationSettings,
+      formattingContext,
       writerDetails
     );
 
     if (writerDetails) {
-      populateRangeAreasDiagnostics(writerDetails, selectedRange);
+      writerDetails.formattingPath = shouldUseRangeAreasPath(formattingContext)
+        ? "rangeAreas"
+        : "rowRuns";
+      populateRangeAreasDiagnostics(writerDetails, formattingContext);
     }
   }
 
@@ -155,26 +161,25 @@ export function writeCellResultsToSelectedRange(
 
 /**
  * Diagnostics-only: projects how many queued Office.js operations a chunked
- * `worksheet.getRanges(...)` RangeAreas strategy (ExcelApi 1.9) would use for
- * the bold and fill masks the writer just processed. The writer still issues
- * the existing row-run commands; this is captured purely for #284 comparison.
+ * `worksheet.getRanges(...)` RangeAreas strategy (ExcelApi 1.9) uses for the
+ * bold and fill masks the writer just processed. On the RangeAreas path, the
+ * projection matches the actual queued ops. On the row-run fallback path,
+ * the projection still shows what the chunked path would have done for
+ * before/after comparison.
  *
- * Requires `selectedRange.rowIndex` and `selectedRange.columnIndex` to be
- * loaded. If reading them throws (e.g. property-not-loaded), diagnostics are
- * skipped so this remains a zero-risk side observation.
+ * Requires resolved `anchorRowIndex` / `anchorColumnIndex` from the formatting
+ * context. If neither caller-supplied options nor loaded selectedRange
+ * properties provided them, the projection is skipped silently.
  */
-function populateRangeAreasDiagnostics(writerDetails, selectedRange) {
-  let anchorRowIndex;
-  let anchorColumnIndex;
-
-  try {
-    anchorRowIndex = selectedRange.rowIndex;
-    anchorColumnIndex = selectedRange.columnIndex;
-  } catch (_) {
-    return;
-  }
+function populateRangeAreasDiagnostics(writerDetails, formattingContext) {
+  const anchorRowIndex = formattingContext.anchorRowIndex;
+  const anchorColumnIndex = formattingContext.anchorColumnIndex;
 
   if (typeof anchorRowIndex !== "number" || typeof anchorColumnIndex !== "number") {
+    // No anchor available — drop the internal span arrays anyway so the
+    // RIT_PERF log stays compact on wide workbooks.
+    delete writerDetails._boldRunSpansByRow;
+    delete writerDetails._fillRunSpansByRow;
     return;
   }
 
@@ -198,6 +203,85 @@ function populateRangeAreasDiagnostics(writerDetails, selectedRange) {
   // emitted writerDetails to keep the perf log lean.
   delete writerDetails._boldRunSpansByRow;
   delete writerDetails._fillRunSpansByRow;
+}
+
+/**
+ * Resolves the formatting context for a single writer invocation:
+ *   - whether the host advertises ExcelApi 1.9 (`worksheet.getRanges(...)`);
+ *   - the sheet-absolute anchor row/column of the write range.
+ *
+ * Support is evaluated once per write so the gate cost is paid at most one
+ * time across both bold and fill formatting passes.
+ *
+ * Anchor coords are preferred from caller-supplied options
+ * (`anchorRowIndex` / `anchorColumnIndex`) because the autorun path computes
+ * them from the already-loaded source range and never loads them on the write
+ * target proxy. If options are missing, the writer falls back to reading
+ * `selectedRange.rowIndex` / `selectedRange.columnIndex` (loaded by the
+ * manual selected-range path). Either resolves to numeric coords, or both
+ * stay null and the RangeAreas path is disabled for this write.
+ */
+function resolveFormattingContext(selectedRange, options = {}) {
+  let anchorRowIndex = null;
+  let anchorColumnIndex = null;
+
+  if (typeof options.anchorRowIndex === "number" && typeof options.anchorColumnIndex === "number") {
+    anchorRowIndex = options.anchorRowIndex;
+    anchorColumnIndex = options.anchorColumnIndex;
+  } else {
+    try {
+      const candidateRow = selectedRange.rowIndex;
+      const candidateColumn = selectedRange.columnIndex;
+      if (typeof candidateRow === "number" && typeof candidateColumn === "number") {
+        anchorRowIndex = candidateRow;
+        anchorColumnIndex = candidateColumn;
+      }
+    } catch (_) {
+      // PropertyNotLoaded or similar — RangeAreas path is disabled for this
+      // write and the row-run fallback is used.
+    }
+  }
+
+  return {
+    isExcelApi19Supported: isExcelApi19Supported(),
+    anchorRowIndex,
+    anchorColumnIndex,
+  };
+}
+
+/**
+ * Returns true if the host advertises ExcelApi 1.9 (`worksheet.getRanges(...)`
+ * → `RangeAreas`). Safe to call in test environments without an Office global.
+ */
+function isExcelApi19Supported() {
+  try {
+    if (
+      typeof Office === "undefined" ||
+      !Office ||
+      !Office.context ||
+      !Office.context.requirements ||
+      typeof Office.context.requirements.isSetSupported !== "function"
+    ) {
+      return false;
+    }
+    return Boolean(Office.context.requirements.isSetSupported("ExcelApi", "1.9"));
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Pure branch-selection helper exported for tests. Returns true when the
+ * writer should issue the chunked `worksheet.getRanges(...)` RangeAreas path
+ * and false when it should fall back to the per-row-run path.
+ */
+export function shouldUseRangeAreasPath(formattingContext) {
+  return Boolean(
+    formattingContext &&
+    formattingContext.isExcelApi19Supported &&
+    typeof formattingContext.anchorRowIndex === "number" &&
+    typeof formattingContext.anchorColumnIndex === "number"
+  );
 }
 
 /**
@@ -371,16 +455,44 @@ export function resolveNumericOutput(displayString) {
   return { value: parsed.numericValue, format: `0.${"0".repeat(decimalPlaces)}` };
 }
 
-function applyGroupedBoldFormatting(selectedRange, boldMask, writerDetails = null) {
+function applyGroupedBoldFormatting(selectedRange, boldMask, formattingContext, writerDetails = null) {
   const formatStartedAt = writerDetails ? Date.now() : 0;
-  const boldRunsByRow = writerDetails ? [] : null;
-  const boldRunSpansByRow = writerDetails ? [] : null;
+
+  // Walk the mask once and materialize per-row spans so both the row-run and
+  // RangeAreas writers can consume the same span data without re-walking.
+  const boldRunSpansByRow = collectBoldRunSpansByRow(boldMask);
+  const boldRunsByRow = boldRunSpansByRow.map((rowSpans) => rowSpans.length);
+
+  const useRangeAreas = shouldUseRangeAreasPath(formattingContext);
+  let appliedCommandEstimate = 0;
+
+  if (useRangeAreas) {
+    appliedCommandEstimate = applyBoldSpansViaRangeAreas(
+      selectedRange,
+      boldRunSpansByRow,
+      formattingContext.anchorRowIndex,
+      formattingContext.anchorColumnIndex
+    );
+  } else {
+    applyBoldSpansViaRowRuns(selectedRange, boldRunSpansByRow);
+  }
+
+  if (writerDetails) {
+    writerDetails.boldFormatMs = Date.now() - formatStartedAt;
+    writerDetails.boldRunCountByRow = boldRunsByRow;
+    writerDetails.boldCommandCount = sumCounts(boldRunsByRow);
+    writerDetails.boldRectCommandCountEstimate = estimateRectangleCommandCount(boldRunSpansByRow);
+    writerDetails._boldRunSpansByRow = boldRunSpansByRow;
+    writerDetails.boldRangeAreasAppliedCommandEstimate = appliedCommandEstimate;
+  }
+}
+
+function collectBoldRunSpansByRow(boldMask) {
+  const out = [];
 
   for (let rowIndex = 0; rowIndex < boldMask.length; rowIndex++) {
     const row = boldMask[rowIndex];
-    let rowRunCount = 0;
-    const rowRunSpans = writerDetails ? [] : null;
-
+    const rowSpans = [];
     let runStart = null;
 
     for (let columnIndex = 0; columnIndex <= row.length; columnIndex++) {
@@ -392,35 +504,56 @@ function applyGroupedBoldFormatting(selectedRange, boldMask, writerDetails = nul
       }
 
       if ((!shouldBeBold || columnIndex === row.length) && runStart !== null) {
-        const runEnd = columnIndex - 1;
-        const runWidth = runEnd - runStart + 1;
-        rowRunCount += 1;
-
-        if (rowRunSpans) {
-          rowRunSpans.push({ start: runStart, end: runEnd });
-        }
-
-        selectedRange
-          .getCell(rowIndex, runStart)
-          .getResizedRange(0, runWidth - 1).format.font.bold = true;
-
+        rowSpans.push({ start: runStart, end: columnIndex - 1 });
         runStart = null;
       }
     }
 
-    if (boldRunsByRow) {
-      boldRunsByRow.push(rowRunCount);
-      boldRunSpansByRow.push(rowRunSpans);
+    out.push(rowSpans);
+  }
+
+  return out;
+}
+
+function applyBoldSpansViaRowRuns(selectedRange, boldRunSpansByRow) {
+  for (let rowIndex = 0; rowIndex < boldRunSpansByRow.length; rowIndex++) {
+    const rowSpans = boldRunSpansByRow[rowIndex];
+    for (const runSpan of rowSpans) {
+      const runWidth = runSpan.end - runSpan.start + 1;
+      selectedRange
+        .getCell(rowIndex, runSpan.start)
+        .getResizedRange(0, runWidth - 1).format.font.bold = true;
+    }
+  }
+}
+
+function applyBoldSpansViaRangeAreas(
+  selectedRange,
+  boldRunSpansByRow,
+  anchorRowIndex,
+  anchorColumnIndex
+) {
+  const addresses = [];
+  for (let rowIndex = 0; rowIndex < boldRunSpansByRow.length; rowIndex++) {
+    const rowSpans = boldRunSpansByRow[rowIndex];
+    for (const runSpan of rowSpans) {
+      addresses.push(runSpanToA1Address(runSpan, rowIndex, anchorRowIndex, anchorColumnIndex));
     }
   }
 
-  if (writerDetails) {
-    writerDetails.boldFormatMs = Date.now() - formatStartedAt;
-    writerDetails.boldRunCountByRow = boldRunsByRow;
-    writerDetails.boldCommandCount = sumCounts(boldRunsByRow);
-    writerDetails.boldRectCommandCountEstimate = estimateRectangleCommandCount(boldRunSpansByRow);
-    writerDetails._boldRunSpansByRow = boldRunSpansByRow;
+  if (addresses.length === 0) {
+    return 0;
   }
+
+  const chunks = packAddressesIntoChunks(addresses);
+  const worksheet = selectedRange.worksheet;
+
+  for (const chunk of chunks) {
+    worksheet.getRanges(chunk.address).format.font.bold = true;
+  }
+
+  // Each chunk costs one getRanges + one .format.font.bold setter.
+  return chunks.length * 2;
 }
 
 function applyGroupedFillFormatting(
@@ -428,16 +561,48 @@ function applyGroupedFillFormatting(
   fillReasonMask,
   cellResultMatrix,
   calculationSettings,
+  formattingContext,
   writerDetails = null
 ) {
   const formatStartedAt = writerDetails ? Date.now() : 0;
-  const fillRunsByRow = writerDetails ? [] : null;
-  const fillRunSpansByRow = writerDetails ? [] : null;
+
+  const fillRunSpansByRow = collectFillRunSpansByRow(
+    fillReasonMask,
+    cellResultMatrix,
+    calculationSettings
+  );
+  const fillRunsByRow = fillRunSpansByRow.map((rowSpans) => rowSpans.length);
+
+  const useRangeAreas = shouldUseRangeAreasPath(formattingContext);
+  let appliedCommandEstimate = 0;
+
+  if (useRangeAreas) {
+    appliedCommandEstimate = applyFillSpansViaRangeAreas(
+      selectedRange,
+      fillRunSpansByRow,
+      formattingContext.anchorRowIndex,
+      formattingContext.anchorColumnIndex
+    );
+  } else {
+    applyFillSpansViaRowRuns(selectedRange, fillRunSpansByRow);
+  }
+
+  if (writerDetails) {
+    writerDetails.fillFormatMs = Date.now() - formatStartedAt;
+    writerDetails.fillRunCountByRow = fillRunsByRow;
+    writerDetails.fillCommandCount = sumCounts(fillRunsByRow);
+    writerDetails.fillRectCommandCountEstimate = estimateRectangleCommandCount(fillRunSpansByRow);
+    writerDetails._fillRunSpansByRow = fillRunSpansByRow;
+    writerDetails.fillRangeAreasAppliedCommandEstimate = appliedCommandEstimate;
+  }
+}
+
+function collectFillRunSpansByRow(fillReasonMask, cellResultMatrix, calculationSettings) {
+  const out = [];
 
   for (let rowIndex = 0; rowIndex < fillReasonMask.length; rowIndex++) {
     const row = fillReasonMask[rowIndex];
-    let rowRunCount = 0;
-    const rowRunSpans = writerDetails ? [] : null;
+    const rowSpans = [];
 
     let runStart = null;
     let currentRunColor = "";
@@ -465,21 +630,11 @@ function applyGroupedFillFormatting(
       }
 
       if (runStart !== null) {
-        const runEnd = columnIndex - 1;
-        const runWidth = runEnd - runStart + 1;
-        rowRunCount += 1;
-
-        if (rowRunSpans) {
-          rowRunSpans.push({
-            start: runStart,
-            end: runEnd,
-            color: currentRunColor,
-          });
-        }
-
-        selectedRange
-          .getCell(rowIndex, runStart)
-          .getResizedRange(0, runWidth - 1).format.fill.color = currentRunColor;
+        rowSpans.push({
+          start: runStart,
+          end: columnIndex - 1,
+          color: currentRunColor,
+        });
 
         runStart = null;
         currentRunColor = "";
@@ -491,19 +646,68 @@ function applyGroupedFillFormatting(
       }
     }
 
-    if (fillRunsByRow) {
-      fillRunsByRow.push(rowRunCount);
-      fillRunSpansByRow.push(rowRunSpans);
+    out.push(rowSpans);
+  }
+
+  return out;
+}
+
+function applyFillSpansViaRowRuns(selectedRange, fillRunSpansByRow) {
+  for (let rowIndex = 0; rowIndex < fillRunSpansByRow.length; rowIndex++) {
+    const rowSpans = fillRunSpansByRow[rowIndex];
+    for (const runSpan of rowSpans) {
+      const runWidth = runSpan.end - runSpan.start + 1;
+      selectedRange
+        .getCell(rowIndex, runSpan.start)
+        .getResizedRange(0, runWidth - 1).format.fill.color = runSpan.color;
+    }
+  }
+}
+
+function applyFillSpansViaRangeAreas(
+  selectedRange,
+  fillRunSpansByRow,
+  anchorRowIndex,
+  anchorColumnIndex
+) {
+  // RangeAreas.format.fill.color is a single uniform value per call, so spans
+  // are grouped by color and chunked independently for each color. Different
+  // colors never share a chunk.
+  const addressesByColor = new Map();
+
+  for (let rowIndex = 0; rowIndex < fillRunSpansByRow.length; rowIndex++) {
+    const rowSpans = fillRunSpansByRow[rowIndex];
+    for (const runSpan of rowSpans) {
+      const color = runSpan.color || "";
+      if (!color) continue;
+
+      const address = runSpanToA1Address(runSpan, rowIndex, anchorRowIndex, anchorColumnIndex);
+
+      if (!addressesByColor.has(color)) {
+        addressesByColor.set(color, []);
+      }
+      addressesByColor.get(color).push(address);
     }
   }
 
-  if (writerDetails) {
-    writerDetails.fillFormatMs = Date.now() - formatStartedAt;
-    writerDetails.fillRunCountByRow = fillRunsByRow;
-    writerDetails.fillCommandCount = sumCounts(fillRunsByRow);
-    writerDetails.fillRectCommandCountEstimate = estimateRectangleCommandCount(fillRunSpansByRow);
-    writerDetails._fillRunSpansByRow = fillRunSpansByRow;
+  if (addressesByColor.size === 0) {
+    return 0;
   }
+
+  let totalChunkCount = 0;
+  const worksheet = selectedRange.worksheet;
+
+  for (const [color, addresses] of addressesByColor) {
+    const chunks = packAddressesIntoChunks(addresses);
+    totalChunkCount += chunks.length;
+
+    for (const chunk of chunks) {
+      worksheet.getRanges(chunk.address).format.fill.color = color;
+    }
+  }
+
+  // Each chunk costs one getRanges + one .format.fill.color setter.
+  return totalChunkCount * 2;
 }
 
 function createWriterDetails() {
@@ -521,6 +725,17 @@ function createWriterDetails() {
     fillRectCommandCountEstimate: 0,
     boldRangeAreas: null,
     fillRangeAreas: null,
+    // formattingPath records which branch of applyGrouped*Formatting actually
+    // ran for this write. "rangeAreas" → chunked `worksheet.getRanges(...)`
+    // path (ExcelApi 1.9). "rowRuns" → per-row-run fallback. null when visual
+    // formatting was skipped (markers-only mode).
+    formattingPath: null,
+    // Actual queued-op estimates for the path the writer took:
+    //   rangeAreas path → chunks * 2 (one getRanges + one setter per chunk).
+    //   rowRuns path    → 0 (the projection in boldRangeAreas/fillRangeAreas
+    //                       still shows the chunked path's count for comparison).
+    boldRangeAreasAppliedCommandEstimate: 0,
+    fillRangeAreasAppliedCommandEstimate: 0,
   };
 }
 
@@ -559,18 +774,19 @@ function buildRunSpanSignature(runSpan) {
 }
 
 /**
- * Spike helpers for issue #284.
+ * Helpers for the chunked RangeAreas formatting path (issues #284 / #286).
  *
- * Diagnostics-only. These helpers convert the row-run mask data the writer
- * already produces into the A1 address strings a chunked
- * `worksheet.getRanges(...)` (RangeAreas, ExcelApi 1.9) call would consume,
- * and estimate how many queued Office.js operations such a strategy would use.
- *
- * The writer itself still issues the original row-run formatting commands.
- * These helpers exist only to populate `writerDetails.boldRangeAreas` and
- * `writerDetails.fillRangeAreas` when RIT_PERF is enabled, so we can compare
- * the projected RangeAreas command count against the live row-run count on
- * real workbooks before committing to a wider writer change.
+ * These helpers convert the row-run mask data the writer produces into the
+ * A1 address strings a `worksheet.getRanges(...)` (RangeAreas, ExcelApi 1.9)
+ * call consumes. They are used both:
+ *   - by the writer's RangeAreas path (`applyBoldSpansViaRangeAreas` /
+ *     `applyFillSpansViaRangeAreas`) when the host advertises ExcelApi 1.9, to
+ *     produce the chunk addresses passed to `worksheet.getRanges(...)`;
+ *   - by `populateRangeAreasDiagnostics` to record the projection in
+ *     `writerDetails.boldRangeAreas` / `writerDetails.fillRangeAreas` for
+ *     RIT_PERF logging. On the RangeAreas path the projection matches the
+ *     actual queued ops; on the row-run fallback it still shows what the
+ *     chunked path would have done for before/after comparison.
  *
  * Pure: no Office.js calls. Anchor coords are passed in as numbers.
  */

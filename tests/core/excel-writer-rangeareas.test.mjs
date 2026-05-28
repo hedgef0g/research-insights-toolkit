@@ -7,6 +7,7 @@ import {
   packAddressesIntoChunks,
   buildBoldRangeAreasDiagnostics,
   buildFillRangeAreasDiagnosticsByColor,
+  shouldUseRangeAreasPath,
 } from "../../src/core/excel-writer.js";
 
 describe("columnIndexToA1", () => {
@@ -187,5 +188,81 @@ describe("buildFillRangeAreasDiagnosticsByColor", () => {
     const summary = buildFillRangeAreasDiagnosticsByColor(spansByRow, 0, 0);
     assert.strictEqual(summary.areaCountTotal, 1);
     assert.strictEqual(summary.colorCount, 1);
+  });
+});
+
+describe("shouldUseRangeAreasPath", () => {
+  it("returns true when ExcelApi 1.9 is supported and anchors are numeric", () => {
+    assert.strictEqual(
+      shouldUseRangeAreasPath({
+        isExcelApi19Supported: true,
+        anchorRowIndex: 0,
+        anchorColumnIndex: 0,
+      }),
+      true
+    );
+    assert.strictEqual(
+      shouldUseRangeAreasPath({
+        isExcelApi19Supported: true,
+        anchorRowIndex: 12,
+        anchorColumnIndex: 7,
+      }),
+      true
+    );
+  });
+
+  it("returns false when ExcelApi 1.9 is not supported", () => {
+    assert.strictEqual(
+      shouldUseRangeAreasPath({
+        isExcelApi19Supported: false,
+        anchorRowIndex: 0,
+        anchorColumnIndex: 0,
+      }),
+      false
+    );
+  });
+
+  it("returns false when either anchor coord is missing", () => {
+    assert.strictEqual(
+      shouldUseRangeAreasPath({
+        isExcelApi19Supported: true,
+        anchorRowIndex: null,
+        anchorColumnIndex: 0,
+      }),
+      false
+    );
+    assert.strictEqual(
+      shouldUseRangeAreasPath({
+        isExcelApi19Supported: true,
+        anchorRowIndex: 0,
+        anchorColumnIndex: null,
+      }),
+      false
+    );
+    assert.strictEqual(
+      shouldUseRangeAreasPath({
+        isExcelApi19Supported: true,
+        anchorRowIndex: undefined,
+        anchorColumnIndex: undefined,
+      }),
+      false
+    );
+  });
+
+  it("returns false for a missing or empty formattingContext", () => {
+    assert.strictEqual(shouldUseRangeAreasPath(null), false);
+    assert.strictEqual(shouldUseRangeAreasPath(undefined), false);
+    assert.strictEqual(shouldUseRangeAreasPath({}), false);
+  });
+
+  it("treats non-number anchors as missing", () => {
+    assert.strictEqual(
+      shouldUseRangeAreasPath({
+        isExcelApi19Supported: true,
+        anchorRowIndex: "0",
+        anchorColumnIndex: "0",
+      }),
+      false
+    );
   });
 });
