@@ -105,7 +105,7 @@ import {
   buildInventoryContentSkippedRow,
 } from "./taskpane-inventory-scan";
 
-import { perfNow, perfElapsed, perfLog, perfEnabled } from "./taskpane-performance";
+import { perfNow, perfElapsed, perfLog, perfEnabled, perfFlagEnabled } from "./taskpane-performance";
 
 const INVENTORY_CONTENT_SHEET_NAME = "Content";
 const RUN_REPORT_SHEET_NAME = "Run report";
@@ -474,6 +474,10 @@ function createAggregatedBannerPerfDetails() {
     markeredWriteCommands: 0,
     clearOnlyWriteCommands: 0,
     numberFormatCommands: 0,
+    numberFormatCells: 0,
+    valueWriteCells: 0,
+    markeredValueWriteCells: 0,
+    clearOnlyValueWriteCells: 0,
     changedRows: 0,
     avgChangedCellsPerChangedRow: 0,
     maxChangedCellsInRow: 0,
@@ -481,9 +485,17 @@ function createAggregatedBannerPerfDetails() {
     maxChangedRowsPerTable: 0,
     skippedNoOpWrites: 0,
     readSyncMs: 0,
+    readProperty: "text",
+    valuesReadProbeMs: 0,
+    valuesReadProbeTables: 0,
     planMs: 0,
     queueWriteMs: 0,
     syncCount: 0,
+    scanRowsWithAnyText: 0,
+    lowerRowMarkerPlacements: 0,
+    upperRowMarkerPlacements: 0,
+    fallbackMarkerPlacements: 0,
+    markerRowOffsetsUsed: [],
     maxWriteCommands: 0,
     tablesWithOverlappingBannerAreas: 0,
     perSheetBannerTablesMax: 0,
@@ -493,6 +505,7 @@ function createAggregatedBannerPerfDetails() {
     value: {
       areasBySheet: new Map(),
       overlappingTableIds: new Set(),
+      markerRowOffsetsUsed: new Set(),
       nextTableId: 1,
     },
     enumerable: false,
@@ -563,12 +576,31 @@ function mergeBannerPerfDetails(aggregate, bannerDetails, sheetName) {
   aggregate.markeredWriteCommands += bannerDetails.markeredWriteCommands || 0;
   aggregate.clearOnlyWriteCommands += bannerDetails.clearOnlyWriteCommands || 0;
   aggregate.numberFormatCommands += bannerDetails.numberFormatCommands || 0;
+  aggregate.numberFormatCells += bannerDetails.numberFormatCells || 0;
+  aggregate.valueWriteCells += bannerDetails.valueWriteCells || 0;
+  aggregate.markeredValueWriteCells += bannerDetails.markeredValueWriteCells || 0;
+  aggregate.clearOnlyValueWriteCells += bannerDetails.clearOnlyValueWriteCells || 0;
   aggregate.changedRows += bannerDetails.changedRows || 0;
   aggregate.skippedNoOpWrites += bannerDetails.skippedNoOpWrites || 0;
   aggregate.readSyncMs += bannerDetails.readSyncMs || 0;
+  aggregate.valuesReadProbeMs += bannerDetails.valuesReadProbeMs || 0;
+  if (bannerDetails.valuesReadProbeEnabled) {
+    aggregate.valuesReadProbeTables += 1;
+  }
   aggregate.planMs += bannerDetails.planMs || 0;
   aggregate.queueWriteMs += bannerDetails.queueWriteMs || 0;
   aggregate.syncCount += bannerDetails.syncCount || 0;
+  aggregate.scanRowsWithAnyText += bannerDetails.scanRowsWithAnyText || 0;
+  aggregate.lowerRowMarkerPlacements += bannerDetails.lowerRowMarkerPlacements || 0;
+  aggregate.upperRowMarkerPlacements += bannerDetails.upperRowMarkerPlacements || 0;
+  aggregate.fallbackMarkerPlacements += bannerDetails.fallbackMarkerPlacements || 0;
+  const state = aggregate[BANNER_AGGREGATE_STATE];
+  if (state && Array.isArray(bannerDetails.markerRowOffsetsUsed)) {
+    for (const rowOffset of bannerDetails.markerRowOffsetsUsed) {
+      state.markerRowOffsetsUsed.add(rowOffset);
+    }
+    aggregate.markerRowOffsetsUsed = Array.from(state.markerRowOffsetsUsed).sort((a, b) => a - b);
+  }
   if ((bannerDetails.writeCommands || 0) > aggregate.maxWriteCommands) {
     aggregate.maxWriteCommands = bannerDetails.writeCommands;
   }
@@ -5249,17 +5281,42 @@ async function applyBannerMarkerUpdatesForRange(
   await context.sync();
   const readSyncEndMs = perfNow();
   let syncCount = 1;
+  let valuesReadProbeMs = 0;
+  let valuesReadProbeEnabled = false;
 
   const bannerTexts = bannerScanRange.text;
+  if (perfFlagEnabled("__RIT_BANNER_VALUES_READ_PROBE", "RIT_BANNER_VALUES_READ_PROBE")) {
+    const valuesReadRange = writeTargetRange.worksheet.getRangeByIndexes(
+      targetStartRowIndex - totalScanRowCount,
+      scanStartColIndex,
+      totalScanRowCount,
+      scanColCount
+    );
+    valuesReadProbeEnabled = true;
+    const valuesProbeStartMs = Date.now();
+    valuesReadRange.load("values");
+    await context.sync();
+    valuesReadProbeMs = Date.now() - valuesProbeStartMs;
+    syncCount++;
+  }
+  const planStartMs = perfNow();
 
   // Desired-text matrix.  Initialised from current texts, then mutated in
   // place by step 1 (strip RIT markers) and step 3 (place markers).
   const desiredTexts = new Array(totalScanRowCount);
+  let scanRowsWithAnyText = 0;
   for (let r = 0; r < totalScanRowCount; r++) {
     const row = bannerTexts[r] || [];
     const destRow = new Array(scanColCount);
+    let rowHasText = false;
     for (let c = 0; c < scanColCount; c++) {
       destRow[c] = row[c] || "";
+      if (destRow[c] !== "") {
+        rowHasText = true;
+      }
+    }
+    if (rowHasText) {
+      scanRowsWithAnyText++;
     }
     desiredTexts[r] = destRow;
   }
@@ -5308,6 +5365,10 @@ async function applyBannerMarkerUpdatesForRange(
   const dataColOffsetInScan = targetStartColumnIndex - scanStartColIndex;
   const markedCellKeys = new Set();
   let cellsPlanned = 0;
+  let lowerRowMarkerPlacements = 0;
+  let upperRowMarkerPlacements = 0;
+  let fallbackMarkerPlacements = 0;
+  const markerRowOffsetsUsed = new Set();
 
   for (let dataCol = 0; dataCol < targetColumnCount; dataCol++) {
     const label = labelMap.get(dataCol);
@@ -5325,6 +5386,8 @@ async function applyBannerMarkerUpdatesForRange(
     if (lowerStripped !== "") {
       desiredTexts[lowerRowIdx][scanCol] = appendOrReplaceTrailingBannerMarker(lowerStripped, label);
       markedCellKeys.add(`${lowerRowIdx},${scanCol}`);
+      lowerRowMarkerPlacements++;
+      markerRowOffsetsUsed.add(0);
       continue;
     }
 
@@ -5339,6 +5402,8 @@ async function applyBannerMarkerUpdatesForRange(
       if (upperStripped !== "") {
         desiredTexts[r][scanCol] = appendOrReplaceTrailingBannerMarker(upperStripped, label);
         markedCellKeys.add(`${r},${scanCol}`);
+        upperRowMarkerPlacements++;
+        markerRowOffsetsUsed.add(r - lowerRowIdx);
         placed = true;
         break;
       }
@@ -5354,6 +5419,8 @@ async function applyBannerMarkerUpdatesForRange(
       // the use of `useStructure` later when batching writes.
       desiredTexts[lowerRowIdx][scanCol] = appendOrReplaceTrailingBannerMarker("", label);
       markedCellKeys.add(`${lowerRowIdx},${scanCol}`);
+      fallbackMarkerPlacements++;
+      markerRowOffsetsUsed.add(0);
     }
   }
 
@@ -5403,6 +5470,10 @@ async function applyBannerMarkerUpdatesForRange(
   let markeredWriteCommands = 0;
   let clearOnlyWriteCommands = 0;
   let numberFormatCommands = 0;
+  let numberFormatCells = 0;
+  let valueWriteCells = 0;
+  let markeredValueWriteCells = 0;
+  let clearOnlyValueWriteCells = 0;
   let maxRunLength = 0;
 
   if (cellsChanged > 0) {
@@ -5431,10 +5502,12 @@ async function applyBannerMarkerUpdatesForRange(
         if (useStructure && slice[0].markered) {
           range.numberFormat = [texts.map(() => "@")];
           numberFormatCommands++;
+          numberFormatCells += runLength;
         }
         range.values = [texts];
 
         writeCommands++;
+        valueWriteCells += runLength;
         changedCellRuns++;
         if (runLength === 1) {
           oneCellWriteCommands++;
@@ -5443,8 +5516,10 @@ async function applyBannerMarkerUpdatesForRange(
         }
         if (slice[0].markered) {
           markeredWriteCommands++;
+          markeredValueWriteCells += runLength;
         } else {
           clearOnlyWriteCommands++;
+          clearOnlyValueWriteCells += runLength;
         }
         if (runLength > maxRunLength) {
           maxRunLength = runLength;
@@ -5473,6 +5548,10 @@ async function applyBannerMarkerUpdatesForRange(
     markeredWriteCommands,
     clearOnlyWriteCommands,
     numberFormatCommands,
+    numberFormatCells,
+    valueWriteCells,
+    markeredValueWriteCells,
+    clearOnlyValueWriteCells,
     changedRows,
     avgChangedCellsPerChangedRow: changedRows
       ? roundBannerDiagnosticRatio(cellsChanged / changedRows)
@@ -5480,9 +5559,17 @@ async function applyBannerMarkerUpdatesForRange(
     maxChangedCellsInRow,
     skippedNoOpWrites,
     readSyncMs: readSyncEndMs - readSyncStartMs,
-    planMs: queueWriteStartMs - readSyncEndMs,
+    readProperty: "text",
+    valuesReadProbeMs,
+    valuesReadProbeEnabled,
+    planMs: queueWriteStartMs - planStartMs,
     queueWriteMs: queueWriteEndMs - queueWriteStartMs,
     syncCount,
+    scanRowsWithAnyText,
+    lowerRowMarkerPlacements,
+    upperRowMarkerPlacements,
+    fallbackMarkerPlacements,
+    markerRowOffsetsUsed: Array.from(markerRowOffsetsUsed).sort((a, b) => a - b),
   };
 
   Object.defineProperty(details, BANNER_SCAN_AREA_STATS, {

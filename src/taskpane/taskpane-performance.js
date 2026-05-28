@@ -1,9 +1,13 @@
 // Development-only performance instrumentation for RIT taskpane flows.
 //
-// Enable from DevTools with either:
+// Enable the main performance log from DevTools with either:
 //   window.__RIT_PERF = true
 //   window.__RIT_PERF = "1"
 //   localStorage.setItem('RIT_PERF', '1')
+//
+// Optional nested probes can use their own runtime/storage flags. For example:
+//   window.__RIT_BANNER_VALUES_READ_PROBE = true
+//   localStorage.setItem('RIT_BANNER_VALUES_READ_PROBE', '1')
 //
 // Disable with either:
 //   window.__RIT_PERF = false
@@ -21,17 +25,17 @@
 // All exported functions are no-ops when disabled, adding zero overhead to
 // production runs.
 
-function _readPerfRuntimeFlag() {
+function _readRuntimeFlag(flagName) {
   try {
     if (typeof globalThis === "undefined") return undefined;
-    return globalThis.__RIT_PERF;
+    return globalThis[flagName];
   } catch (_) {
     return undefined;
   }
 }
 
-function _perfRuntimeFlagEnabled() {
-  const runtimeFlag = _readPerfRuntimeFlag();
+function _runtimeFlagEnabled(flagName) {
+  const runtimeFlag = _readRuntimeFlag(flagName);
 
   if (runtimeFlag === true || runtimeFlag === "1") return true;
   if (runtimeFlag === false || runtimeFlag === "0") return false;
@@ -39,24 +43,32 @@ function _perfRuntimeFlagEnabled() {
   return undefined;
 }
 
-function _perfStorageFlagEnabled() {
+function _storageFlagEnabled(storageKey) {
   try {
-    return typeof localStorage !== "undefined" && localStorage.getItem("RIT_PERF") === "1";
+    return typeof localStorage !== "undefined" && localStorage.getItem(storageKey) === "1";
   } catch (_) {
     return false;
   }
 }
 
 function _perfEnabled() {
-  const runtimeEnabled = _perfRuntimeFlagEnabled();
+  const runtimeEnabled = _runtimeFlagEnabled("__RIT_PERF");
 
   if (runtimeEnabled !== undefined) return runtimeEnabled;
 
-  return _perfStorageFlagEnabled();
+  return _storageFlagEnabled("RIT_PERF");
 }
 
 export function perfEnabled() {
   return _perfEnabled();
+}
+
+export function perfFlagEnabled(runtimeFlagName, storageKey = runtimeFlagName) {
+  const runtimeEnabled = _runtimeFlagEnabled(runtimeFlagName);
+
+  if (runtimeEnabled !== undefined) return runtimeEnabled;
+
+  return _storageFlagEnabled(storageKey);
 }
 
 // Returns Date.now() when enabled, 0 otherwise.
