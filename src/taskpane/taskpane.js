@@ -350,6 +350,27 @@ function createAggregatedWriterPerfDetails() {
     fillRectCommandCountEstimate: 0,
     maxBoldCommandCount: 0,
     maxFillCommandCount: 0,
+    // Spike #284 — diagnostic-only RangeAreas projection rolled up across tables.
+    // chunkCount / commandCountEstimate / areaCountTotal sum across tables so
+    // the workbook log shows projected total queued ops for a chunked
+    // `worksheet.getRanges(...)` writer. maxAddressLength is the per-table max
+    // so a single oversized chunk is still visible. fillRangeAreas.colorCountMax
+    // is the max number of distinct fill colors observed on any one table —
+    // summing colors across tables has no meaningful interpretation because
+    // different tables typically share the same 1–2 colors.
+    boldRangeAreas: {
+      areaCountTotal: 0,
+      chunkCount: 0,
+      commandCountEstimate: 0,
+      maxAddressLength: 0,
+    },
+    fillRangeAreas: {
+      areaCountTotal: 0,
+      chunkCount: 0,
+      commandCountEstimate: 0,
+      maxAddressLength: 0,
+      colorCountMax: 0,
+    },
   };
 }
 
@@ -376,6 +397,34 @@ function mergeWriterPerfDetails(aggregate, writerDetails) {
     aggregate.maxFillCommandCount,
     writerDetails.fillCommandCount || 0
   );
+
+  mergeRangeAreasProjection(aggregate.boldRangeAreas, writerDetails.boldRangeAreas);
+  mergeFillRangeAreasProjection(aggregate.fillRangeAreas, writerDetails.fillRangeAreas);
+}
+
+function mergeRangeAreasProjection(target, source) {
+  if (!target || !source) {
+    return;
+  }
+
+  target.areaCountTotal += source.areaCountTotal || 0;
+  target.chunkCount += source.chunkCount || 0;
+  target.commandCountEstimate += source.commandCountEstimate || 0;
+  if ((source.maxAddressLength || 0) > target.maxAddressLength) {
+    target.maxAddressLength = source.maxAddressLength;
+  }
+}
+
+function mergeFillRangeAreasProjection(target, source) {
+  if (!target || !source) {
+    return;
+  }
+
+  mergeRangeAreasProjection(target, source);
+
+  if ((source.colorCount || 0) > target.colorCountMax) {
+    target.colorCountMax = source.colorCount;
+  }
 }
 
 // ─── Action + Scope shell (issue #167 PR1) ───────────────────────────────────
