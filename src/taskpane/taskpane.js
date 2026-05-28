@@ -2143,207 +2143,251 @@ async function clearAutoCurrentTableSignificance() {
 }
 
 /**
+ * Inner clear-significance pipeline for a single named range, using a
+ * caller-supplied Office.js RequestContext.
+ *
+ * Extracted so workbook/sheet batch clears can share one Excel.run context
+ * across all tables on the same worksheet, amortising per-context initialisation
+ * overhead.  Callers that need a self-contained execution unit use
+ * clearSignificanceForRange below, which wraps this in its own Excel.run.
+ *
+ * Returns { status, message, _clearDetails }.
+ * status: "cleared" | "skipped"
+ * _clearDetails is always populated on a "cleared" result; null on "skipped".
+ */
+async function clearSignificanceForRangeInContext(context, sheetName, rangeAddress) {
+  const _t0 = perfNow();
+  const worksheet = context.workbook.worksheets.getItem(sheetName);
+  const sourceRange = worksheet.getRange(rangeAddress);
+
+  sourceRange.load(["values", "text"]);
+
+  await context.sync();
+
+  const selectedValues = sourceRange.values;
+  const selectedText = sourceRange.text;
+
+  if (!selectedValues || selectedValues.length < 1 || !selectedValues[0] || selectedValues[0].length < 1) {
+    return { status: "skipped", message: "нет данных в диапазоне", _clearDetails: null };
+  }
+
+  const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
+  const normalized = normalizeSelectedRange(cleanedValues, selectedText);
+
+  if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+    const codes =
+      normalized.blockingReasons && normalized.blockingReasons.length > 0
+        ? ` [${normalized.blockingReasons.join(", ")}]`
+        : "";
+    return { status: "skipped", message: `${normalized.blockingMessage}${codes}`, _clearDetails: null };
+  }
+
+  let clearTargetRange;
+
+  if (normalized.normalizationNeeded && normalized.normalizationApplied) {
+    const bodyRowCount = normalized.valuesForCalculation.length;
+    let bodyColCount = normalized.valuesForCalculation[0].length;
+    let effectiveClearColOffset = normalized.dataColOffset;
+    let textForLeadingEmptyCheck = normalized.textForCalculation;
+
+    // Secondary embedded-label-column check (mirrors interpretSelectedRange
+    // State 2 / clearSignificanceFromSelection).  Protects auto-clear ranges
+    // whose label column has mixed text + numeric-looking values from being
+    // overwritten when normalizeSelectedRange leaves col[0] inside the body.
+    if (normalized.dataColOffset === 0) {
+      const additionalLabelCols = detectEmbeddedLabelColumns(
+        normalized.valuesForCalculation
+      );
+      if (additionalLabelCols > 0) {
+        effectiveClearColOffset += additionalLabelCols;
+        bodyColCount -= additionalLabelCols;
+        textForLeadingEmptyCheck = normalized.textForCalculation.map(
+          (row) => row.slice(additionalLabelCols)
+        );
+      }
+    }
+
+    const clearLeadingEmptyCols = detectLeadingEmptyColumns(textForLeadingEmptyCheck);
+    if (clearLeadingEmptyCols > 0) {
+      bodyColCount -= clearLeadingEmptyCols;
+      effectiveClearColOffset += clearLeadingEmptyCols;
+    }
+
+    if (bodyRowCount < 1 || bodyColCount < 1) {
+      return { status: "skipped", message: "нет данных после нормализации", _clearDetails: null };
+    }
+
+    clearTargetRange = sourceRange
+      .getCell(normalized.dataRowOffset, effectiveClearColOffset)
+      .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
+  } else {
+    // Pass-through mirrors interpretSelectedRange / clearSignificanceFromSelection:
+    // prefer detectEmbeddedLabelColumns to keep row labels out of the clear
+    // target on wide tables; fall back to detectLeadingEmptyColumns otherwise.
+    const embeddedLabelColsForClear = detectEmbeddedLabelColumns(cleanedValues);
+    const leadingBlankColsForClear =
+      embeddedLabelColsForClear === 0
+        ? detectLeadingEmptyColumns(selectedText)
+        : 0;
+    const skipLeftCols =
+      embeddedLabelColsForClear > 0
+        ? embeddedLabelColsForClear
+        : leadingBlankColsForClear;
+
+    if (skipLeftCols > 0) {
+      clearTargetRange = sourceRange
+        .getCell(0, skipLeftCols)
+        .getResizedRange(
+          sourceRange.rowCount - 1,
+          sourceRange.columnCount - skipLeftCols - 1
+        );
+    } else {
+      clearTargetRange = sourceRange;
+    }
+  }
+
+  clearTargetRange.load(["values", "numberFormat", "rowIndex", "columnIndex", "columnCount"]);
+
+  await context.sync();
+
+  const targetValues = clearTargetRange.values;
+  const targetNumberFormats = clearTargetRange.numberFormat;
+  const _knownDims = {
+    rowIndex: clearTargetRange.rowIndex,
+    columnIndex: clearTargetRange.columnIndex,
+    columnCount: clearTargetRange.columnCount,
+  };
+
+  const nextValues = [];
+  const nextNumberFormats = [];
+  let bodyCellsChanged = 0;
+  let bodyHasValueChange = false;
+  let bodyHasFormatChange = false;
+
+  for (let rowIndex = 0; rowIndex < targetValues.length; rowIndex++) {
+    const valueRow = [];
+    const formatRow = [];
+
+    for (let columnIndex = 0; columnIndex < targetValues[rowIndex].length; columnIndex++) {
+      const rawValue = targetValues[rowIndex][columnIndex];
+      const currentFormat = targetNumberFormats[rowIndex][columnIndex];
+
+      if (typeof rawValue === "number") {
+        valueRow.push(rawValue);
+        formatRow.push(currentFormat);
+        continue;
+      }
+
+      const cleanedText = removeSignificanceMarkersFromText(rawValue);
+      const resolved = resolveNumericOutput(cleanedText);
+
+      if (resolved !== null) {
+        if (resolved.value !== rawValue) bodyHasValueChange = true;
+        if (resolved.format !== currentFormat) bodyHasFormatChange = true;
+        if (resolved.value !== rawValue || resolved.format !== currentFormat) bodyCellsChanged++;
+        valueRow.push(resolved.value);
+        formatRow.push(resolved.format);
+      } else {
+        if (cleanedText !== rawValue) { bodyHasValueChange = true; bodyCellsChanged++; }
+        valueRow.push(cleanedText);
+        formatRow.push("@");
+      }
+    }
+
+    nextValues.push(valueRow);
+    nextNumberFormats.push(formatRow);
+  }
+
+  // Only write body data when something actually changed, avoiding a full
+  // matrix write on a re-clear of an already-clean workbook.
+  if (bodyHasFormatChange) clearTargetRange.numberFormat = nextNumberFormats;
+  if (bodyHasValueChange) clearTargetRange.values = nextValues;
+
+  clearTargetRange.format.font.bold = false;
+  clearTargetRange.format.fill.clear();
+
+  // No body sync here — deferred to the banner read sync inside
+  // clearBannerMarkerUpdatesForRange, which flushes all queued writes.
+  const bannerDetails = await clearBannerMarkerUpdatesForRange(context, clearTargetRange, _knownDims);
+
+  await context.sync();
+
+  const bodyCellsRead = targetValues.length * (targetValues[0] ? targetValues[0].length : 0);
+
+  return {
+    status: "cleared",
+    message: "очищено",
+    _clearDetails: {
+      bodyCellsRead,
+      bodyCellsChanged,
+      bannerCellsRead: bannerDetails ? bannerDetails.cellsRead : 0,
+      bannerCellsChanged: bannerDetails ? bannerDetails.cellsChanged : 0,
+      bannerWriteCommands: bannerDetails ? bannerDetails.writeCommands : 0,
+      totalMs: perfElapsed(_t0),
+    },
+  };
+}
+
+/**
  * Clears significance markers for a single named range on a named sheet.
  *
- * Mirrors the clear path of clearSignificanceFromSelection() without touching
- * the Excel selection UI state. Returns a compact result object so the caller
- * can aggregate per-table outcomes.
+ * Thin wrapper around clearSignificanceForRangeInContext that provides its own
+ * Excel.run context.  Used by clearAutoCurrentTableSignificance and as a
+ * per-table fallback when the shared-context batch in sheet/workbook clear
+ * encounters an Office.js error that corrupts the shared context.
  *
- * Returns { status, message }.
+ * Returns { status, message, _clearDetails }.
  * status: "cleared" | "skipped" | "error"
  */
 async function clearSignificanceForRange(sheetName, rangeAddress) {
   const _t0 = perfNow();
-  return await Excel.run(async (context) => {
-    const worksheet = context.workbook.worksheets.getItem(sheetName);
-    const sourceRange = worksheet.getRange(rangeAddress);
-
-    sourceRange.load(["values", "text"]);
-
-    await context.sync();
-
-    const selectedValues = sourceRange.values;
-    const selectedText = sourceRange.text;
-
-    if (!selectedValues || selectedValues.length < 1 || !selectedValues[0] || selectedValues[0].length < 1) {
-      return { status: "skipped", message: "нет данных в диапазоне" };
-    }
-
-    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
-    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
-
-    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
-      const codes =
-        normalized.blockingReasons && normalized.blockingReasons.length > 0
-          ? ` [${normalized.blockingReasons.join(", ")}]`
-          : "";
-      return { status: "skipped", message: `${normalized.blockingMessage}${codes}` };
-    }
-
-    let clearTargetRange;
-
-    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
-      const bodyRowCount = normalized.valuesForCalculation.length;
-      let bodyColCount = normalized.valuesForCalculation[0].length;
-      let effectiveClearColOffset = normalized.dataColOffset;
-      let textForLeadingEmptyCheck = normalized.textForCalculation;
-
-      // Secondary embedded-label-column check (mirrors interpretSelectedRange
-      // State 2 / clearSignificanceFromSelection).  Protects auto-clear ranges
-      // whose label column has mixed text + numeric-looking values from being
-      // overwritten when normalizeSelectedRange leaves col[0] inside the body.
-      if (normalized.dataColOffset === 0) {
-        const additionalLabelCols = detectEmbeddedLabelColumns(
-          normalized.valuesForCalculation
-        );
-        if (additionalLabelCols > 0) {
-          effectiveClearColOffset += additionalLabelCols;
-          bodyColCount -= additionalLabelCols;
-          textForLeadingEmptyCheck = normalized.textForCalculation.map(
-            (row) => row.slice(additionalLabelCols)
-          );
-        }
-      }
-
-      const clearLeadingEmptyCols = detectLeadingEmptyColumns(textForLeadingEmptyCheck);
-      if (clearLeadingEmptyCols > 0) {
-        bodyColCount -= clearLeadingEmptyCols;
-        effectiveClearColOffset += clearLeadingEmptyCols;
-      }
-
-      if (bodyRowCount < 1 || bodyColCount < 1) {
-        return { status: "skipped", message: "нет данных после нормализации" };
-      }
-
-      clearTargetRange = sourceRange
-        .getCell(normalized.dataRowOffset, effectiveClearColOffset)
-        .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
-    } else {
-      // Pass-through mirrors interpretSelectedRange / clearSignificanceFromSelection:
-      // prefer detectEmbeddedLabelColumns to keep row labels out of the clear
-      // target on wide tables; fall back to detectLeadingEmptyColumns otherwise.
-      const embeddedLabelColsForClear = detectEmbeddedLabelColumns(cleanedValues);
-      const leadingBlankColsForClear =
-        embeddedLabelColsForClear === 0
-          ? detectLeadingEmptyColumns(selectedText)
-          : 0;
-      const skipLeftCols =
-        embeddedLabelColsForClear > 0
-          ? embeddedLabelColsForClear
-          : leadingBlankColsForClear;
-
-      if (skipLeftCols > 0) {
-        clearTargetRange = sourceRange
-          .getCell(0, skipLeftCols)
-          .getResizedRange(
-            sourceRange.rowCount - 1,
-            sourceRange.columnCount - skipLeftCols - 1
-          );
-      } else {
-        clearTargetRange = sourceRange;
-      }
-    }
-
-    clearTargetRange.load(["values", "numberFormat", "rowIndex", "columnIndex", "columnCount"]);
-
-    await context.sync();
-
-    const targetValues = clearTargetRange.values;
-    const targetNumberFormats = clearTargetRange.numberFormat;
-    const _knownDims = {
-      rowIndex: clearTargetRange.rowIndex,
-      columnIndex: clearTargetRange.columnIndex,
-      columnCount: clearTargetRange.columnCount,
-    };
-
-    const nextValues = [];
-    const nextNumberFormats = [];
-    let bodyCellsChanged = 0;
-    let bodyHasValueChange = false;
-    let bodyHasFormatChange = false;
-
-    for (let rowIndex = 0; rowIndex < targetValues.length; rowIndex++) {
-      const valueRow = [];
-      const formatRow = [];
-
-      for (let columnIndex = 0; columnIndex < targetValues[rowIndex].length; columnIndex++) {
-        const rawValue = targetValues[rowIndex][columnIndex];
-        const currentFormat = targetNumberFormats[rowIndex][columnIndex];
-
-        if (typeof rawValue === "number") {
-          valueRow.push(rawValue);
-          formatRow.push(currentFormat);
-          continue;
-        }
-
-        const cleanedText = removeSignificanceMarkersFromText(rawValue);
-        const resolved = resolveNumericOutput(cleanedText);
-
-        if (resolved !== null) {
-          if (resolved.value !== rawValue) bodyHasValueChange = true;
-          if (resolved.format !== currentFormat) bodyHasFormatChange = true;
-          if (resolved.value !== rawValue || resolved.format !== currentFormat) bodyCellsChanged++;
-          valueRow.push(resolved.value);
-          formatRow.push(resolved.format);
-        } else {
-          if (cleanedText !== rawValue) { bodyHasValueChange = true; bodyCellsChanged++; }
-          valueRow.push(cleanedText);
-          formatRow.push("@");
-        }
-      }
-
-      nextValues.push(valueRow);
-      nextNumberFormats.push(formatRow);
-    }
-
-    // Only write body data when something actually changed, avoiding a full
-    // matrix write on a re-clear of an already-clean workbook.
-    if (bodyHasFormatChange) clearTargetRange.numberFormat = nextNumberFormats;
-    if (bodyHasValueChange) clearTargetRange.values = nextValues;
-
-    clearTargetRange.format.font.bold = false;
-    clearTargetRange.format.fill.clear();
-
-    // No body sync here — deferred to the banner read sync inside
-    // clearBannerMarkerUpdatesForRange, which flushes all queued writes.
-    const bannerDetails = await clearBannerMarkerUpdatesForRange(context, clearTargetRange, _knownDims);
-
-    await context.sync();
-
-    const bodyCellsRead = targetValues.length * (targetValues[0] ? targetValues[0].length : 0);
+  const result = await Excel.run((context) =>
+    clearSignificanceForRangeInContext(context, sheetName, rangeAddress)
+  );
+  if (result._clearDetails) {
     perfLog("clearSignificanceForRange", {
       rangeAddress,
-      bodyCellsRead,
-      bodyCellsChanged,
-      bodyHasValueChange,
-      bodyHasFormatChange,
-      bannerDetails: bannerDetails || null,
+      ...result._clearDetails,
       totalMs: perfElapsed(_t0),
     });
+  }
+  return result;
+}
 
-    return {
-      status: "cleared",
-      message: "очищено",
-      ...(perfEnabled() ? {
-        _clearDetails: {
-          bodyCellsRead,
-          bodyCellsChanged,
-          bannerCellsRead: bannerDetails ? bannerDetails.cellsRead : 0,
-          bannerCellsChanged: bannerDetails ? bannerDetails.cellsChanged : 0,
-          bannerWriteCommands: bannerDetails ? bannerDetails.writeCommands : 0,
-          totalMs: perfElapsed(_t0),
-        },
-      } : {}),
-    };
-  });
+/**
+ * Groups an array of candidate objects by their sheetName property.
+ * Returns a Map<sheetName, candidate[]> preserving insertion order.
+ */
+function groupCandidatesBySheet(candidates) {
+  const map = new Map();
+  for (const c of candidates) {
+    if (!map.has(c.sheetName)) map.set(c.sheetName, []);
+    map.get(c.sheetName).push(c);
+  }
+  return map;
+}
+
+/**
+ * Accumulates _clearDetails from a single table result into a running aggregate.
+ */
+function accumulateClearDetails(aggregate, details) {
+  if (!aggregate || !details) return;
+  aggregate.bodyCellsRead += details.bodyCellsRead || 0;
+  aggregate.bodyCellsChanged += details.bodyCellsChanged || 0;
+  aggregate.bannerCellsRead += details.bannerCellsRead || 0;
+  aggregate.bannerCellsChanged += details.bannerCellsChanged || 0;
+  aggregate.bannerWriteCommands += details.bannerWriteCommands || 0;
 }
 
 /**
  * Auto-clear: removes significance markers from all "available" inventory
  * candidates in the workbook.
  *
- * Mirrors runAutoSignificance() but calls clearSignificanceForRange() instead
- * of running the significance pipeline.
+ * Candidates are grouped by sheet so all tables on the same worksheet are
+ * processed inside a single Excel.run context, amortising per-context
+ * initialisation overhead.  If a sync error corrupts the shared context for a
+ * sheet, remaining tables on that sheet fall back to per-table
+ * clearSignificanceForRange (each with its own Excel.run).
  */
 async function clearAutoSignificance() {
   const _t0 = perfNow();
@@ -2377,6 +2421,7 @@ async function clearAutoSignificance() {
 
   let cleared = 0;
   let errors = 0;
+  let contextRuns = 0;
   const _clearAggregate = {
     bodyCellsRead: 0,
     bodyCellsChanged: 0,
@@ -2385,35 +2430,79 @@ async function clearAutoSignificance() {
     bannerWriteCommands: 0,
   };
 
-  for (const candidate of eligible) {
-    try {
-      const result = await clearSignificanceForRange(candidate.sheetName, candidate.rangeAddress);
+  // Group by sheet so each sheet's tables share one Excel.run context.
+  const bySheet = groupCandidatesBySheet(eligible);
 
-      if (result.status === "cleared") {
-        cleared++;
-        if (result._clearDetails) {
-          _clearAggregate.bodyCellsRead += result._clearDetails.bodyCellsRead || 0;
-          _clearAggregate.bodyCellsChanged += result._clearDetails.bodyCellsChanged || 0;
-          _clearAggregate.bannerCellsRead += result._clearDetails.bannerCellsRead || 0;
-          _clearAggregate.bannerCellsChanged += result._clearDetails.bannerCellsChanged || 0;
-          _clearAggregate.bannerWriteCommands += result._clearDetails.bannerWriteCommands || 0;
+  for (const [sheetName, sheetCandidates] of bySheet) {
+    let batchEndedAt = 0;
+    contextRuns++;
+
+    // Attempt to clear all tables on this sheet in a single Excel.run.
+    try {
+      await Excel.run(async (context) => {
+        for (let _si = 0; _si < sheetCandidates.length; _si++) {
+          const candidate = sheetCandidates[_si];
+          try {
+            const result = await clearSignificanceForRangeInContext(
+              context,
+              sheetName,
+              candidate.rangeAddress
+            );
+            if (result.status === "cleared") {
+              cleared++;
+              accumulateClearDetails(_clearAggregate, result._clearDetails);
+            } else if (result.status === "skipped") {
+              skipped++;
+              detailLines.push(
+                `- ${sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
+              );
+            } else {
+              errors++;
+              detailLines.push(
+                `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+              );
+            }
+            batchEndedAt = _si + 1;
+          } catch (err) {
+            errors++;
+            detailLines.push(
+              `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
+            );
+            batchEndedAt = _si + 1;
+            throw err; // shared context may be corrupted; exit batch
+          }
         }
-      } else if (result.status === "skipped") {
-        skipped++;
-        detailLines.push(
-          `- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
-        );
-      } else {
+        batchEndedAt = sheetCandidates.length;
+      });
+    } catch (_batchErr) {
+      // Shared context aborted; fall back to per-table for any remaining candidates.
+    }
+
+    for (let _fi = batchEndedAt; _fi < sheetCandidates.length; _fi++) {
+      const candidate = sheetCandidates[_fi];
+      contextRuns++;
+      try {
+        const result = await clearSignificanceForRange(sheetName, candidate.rangeAddress);
+        if (result.status === "cleared") {
+          cleared++;
+          accumulateClearDetails(_clearAggregate, result._clearDetails);
+        } else if (result.status === "skipped") {
+          skipped++;
+          detailLines.push(
+            `- ${sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
+          );
+        } else {
+          errors++;
+          detailLines.push(
+            `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+          );
+        }
+      } catch (err) {
         errors++;
         detailLines.push(
-          `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+          `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
         );
       }
-    } catch (err) {
-      errors++;
-      detailLines.push(
-        `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
-      );
     }
   }
 
@@ -2430,6 +2519,8 @@ async function clearAutoSignificance() {
 
   perfLog("clearAutoSignificance", {
     tablesCleared: cleared,
+    contextRuns,
+    sheetCount: bySheet.size,
     ...(cleared > 0 ? { clearAggregate: _clearAggregate } : {}),
     totalMs: perfElapsed(_t0),
   });
@@ -2769,8 +2860,9 @@ async function runCurrentSheetSignificance() {
  * Current-sheet clear: removes significance markers from all "available"
  * inventory candidates on the active worksheet only.
  *
- * Mirrors clearAutoSignificance() but scans only the active sheet via
- * collectActiveSheetInventoryResults(). Content sheet is silently ignored.
+ * Mirrors clearAutoSignificance() — all tables on the same sheet share one
+ * Excel.run context, with per-table fallback on context corruption.
+ * Content sheet is silently ignored.
  */
 async function clearCurrentSheetSignificance() {
   const _t0 = perfNow();
@@ -2804,6 +2896,7 @@ async function clearCurrentSheetSignificance() {
 
   let cleared = 0;
   let errors = 0;
+  let contextRuns = 0;
   const _clearAggregate = {
     bodyCellsRead: 0,
     bodyCellsChanged: 0,
@@ -2812,35 +2905,79 @@ async function clearCurrentSheetSignificance() {
     bannerWriteCommands: 0,
   };
 
-  for (const candidate of eligible) {
-    try {
-      const result = await clearSignificanceForRange(candidate.sheetName, candidate.rangeAddress);
+  // Group by sheet — for the sheet-scoped flow this is typically one sheet,
+  // but grouping keeps the logic consistent with clearAutoSignificance.
+  const bySheet = groupCandidatesBySheet(eligible);
 
-      if (result.status === "cleared") {
-        cleared++;
-        if (result._clearDetails) {
-          _clearAggregate.bodyCellsRead += result._clearDetails.bodyCellsRead || 0;
-          _clearAggregate.bodyCellsChanged += result._clearDetails.bodyCellsChanged || 0;
-          _clearAggregate.bannerCellsRead += result._clearDetails.bannerCellsRead || 0;
-          _clearAggregate.bannerCellsChanged += result._clearDetails.bannerCellsChanged || 0;
-          _clearAggregate.bannerWriteCommands += result._clearDetails.bannerWriteCommands || 0;
+  for (const [sheetName, sheetCandidates] of bySheet) {
+    let batchEndedAt = 0;
+    contextRuns++;
+
+    try {
+      await Excel.run(async (context) => {
+        for (let _si = 0; _si < sheetCandidates.length; _si++) {
+          const candidate = sheetCandidates[_si];
+          try {
+            const result = await clearSignificanceForRangeInContext(
+              context,
+              sheetName,
+              candidate.rangeAddress
+            );
+            if (result.status === "cleared") {
+              cleared++;
+              accumulateClearDetails(_clearAggregate, result._clearDetails);
+            } else if (result.status === "skipped") {
+              skipped++;
+              detailLines.push(
+                `- ${sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
+              );
+            } else {
+              errors++;
+              detailLines.push(
+                `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+              );
+            }
+            batchEndedAt = _si + 1;
+          } catch (err) {
+            errors++;
+            detailLines.push(
+              `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
+            );
+            batchEndedAt = _si + 1;
+            throw err;
+          }
         }
-      } else if (result.status === "skipped") {
-        skipped++;
-        detailLines.push(
-          `- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
-        );
-      } else {
+        batchEndedAt = sheetCandidates.length;
+      });
+    } catch (_batchErr) {
+      // Shared context aborted; fall back to per-table for any remaining candidates.
+    }
+
+    for (let _fi = batchEndedAt; _fi < sheetCandidates.length; _fi++) {
+      const candidate = sheetCandidates[_fi];
+      contextRuns++;
+      try {
+        const result = await clearSignificanceForRange(sheetName, candidate.rangeAddress);
+        if (result.status === "cleared") {
+          cleared++;
+          accumulateClearDetails(_clearAggregate, result._clearDetails);
+        } else if (result.status === "skipped") {
+          skipped++;
+          detailLines.push(
+            `- ${sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`
+          );
+        } else {
+          errors++;
+          detailLines.push(
+            `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+          );
+        }
+      } catch (err) {
         errors++;
         detailLines.push(
-          `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${result.message}`
+          `- ${sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
         );
       }
-    } catch (err) {
-      errors++;
-      detailLines.push(
-        `- ${candidate.sheetName} ${candidate.rangeAddress}: ошибка — ${err.message || "неизвестная ошибка"}`
-      );
     }
   }
 
@@ -2857,6 +2994,8 @@ async function clearCurrentSheetSignificance() {
 
   perfLog("clearCurrentSheetSignificance", {
     tablesCleared: cleared,
+    contextRuns,
+    sheetCount: bySheet.size,
     ...(cleared > 0 ? { clearAggregate: _clearAggregate } : {}),
     totalMs: perfElapsed(_t0),
   });
