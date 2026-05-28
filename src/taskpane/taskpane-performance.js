@@ -9,6 +9,14 @@
 //   window.__RIT_BANNER_VALUES_READ_PROBE = true
 //   localStorage.setItem('RIT_BANNER_VALUES_READ_PROBE', '1')
 //
+// Optional banner write host-flush profiling:
+//   window.__RIT_BANNER_WRITE_PROFILE = true
+//   localStorage.setItem('RIT_BANNER_WRITE_PROFILE', '1')
+//
+// This intentionally changes banner write flushing while enabled, splitting
+// marker numberFormat and values into separate syncs so their host cost can be
+// measured. It is disabled unless RIT_PERF is also enabled.
+//
 // Disable with either:
 //   window.__RIT_PERF = false
 //   localStorage.removeItem('RIT_PERF')
@@ -59,6 +67,27 @@ function _perfEnabled() {
   return _storageFlagEnabled("RIT_PERF");
 }
 
+function _bannerWriteProfileRuntimeFlagEnabled() {
+  try {
+    if (typeof globalThis === "undefined") return undefined;
+    const runtimeFlag = globalThis.__RIT_BANNER_WRITE_PROFILE;
+    if (runtimeFlag === true || runtimeFlag === "1") return true;
+    if (runtimeFlag === false || runtimeFlag === "0") return false;
+  } catch (_) {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function _bannerWriteProfileStorageFlagEnabled() {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem("RIT_BANNER_WRITE_PROFILE") === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
 export function perfEnabled() {
   return _perfEnabled();
 }
@@ -69,6 +98,15 @@ export function perfFlagEnabled(runtimeFlagName, storageKey = runtimeFlagName) {
   if (runtimeEnabled !== undefined) return runtimeEnabled;
 
   return _storageFlagEnabled(storageKey);
+}
+
+export function perfBannerWriteProfileEnabled() {
+  if (!_perfEnabled()) return false;
+
+  const runtimeEnabled = _bannerWriteProfileRuntimeFlagEnabled();
+  if (runtimeEnabled !== undefined) return runtimeEnabled;
+
+  return _bannerWriteProfileStorageFlagEnabled();
 }
 
 // Returns Date.now() when enabled, 0 otherwise.

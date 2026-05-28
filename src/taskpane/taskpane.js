@@ -105,7 +105,14 @@ import {
   buildInventoryContentSkippedRow,
 } from "./taskpane-inventory-scan";
 
-import { perfNow, perfElapsed, perfLog, perfEnabled, perfFlagEnabled } from "./taskpane-performance";
+import {
+  perfNow,
+  perfElapsed,
+  perfLog,
+  perfEnabled,
+  perfFlagEnabled,
+  perfBannerWriteProfileEnabled,
+} from "./taskpane-performance";
 
 const INVENTORY_CONTENT_SHEET_NAME = "Content";
 const RUN_REPORT_SHEET_NAME = "Run report";
@@ -496,6 +503,11 @@ function createAggregatedBannerPerfDetails() {
     upperRowMarkerPlacements: 0,
     fallbackMarkerPlacements: 0,
     markerRowOffsetsUsed: [],
+    writeProfiledTables: 0,
+    numberFormatSyncMs: 0,
+    valueWriteSyncMs: 0,
+    profileSyncCount: 0,
+    markerRowsUsed: 0,
     maxWriteCommands: 0,
     tablesWithOverlappingBannerAreas: 0,
     perSheetBannerTablesMax: 0,
@@ -601,6 +613,11 @@ function mergeBannerPerfDetails(aggregate, bannerDetails, sheetName) {
     }
     aggregate.markerRowOffsetsUsed = Array.from(state.markerRowOffsetsUsed).sort((a, b) => a - b);
   }
+  aggregate.writeProfiledTables += bannerDetails.writeProfileEnabled ? 1 : 0;
+  aggregate.numberFormatSyncMs += bannerDetails.numberFormatSyncMs || 0;
+  aggregate.valueWriteSyncMs += bannerDetails.valueWriteSyncMs || 0;
+  aggregate.profileSyncCount += bannerDetails.profileSyncCount || 0;
+  aggregate.markerRowsUsed += bannerDetails.markerRowsUsed || 0;
   if ((bannerDetails.writeCommands || 0) > aggregate.maxWriteCommands) {
     aggregate.maxWriteCommands = bannerDetails.writeCommands;
   }
@@ -5211,11 +5228,14 @@ function initializeSettingsTabs() {
  * contiguous same-row runs and split by markered/clear-only flag so the
  * legacy "@" number-format behaviour is preserved on marker writes.
  *
- * Sync count: 1 for the banner-area read (also flushes any pending data
- * writes from the caller) and 0 for the writes — the caller is expected to
- * issue its own final `context.sync()` to flush the queued banner writes.
- * This brings per-table banner sync count down from 5–7 (legacy) to 2 when
- * counting the caller's final sync.
+ * Sync count in normal mode: 1 for the banner-area read (also flushes any
+ * pending data writes from the caller) and 0 for the writes — the caller is
+ * expected to issue its own final `context.sync()` to flush queued banner
+ * writes.  This brings per-table banner sync count down from 5–7 (legacy) to
+ * 2 when counting the caller's final sync.
+ *
+ * Development-only banner write profiling can split numberFormat and values
+ * into separate syncs to measure host flush cost. It is disabled by default.
  *
  * Returns null when no banner work was needed.  Otherwise returns a perf
  * details object describing the work performed.
@@ -5445,10 +5465,12 @@ async function applyBannerMarkerUpdatesForRange(
       const absRow = targetStartRowIndex - totalScanRowCount + r;
       const absCol = scanStartColIndex + c;
       if (!writesByRow.has(absRow)) writesByRow.set(absRow, []);
+      const isMarkered = markedCellKeys.has(key);
       writesByRow.get(absRow).push({
         colIndex: absCol,
         text: nxt,
-        markered: markedCellKeys.has(key),
+        markered: isMarkered,
+        needsNF: isMarkered && needsNumberFormatForBannerMarker(nxt),
       });
       cellsChanged++;
     }
@@ -5474,8 +5496,16 @@ async function applyBannerMarkerUpdatesForRange(
   let valueWriteCells = 0;
   let markeredValueWriteCells = 0;
   let clearOnlyValueWriteCells = 0;
+  let markerRowsUsed = 0;
   let maxRunLength = 0;
+  let numberFormatSyncMs = 0;
+  let valueWriteSyncMs = 0;
+  let profileSyncCount = 0;
+  const writeProfileEnabled = perfBannerWriteProfileEnabled();
 
+  const profiledValueWrites = [];
+  const markerRowIndexes = new Set();
+  let queueCommandEndMs = 0;
   if (cellsChanged > 0) {
     const worksheet = writeTargetRange.worksheet;
     for (const [rowIndex, items] of writesByRow) {
@@ -5483,14 +5513,14 @@ async function applyBannerMarkerUpdatesForRange(
       let i = 0;
       while (i < items.length) {
         let j = i;
-        // Group adjacent columns with the same markered flag so the "@"
-        // number format is applied only to marker writes in structure mode —
-        // matches legacy behaviour where clear-only cells were written
-        // without touching numberFormat.
+        // Group adjacent columns with the same markered and needsNF flags so
+        // the "@" number format is applied only to bare-marker cells —
+        // non-bare marker text like "Wave 1 (a)" does not need "@".
         while (
           j + 1 < items.length &&
           items[j + 1].colIndex === items[j].colIndex + 1 &&
-          items[j + 1].markered === items[j].markered
+          items[j + 1].markered === items[j].markered &&
+          items[j + 1].needsNF === items[j].needsNF
         ) {
           j++;
         }
@@ -5499,16 +5529,21 @@ async function applyBannerMarkerUpdatesForRange(
         const range = worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1);
         const runLength = texts.length;
 
-        if (useStructure && slice[0].markered) {
+        if (useStructure && slice[0].markered && slice[0].needsNF) {
           range.numberFormat = [texts.map(() => "@")];
           numberFormatCommands++;
           numberFormatCells += runLength;
         }
-        range.values = [texts];
+
+        if (writeProfileEnabled) {
+          profiledValueWrites.push({ range, texts });
+        } else {
+          range.values = [texts];
+        }
 
         writeCommands++;
-        valueWriteCells += runLength;
         changedCellRuns++;
+        valueWriteCells += runLength;
         if (runLength === 1) {
           oneCellWriteCommands++;
         } else {
@@ -5517,6 +5552,7 @@ async function applyBannerMarkerUpdatesForRange(
         if (slice[0].markered) {
           markeredWriteCommands++;
           markeredValueWriteCells += runLength;
+          markerRowIndexes.add(rowIndex);
         } else {
           clearOnlyWriteCommands++;
           clearOnlyValueWriteCells += runLength;
@@ -5527,11 +5563,32 @@ async function applyBannerMarkerUpdatesForRange(
         i = j + 1;
       }
     }
-    // Intentionally NO context.sync() here.  Caller's final context.sync()
-    // flushes the queued banner writes alongside any other pending ops.
+    markerRowsUsed = markerRowIndexes.size;
+    queueCommandEndMs = perfNow();
+
+    if (writeProfileEnabled) {
+      if (numberFormatCommands > 0) {
+        const numberFormatSyncStartMs = perfNow();
+        await context.sync();
+        numberFormatSyncMs = perfNow() - numberFormatSyncStartMs;
+        syncCount++;
+        profileSyncCount++;
+      }
+
+      const valueWriteSyncStartMs = perfNow();
+      for (const pending of profiledValueWrites) {
+        pending.range.values = [pending.texts];
+      }
+      await context.sync();
+      valueWriteSyncMs = perfNow() - valueWriteSyncStartMs;
+      syncCount++;
+      profileSyncCount++;
+    }
+    // In normal mode, intentionally NO context.sync() here.  Caller's final
+    // context.sync() flushes queued banner writes alongside other pending ops.
   }
 
-  const queueWriteEndMs = perfNow();
+  const queueWriteEndMs = queueCommandEndMs || perfNow();
   const details = {
     rowsScanned: totalScanRowCount,
     cellsRead: totalScanRowCount * scanColCount,
@@ -5570,6 +5627,11 @@ async function applyBannerMarkerUpdatesForRange(
     upperRowMarkerPlacements,
     fallbackMarkerPlacements,
     markerRowOffsetsUsed: Array.from(markerRowOffsetsUsed).sort((a, b) => a - b),
+    writeProfileEnabled,
+    numberFormatSyncMs,
+    valueWriteSyncMs,
+    profileSyncCount,
+    markerRowsUsed,
   };
 
   Object.defineProperty(details, BANNER_SCAN_AREA_STATS, {
@@ -6209,6 +6271,17 @@ function getFirstBannerStructureError(bannerStructure) {
   }
 
   return bannerStructure.messages.find((message) => message.severity === "error") || null;
+}
+
+/**
+ * Returns true when a banner marker write needs numberFormat = "@".
+ *
+ * Only bare-marker cells risk Excel auto-formatting and need the guard.
+ * A cell is "bare" when the only content is the marker itself, e.g. "(a)".
+ * Cells with actual text like "Wave 1 (a)" are already text-safe without "@".
+ */
+function needsNumberFormatForBannerMarker(text) {
+  return removeTrailingBannerMarker(text) === "";
 }
 
 /**
