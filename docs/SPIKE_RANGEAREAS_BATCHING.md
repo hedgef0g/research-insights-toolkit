@@ -202,6 +202,33 @@ Expected effect: full-formatting `writeMs` on the wide workbook drops from
 ~200 s to roughly the markers-only baseline (~10–20 s), with no visual
 semantic change.
 
+### Implementation status
+
+Implemented in issue #286. The writer now runtime-gates on
+`Office.context.requirements.isSetSupported("ExcelApi", "1.9")` once per
+write (`resolveFormattingContext` in [excel-writer.js](../src/core/excel-writer.js)),
+and chooses one of two formatting paths per write:
+
+- `formattingPath: "rangeAreas"` — issues
+  `selectedRange.worksheet.getRanges(chunkAddress).format.font.bold = true`
+  per bold chunk and
+  `…getRanges(chunkAddress).format.fill.color = color` per fill chunk,
+  reusing the spike's `packAddressesIntoChunks` (100 areas / 2,000 chars).
+- `formattingPath: "rowRuns"` — the original per-row-run setter path, kept
+  as a fallback for hosts that do not advertise ExcelApi 1.9 or that fail
+  to provide sheet-absolute anchor coords. No host without ExcelApi 1.9
+  was observed in field use, but the fallback is retained so older hosts
+  remain supported.
+
+Visual semantics (which cells become bold, which fill color is applied)
+are unchanged: both paths consume the same `boldRunSpansByRow` and
+color-grouped `fillRunSpansByRow` data produced by the existing mask walk.
+The new fields `formattingPath`, `boldRangeAreasAppliedCommandEstimate`,
+and `fillRangeAreasAppliedCommandEstimate` are added to `writerDetails`
+(and rolled up in workbook/sheet aggregates) so RIT_PERF logs surface
+which branch ran per table and the actual queued-op count for the
+RangeAreas path.
+
 ## Files touched by this spike
 
 - [src/core/excel-writer.js](../src/core/excel-writer.js) — added pure

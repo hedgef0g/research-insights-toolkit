@@ -350,14 +350,22 @@ function createAggregatedWriterPerfDetails() {
     fillRectCommandCountEstimate: 0,
     maxBoldCommandCount: 0,
     maxFillCommandCount: 0,
-    // Spike #284 — diagnostic-only RangeAreas projection rolled up across tables.
+    // #286 — actual formatting path taken by writer per table. null until the
+    // first table sets it. Stays as a single path label when every table used
+    // the same branch; becomes "mixed" if both branches appeared.
+    formattingPath: null,
+    boldRangeAreasAppliedCommandEstimate: 0,
+    fillRangeAreasAppliedCommandEstimate: 0,
+    // Spike #284 — diagnostic RangeAreas projection rolled up across tables.
     // chunkCount / commandCountEstimate / areaCountTotal sum across tables so
     // the workbook log shows projected total queued ops for a chunked
     // `worksheet.getRanges(...)` writer. maxAddressLength is the per-table max
     // so a single oversized chunk is still visible. fillRangeAreas.colorCountMax
     // is the max number of distinct fill colors observed on any one table —
     // summing colors across tables has no meaningful interpretation because
-    // different tables typically share the same 1–2 colors.
+    // different tables typically share the same 1–2 colors. When #286's
+    // RangeAreas writer path is active, these projections match the actual
+    // queued ops the writer issued.
     boldRangeAreas: {
       areaCountTotal: 0,
       chunkCount: 0,
@@ -397,6 +405,21 @@ function mergeWriterPerfDetails(aggregate, writerDetails) {
     aggregate.maxFillCommandCount,
     writerDetails.fillCommandCount || 0
   );
+
+  // #286 — fold formattingPath across tables. Skip when null (markers-only
+  // mode never set a path).
+  if (writerDetails.formattingPath) {
+    if (aggregate.formattingPath === null) {
+      aggregate.formattingPath = writerDetails.formattingPath;
+    } else if (aggregate.formattingPath !== writerDetails.formattingPath) {
+      aggregate.formattingPath = "mixed";
+    }
+  }
+
+  aggregate.boldRangeAreasAppliedCommandEstimate +=
+    writerDetails.boldRangeAreasAppliedCommandEstimate || 0;
+  aggregate.fillRangeAreasAppliedCommandEstimate +=
+    writerDetails.fillRangeAreasAppliedCommandEstimate || 0;
 
   mergeRangeAreasProjection(aggregate.boldRangeAreas, writerDetails.boldRangeAreas);
   mergeFillRangeAreasProjection(aggregate.fillRangeAreas, writerDetails.fillRangeAreas);
@@ -780,13 +803,21 @@ async function runSignificanceFromSelection() {
     keepMarkersOnlyInAllowedRows(fullCellResultMatrix, allowedMarkerRows);
 
     const _tWrite = perfNow();
+    // Pass the sheet-absolute anchor of the write target so the writer can
+    // build A1 addresses for the chunked RangeAreas formatting path
+    // (ExcelApi 1.9). writeTargetRange.rowIndex / .columnIndex were loaded
+    // and synced above.
     const writerDetails = writeCellResultsToSelectedRange(
       writeTargetRange,
       textForCalculation,
       fullCellResultMatrix,
       detectionResult,
       calculationSettings,
-      { captureWriterDetails: perfEnabled() }
+      {
+        captureWriterDetails: perfEnabled(),
+        anchorRowIndex: writeTargetRange.rowIndex,
+        anchorColumnIndex: writeTargetRange.columnIndex,
+      }
     );
 
     const _knownDims = {
@@ -1023,13 +1054,21 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
 
   const _pCalc = perfNow();
 
+  // Autorun never loads writeTargetRange.rowIndex / .columnIndex on the proxy
+  // (they're computed from the already-loaded sourceRange + offsets to save a
+  // round-trip). Pass them explicitly so the writer can use the chunked
+  // RangeAreas formatting path (ExcelApi 1.9).
   const writerDetails = writeCellResultsToSelectedRange(
     writeTargetRange,
     textForCalculation,
     fullCellResultMatrix,
     detectionResult,
     calculationSettings,
-    { captureWriterDetails: perfEnabled() }
+    {
+      captureWriterDetails: perfEnabled(),
+      anchorRowIndex: targetStartRowIndex,
+      anchorColumnIndex: targetStartColIndex,
+    }
   );
 
   const _knownDims = {
