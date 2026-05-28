@@ -2153,6 +2153,7 @@ async function clearAutoCurrentTableSignificance() {
  * status: "cleared" | "skipped" | "error"
  */
 async function clearSignificanceForRange(sheetName, rangeAddress) {
+  const _t0 = perfNow();
   return await Excel.run(async (context) => {
     const worksheet = context.workbook.worksheets.getItem(sheetName);
     const sourceRange = worksheet.getRange(rangeAddress);
@@ -2243,15 +2244,23 @@ async function clearSignificanceForRange(sheetName, rangeAddress) {
       }
     }
 
-    clearTargetRange.load(["values", "numberFormat", "rowCount", "columnCount"]);
+    clearTargetRange.load(["values", "numberFormat", "rowIndex", "columnIndex", "columnCount"]);
 
     await context.sync();
 
     const targetValues = clearTargetRange.values;
     const targetNumberFormats = clearTargetRange.numberFormat;
+    const _knownDims = {
+      rowIndex: clearTargetRange.rowIndex,
+      columnIndex: clearTargetRange.columnIndex,
+      columnCount: clearTargetRange.columnCount,
+    };
 
     const nextValues = [];
     const nextNumberFormats = [];
+    let bodyCellsChanged = 0;
+    let bodyHasValueChange = false;
+    let bodyHasFormatChange = false;
 
     for (let rowIndex = 0; rowIndex < targetValues.length; rowIndex++) {
       const valueRow = [];
@@ -2259,10 +2268,11 @@ async function clearSignificanceForRange(sheetName, rangeAddress) {
 
       for (let columnIndex = 0; columnIndex < targetValues[rowIndex].length; columnIndex++) {
         const rawValue = targetValues[rowIndex][columnIndex];
+        const currentFormat = targetNumberFormats[rowIndex][columnIndex];
 
         if (typeof rawValue === "number") {
           valueRow.push(rawValue);
-          formatRow.push(targetNumberFormats[rowIndex][columnIndex]);
+          formatRow.push(currentFormat);
           continue;
         }
 
@@ -2270,9 +2280,13 @@ async function clearSignificanceForRange(sheetName, rangeAddress) {
         const resolved = resolveNumericOutput(cleanedText);
 
         if (resolved !== null) {
+          if (resolved.value !== rawValue) bodyHasValueChange = true;
+          if (resolved.format !== currentFormat) bodyHasFormatChange = true;
+          if (resolved.value !== rawValue || resolved.format !== currentFormat) bodyCellsChanged++;
           valueRow.push(resolved.value);
           formatRow.push(resolved.format);
         } else {
+          if (cleanedText !== rawValue) { bodyHasValueChange = true; bodyCellsChanged++; }
           valueRow.push(cleanedText);
           formatRow.push("@");
         }
@@ -2282,17 +2296,45 @@ async function clearSignificanceForRange(sheetName, rangeAddress) {
       nextNumberFormats.push(formatRow);
     }
 
-    clearTargetRange.numberFormat = nextNumberFormats;
-    clearTargetRange.values = nextValues;
+    // Only write body data when something actually changed, avoiding a full
+    // matrix write on a re-clear of an already-clean workbook.
+    if (bodyHasFormatChange) clearTargetRange.numberFormat = nextNumberFormats;
+    if (bodyHasValueChange) clearTargetRange.values = nextValues;
 
     clearTargetRange.format.font.bold = false;
     clearTargetRange.format.fill.clear();
 
+    // No body sync here — deferred to the banner read sync inside
+    // clearBannerMarkerUpdatesForRange, which flushes all queued writes.
+    const bannerDetails = await clearBannerMarkerUpdatesForRange(context, clearTargetRange, _knownDims);
+
     await context.sync();
 
-    await clearBannerMarkersAboveRange(context, clearTargetRange);
+    const bodyCellsRead = targetValues.length * (targetValues[0] ? targetValues[0].length : 0);
+    perfLog("clearSignificanceForRange", {
+      rangeAddress,
+      bodyCellsRead,
+      bodyCellsChanged,
+      bodyHasValueChange,
+      bodyHasFormatChange,
+      bannerDetails: bannerDetails || null,
+      totalMs: perfElapsed(_t0),
+    });
 
-    return { status: "cleared", message: "очищено" };
+    return {
+      status: "cleared",
+      message: "очищено",
+      ...(perfEnabled() ? {
+        _clearDetails: {
+          bodyCellsRead,
+          bodyCellsChanged,
+          bannerCellsRead: bannerDetails ? bannerDetails.cellsRead : 0,
+          bannerCellsChanged: bannerDetails ? bannerDetails.cellsChanged : 0,
+          bannerWriteCommands: bannerDetails ? bannerDetails.writeCommands : 0,
+          totalMs: perfElapsed(_t0),
+        },
+      } : {}),
+    };
   });
 }
 
@@ -2304,6 +2346,7 @@ async function clearSignificanceForRange(sheetName, rangeAddress) {
  * of running the significance pipeline.
  */
 async function clearAutoSignificance() {
+  const _t0 = perfNow();
   setStatusMessage(runningStatusMessage("clear", "workbook"));
   let inventoryResults;
   try {
@@ -2334,6 +2377,13 @@ async function clearAutoSignificance() {
 
   let cleared = 0;
   let errors = 0;
+  const _clearAggregate = {
+    bodyCellsRead: 0,
+    bodyCellsChanged: 0,
+    bannerCellsRead: 0,
+    bannerCellsChanged: 0,
+    bannerWriteCommands: 0,
+  };
 
   for (const candidate of eligible) {
     try {
@@ -2341,6 +2391,13 @@ async function clearAutoSignificance() {
 
       if (result.status === "cleared") {
         cleared++;
+        if (result._clearDetails) {
+          _clearAggregate.bodyCellsRead += result._clearDetails.bodyCellsRead || 0;
+          _clearAggregate.bodyCellsChanged += result._clearDetails.bodyCellsChanged || 0;
+          _clearAggregate.bannerCellsRead += result._clearDetails.bannerCellsRead || 0;
+          _clearAggregate.bannerCellsChanged += result._clearDetails.bannerCellsChanged || 0;
+          _clearAggregate.bannerWriteCommands += result._clearDetails.bannerWriteCommands || 0;
+        }
       } else if (result.status === "skipped") {
         skipped++;
         detailLines.push(
@@ -2371,6 +2428,11 @@ async function clearAutoSignificance() {
     summaryLines.push("", ...detailLines);
   }
 
+  perfLog("clearAutoSignificance", {
+    tablesCleared: cleared,
+    ...(cleared > 0 ? { clearAggregate: _clearAggregate } : {}),
+    totalMs: perfElapsed(_t0),
+  });
   setStatusMessage(summaryLines.join("\n"));
 }
 
@@ -2711,6 +2773,7 @@ async function runCurrentSheetSignificance() {
  * collectActiveSheetInventoryResults(). Content sheet is silently ignored.
  */
 async function clearCurrentSheetSignificance() {
+  const _t0 = perfNow();
   setStatusMessage(runningStatusMessage("clear", "sheet"));
   let inventoryResults;
   try {
@@ -2741,6 +2804,13 @@ async function clearCurrentSheetSignificance() {
 
   let cleared = 0;
   let errors = 0;
+  const _clearAggregate = {
+    bodyCellsRead: 0,
+    bodyCellsChanged: 0,
+    bannerCellsRead: 0,
+    bannerCellsChanged: 0,
+    bannerWriteCommands: 0,
+  };
 
   for (const candidate of eligible) {
     try {
@@ -2748,6 +2818,13 @@ async function clearCurrentSheetSignificance() {
 
       if (result.status === "cleared") {
         cleared++;
+        if (result._clearDetails) {
+          _clearAggregate.bodyCellsRead += result._clearDetails.bodyCellsRead || 0;
+          _clearAggregate.bodyCellsChanged += result._clearDetails.bodyCellsChanged || 0;
+          _clearAggregate.bannerCellsRead += result._clearDetails.bannerCellsRead || 0;
+          _clearAggregate.bannerCellsChanged += result._clearDetails.bannerCellsChanged || 0;
+          _clearAggregate.bannerWriteCommands += result._clearDetails.bannerWriteCommands || 0;
+        }
       } else if (result.status === "skipped") {
         skipped++;
         detailLines.push(
@@ -2778,6 +2855,11 @@ async function clearCurrentSheetSignificance() {
     summaryLines.push("", ...detailLines);
   }
 
+  perfLog("clearCurrentSheetSignificance", {
+    tablesCleared: cleared,
+    ...(cleared > 0 ? { clearAggregate: _clearAggregate } : {}),
+    totalMs: perfElapsed(_t0),
+  });
   setStatusMessage(summaryLines.join("\n"));
 }
 
@@ -3189,6 +3271,7 @@ function calculateBlockResults(cleanedValues, calculationBlock, calculationSetti
  * User-facing cleanup button.
  */
 async function clearSignificanceFromSelection() {
+  const _t0 = perfNow();
   setStatusMessage(runningStatusMessage("clear"));
   await Excel.run(async (context) => {
     // getSelectedRange() throws a RichApi.Error for non-contiguous (Ctrl+Click
@@ -3318,15 +3401,23 @@ async function clearSignificanceFromSelection() {
       }
     }
 
-    clearTargetRange.load(["values", "numberFormat"]);
+    clearTargetRange.load(["values", "numberFormat", "rowIndex", "columnIndex", "columnCount"]);
 
     await context.sync();
 
     const targetValues = clearTargetRange.values;
     const targetNumberFormats = clearTargetRange.numberFormat;
+    const _knownDims = {
+      rowIndex: clearTargetRange.rowIndex,
+      columnIndex: clearTargetRange.columnIndex,
+      columnCount: clearTargetRange.columnCount,
+    };
 
     const nextValues = [];
     const nextNumberFormats = [];
+    let bodyCellsChanged = 0;
+    let bodyHasValueChange = false;
+    let bodyHasFormatChange = false;
 
     for (let rowIndex = 0; rowIndex < targetValues.length; rowIndex++) {
       const valueRow = [];
@@ -3334,10 +3425,11 @@ async function clearSignificanceFromSelection() {
 
       for (let columnIndex = 0; columnIndex < targetValues[rowIndex].length; columnIndex++) {
         const rawValue = targetValues[rowIndex][columnIndex];
+        const currentFormat = targetNumberFormats[rowIndex][columnIndex];
 
         if (typeof rawValue === "number") {
           valueRow.push(rawValue);
-          formatRow.push(targetNumberFormats[rowIndex][columnIndex]);
+          formatRow.push(currentFormat);
           continue;
         }
 
@@ -3345,9 +3437,13 @@ async function clearSignificanceFromSelection() {
         const resolved = resolveNumericOutput(cleanedText);
 
         if (resolved !== null) {
+          if (resolved.value !== rawValue) bodyHasValueChange = true;
+          if (resolved.format !== currentFormat) bodyHasFormatChange = true;
+          if (resolved.value !== rawValue || resolved.format !== currentFormat) bodyCellsChanged++;
           valueRow.push(resolved.value);
           formatRow.push(resolved.format);
         } else {
+          if (cleanedText !== rawValue) { bodyHasValueChange = true; bodyCellsChanged++; }
           valueRow.push(cleanedText);
           formatRow.push("@");
         }
@@ -3357,16 +3453,28 @@ async function clearSignificanceFromSelection() {
       nextNumberFormats.push(formatRow);
     }
 
-    clearTargetRange.numberFormat = nextNumberFormats;
-    clearTargetRange.values = nextValues;
+    // Only write body data when something actually changed, avoiding a full
+    // matrix write on a re-clear of an already-clean workbook.
+    if (bodyHasFormatChange) clearTargetRange.numberFormat = nextNumberFormats;
+    if (bodyHasValueChange) clearTargetRange.values = nextValues;
 
     clearTargetRange.format.font.bold = false;
     clearTargetRange.format.fill.clear();
 
+    // No body sync here — deferred to the banner read sync inside
+    // clearBannerMarkerUpdatesForRange, which flushes all queued writes.
+    const bannerDetails = await clearBannerMarkerUpdatesForRange(context, clearTargetRange, _knownDims);
+
     await context.sync();
 
-    await clearBannerMarkersAboveRange(context, clearTargetRange);
-
+    perfLog("clearSignificanceFromSelection", {
+      bodyCellsRead: targetValues.length * (targetValues[0] ? targetValues[0].length : 0),
+      bodyCellsChanged,
+      bodyHasValueChange,
+      bodyHasFormatChange,
+      bannerDetails: bannerDetails || null,
+      totalMs: perfElapsed(_t0),
+    });
     setStatusMessage(t("status.clearDone"));
   });
 }
@@ -3485,6 +3593,141 @@ async function clearBannerMarkersAboveRange(context, targetRange, knownDimension
   }
 
   await context.sync();
+}
+
+/**
+ * Combined clear-only banner pass for Clear Significance.
+ *
+ * Clear-only analog of applyBannerMarkerUpdatesForRange — reads the banner scan
+ * area once (flushing any pending body writes queued by the caller), strips all
+ * RIT trailing markers in-memory, diffs against the original texts, and queues
+ * writes only for cells that actually changed.  No marker placement, no
+ * numberFormat writes.
+ *
+ * Sync behaviour: issues 1 context.sync() to read the banner area (and flush
+ * pending writes).  Queued banner writes are NOT flushed here — the caller must
+ * issue its own final context.sync().  When cellsChanged === 0, no writes are
+ * queued and the caller's final sync is a cheap no-op.
+ *
+ * Returns null when targetStartRowIndex === 0 or targetColumnCount < 1.
+ * Otherwise returns a compact diagnostics object.
+ *
+ * @param {Excel.RequestContext} context
+ * @param {Excel.Range} targetRange  The clear-target range (data body).
+ * @param {{ rowIndex, columnIndex, columnCount }} [knownDimensions]
+ *   Pre-loaded sheet coordinates of targetRange.  When provided, skips the
+ *   extra load+sync that would otherwise be needed to resolve them.
+ */
+async function clearBannerMarkerUpdatesForRange(context, targetRange, knownDimensions) {
+  const BANNER_UPPER_SCAN_LIMIT = 5;
+  const BANNER_SCAN_ROW_COUNT = BANNER_UPPER_SCAN_LIMIT + 1;
+
+  let targetStartRowIndex, targetStartColumnIndex, targetColumnCount;
+  if (knownDimensions) {
+    targetStartRowIndex = knownDimensions.rowIndex;
+    targetStartColumnIndex = knownDimensions.columnIndex;
+    targetColumnCount = knownDimensions.columnCount;
+  } else {
+    targetRange.load(["rowIndex", "columnIndex", "columnCount"]);
+    await context.sync();
+    targetStartRowIndex = targetRange.rowIndex;
+    targetStartColumnIndex = targetRange.columnIndex;
+    targetColumnCount = targetRange.columnCount;
+  }
+
+  if (targetStartRowIndex === 0 || targetColumnCount < 1) {
+    return null;
+  }
+
+  const totalScanRowCount = Math.min(BANNER_SCAN_ROW_COUNT, targetStartRowIndex);
+  if (totalScanRowCount < 1) {
+    return null;
+  }
+
+  const scanStartColIndex = targetStartColumnIndex;
+  const scanColCount = targetColumnCount;
+
+  const bannerScanRange = targetRange.worksheet.getRangeByIndexes(
+    targetStartRowIndex - totalScanRowCount,
+    scanStartColIndex,
+    totalScanRowCount,
+    scanColCount
+  );
+
+  const readSyncStartMs = perfNow();
+  bannerScanRange.load("text");
+  // This sync also flushes any pending body writes queued by the caller.
+  await context.sync();
+  const readSyncEndMs = perfNow();
+  let syncCount = 1;
+
+  const bannerTexts = bannerScanRange.text;
+
+  // Strip RIT trailing markers from every cell.  Keeps non-RIT parenthesised
+  // text (e.g. "Wave (quarter)") intact — getTrailingBannerMarker only matches
+  // single-character significance labels.
+  const desiredTexts = new Array(totalScanRowCount);
+  for (let r = 0; r < totalScanRowCount; r++) {
+    const row = bannerTexts[r] || [];
+    const destRow = new Array(scanColCount);
+    for (let c = 0; c < scanColCount; c++) {
+      const txt = row[c] || "";
+      destRow[c] = (txt && getTrailingBannerMarker(txt)) ? removeTrailingBannerMarker(txt) : txt;
+    }
+    desiredTexts[r] = destRow;
+  }
+
+  // Diff against original texts and queue only changed cells.
+  const writesByRow = new Map();
+  let cellsChanged = 0;
+
+  for (let r = 0; r < totalScanRowCount; r++) {
+    for (let c = 0; c < scanColCount; c++) {
+      const cur = (bannerTexts[r] && bannerTexts[r][c]) || "";
+      const nxt = desiredTexts[r][c] || "";
+      if (cur === nxt) continue;
+      const absRow = targetStartRowIndex - totalScanRowCount + r;
+      const absCol = scanStartColIndex + c;
+      if (!writesByRow.has(absRow)) writesByRow.set(absRow, []);
+      writesByRow.get(absRow).push({ colIndex: absCol, text: nxt });
+      cellsChanged++;
+    }
+  }
+
+  const changedRows = writesByRow.size;
+  const queueWriteStartMs = perfNow();
+  let writeCommands = 0;
+
+  if (cellsChanged > 0) {
+    const worksheet = targetRange.worksheet;
+    for (const [rowIndex, items] of writesByRow) {
+      items.sort((a, b) => a.colIndex - b.colIndex);
+      let i = 0;
+      while (i < items.length) {
+        let j = i;
+        while (j + 1 < items.length && items[j + 1].colIndex === items[j].colIndex + 1) j++;
+        const texts = items.slice(i, j + 1).map((x) => x.text);
+        worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1).values = [texts];
+        writeCommands++;
+        i = j + 1;
+      }
+    }
+    // Intentionally no context.sync() here — caller's final sync flushes queued writes.
+  }
+
+  const queueWriteEndMs = perfNow();
+
+  return {
+    rowsScanned: totalScanRowCount,
+    cellsRead: totalScanRowCount * scanColCount,
+    cellsChanged,
+    writeCommands,
+    changedRows,
+    readSyncMs: readSyncEndMs - readSyncStartMs,
+    planMs: queueWriteStartMs - readSyncEndMs,
+    queueWriteMs: queueWriteEndMs - queueWriteStartMs,
+    syncCount,
+  };
 }
 
 /**
