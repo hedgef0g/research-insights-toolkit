@@ -144,9 +144,60 @@ export function writeCellResultsToSelectedRange(
       calculationSettings,
       writerDetails
     );
+
+    if (writerDetails) {
+      populateRangeAreasDiagnostics(writerDetails, selectedRange);
+    }
   }
 
   return writerDetails;
+}
+
+/**
+ * Diagnostics-only: projects how many queued Office.js operations a chunked
+ * `worksheet.getRanges(...)` RangeAreas strategy (ExcelApi 1.9) would use for
+ * the bold and fill masks the writer just processed. The writer still issues
+ * the existing row-run commands; this is captured purely for #284 comparison.
+ *
+ * Requires `selectedRange.rowIndex` and `selectedRange.columnIndex` to be
+ * loaded. If reading them throws (e.g. property-not-loaded), diagnostics are
+ * skipped so this remains a zero-risk side observation.
+ */
+function populateRangeAreasDiagnostics(writerDetails, selectedRange) {
+  let anchorRowIndex;
+  let anchorColumnIndex;
+
+  try {
+    anchorRowIndex = selectedRange.rowIndex;
+    anchorColumnIndex = selectedRange.columnIndex;
+  } catch (_) {
+    return;
+  }
+
+  if (typeof anchorRowIndex !== "number" || typeof anchorColumnIndex !== "number") {
+    return;
+  }
+
+  const boldRunSpansByRow = writerDetails._boldRunSpansByRow || [];
+  const fillRunSpansByRow = writerDetails._fillRunSpansByRow || [];
+
+  writerDetails.boldRangeAreas = buildBoldRangeAreasDiagnostics(
+    boldRunSpansByRow,
+    anchorRowIndex,
+    anchorColumnIndex
+  );
+
+  writerDetails.fillRangeAreas = buildFillRangeAreasDiagnosticsByColor(
+    fillRunSpansByRow,
+    anchorRowIndex,
+    anchorColumnIndex
+  );
+
+  // The per-row span arrays are an internal detail used to feed the RangeAreas
+  // estimate. They can be large on wide workbooks, so drop them from the
+  // emitted writerDetails to keep the perf log lean.
+  delete writerDetails._boldRunSpansByRow;
+  delete writerDetails._fillRunSpansByRow;
 }
 
 /**
@@ -368,6 +419,7 @@ function applyGroupedBoldFormatting(selectedRange, boldMask, writerDetails = nul
     writerDetails.boldRunCountByRow = boldRunsByRow;
     writerDetails.boldCommandCount = sumCounts(boldRunsByRow);
     writerDetails.boldRectCommandCountEstimate = estimateRectangleCommandCount(boldRunSpansByRow);
+    writerDetails._boldRunSpansByRow = boldRunSpansByRow;
   }
 }
 
@@ -450,6 +502,7 @@ function applyGroupedFillFormatting(
     writerDetails.fillRunCountByRow = fillRunsByRow;
     writerDetails.fillCommandCount = sumCounts(fillRunsByRow);
     writerDetails.fillRectCommandCountEstimate = estimateRectangleCommandCount(fillRunSpansByRow);
+    writerDetails._fillRunSpansByRow = fillRunSpansByRow;
   }
 }
 
@@ -466,6 +519,8 @@ function createWriterDetails() {
     fillRunCountByRow: [],
     boldRectCommandCountEstimate: 0,
     fillRectCommandCountEstimate: 0,
+    boldRangeAreas: null,
+    fillRangeAreas: null,
   };
 }
 
@@ -501,4 +556,228 @@ function estimateRectangleCommandCount(runSpansByRow) {
 function buildRunSpanSignature(runSpan) {
   const colorKey = runSpan.color || "";
   return `${runSpan.start}:${runSpan.end}:${colorKey}`;
+}
+
+/**
+ * Spike helpers for issue #284.
+ *
+ * Diagnostics-only. These helpers convert the row-run mask data the writer
+ * already produces into the A1 address strings a chunked
+ * `worksheet.getRanges(...)` (RangeAreas, ExcelApi 1.9) call would consume,
+ * and estimate how many queued Office.js operations such a strategy would use.
+ *
+ * The writer itself still issues the original row-run formatting commands.
+ * These helpers exist only to populate `writerDetails.boldRangeAreas` and
+ * `writerDetails.fillRangeAreas` when RIT_PERF is enabled, so we can compare
+ * the projected RangeAreas command count against the live row-run count on
+ * real workbooks before committing to a wider writer change.
+ *
+ * Pure: no Office.js calls. Anchor coords are passed in as numbers.
+ */
+
+const DEFAULT_RANGE_AREAS_CHUNK_OPTIONS = Object.freeze({
+  maxAreasPerChunk: 100,
+  maxCharsPerChunk: 2000,
+});
+
+/**
+ * Converts a zero-based column index to an A1-style column reference.
+ * 0 → "A", 25 → "Z", 26 → "AA", 51 → "AZ", 52 → "BA".
+ */
+export function columnIndexToA1(zeroBasedColumnIndex) {
+  let n = zeroBasedColumnIndex + 1;
+  let result = "";
+
+  while (n > 0) {
+    const remainder = (n - 1) % 26;
+    result = String.fromCharCode(65 + remainder) + result;
+    n = Math.floor((n - 1) / 26);
+  }
+
+  return result;
+}
+
+/**
+ * Converts a row-run span on the selected range to a sheet-relative A1
+ * address. Returns "B3:F3" style. Single-cell runs collapse to "B3".
+ */
+export function runSpanToA1Address(runSpan, rowIndex, anchorRowIndex, anchorColumnIndex) {
+  const absoluteRow = anchorRowIndex + rowIndex + 1;
+  const startColumnLetters = columnIndexToA1(anchorColumnIndex + runSpan.start);
+
+  if (runSpan.end === runSpan.start) {
+    return `${startColumnLetters}${absoluteRow}`;
+  }
+
+  const endColumnLetters = columnIndexToA1(anchorColumnIndex + runSpan.end);
+  return `${startColumnLetters}${absoluteRow}:${endColumnLetters}${absoluteRow}`;
+}
+
+/**
+ * Packs A1 address strings into comma-separated chunks bounded by both an
+ * area-count cap and a character-count cap. Either cap may fire first.
+ *
+ * Returns an array of chunk descriptors so diagnostics can record both the
+ * address string and its size without re-walking the runs.
+ */
+export function packAddressesIntoChunks(addresses, options = {}) {
+  const maxAreasPerChunk = options.maxAreasPerChunk || DEFAULT_RANGE_AREAS_CHUNK_OPTIONS.maxAreasPerChunk;
+  const maxCharsPerChunk = options.maxCharsPerChunk || DEFAULT_RANGE_AREAS_CHUNK_OPTIONS.maxCharsPerChunk;
+
+  const chunks = [];
+
+  if (addresses.length === 0) {
+    return chunks;
+  }
+
+  let currentAddresses = [];
+  let currentLength = 0;
+
+  for (const address of addresses) {
+    const separatorLength = currentAddresses.length === 0 ? 0 : 1;
+    const projectedLength = currentLength + separatorLength + address.length;
+
+    const overAreaCap = currentAddresses.length >= maxAreasPerChunk;
+    const overCharCap = projectedLength > maxCharsPerChunk;
+
+    if ((overAreaCap || overCharCap) && currentAddresses.length > 0) {
+      chunks.push({
+        address: currentAddresses.join(","),
+        areaCount: currentAddresses.length,
+        length: currentLength,
+      });
+      currentAddresses = [];
+      currentLength = 0;
+    }
+
+    const isFirstInNewChunk = currentAddresses.length === 0;
+    currentAddresses.push(address);
+    currentLength += (isFirstInNewChunk ? 0 : 1) + address.length;
+  }
+
+  if (currentAddresses.length > 0) {
+    chunks.push({
+      address: currentAddresses.join(","),
+      areaCount: currentAddresses.length,
+      length: currentLength,
+    });
+  }
+
+  return chunks;
+}
+
+/**
+ * Builds RangeAreas diagnostic data for a single uniform-format mask (e.g.
+ * bold). Returns counts and chunk metadata, plus a worked command-count
+ * projection assuming one `worksheet.getRanges(...)` + one setter per chunk.
+ *
+ * runSpansByRow: same shape used by the writer — array indexed by mask row,
+ *                each entry is array of { start, end } spans.
+ */
+export function buildBoldRangeAreasDiagnostics(
+  runSpansByRow,
+  anchorRowIndex,
+  anchorColumnIndex,
+  options = {}
+) {
+  const addresses = [];
+
+  for (let rowIndex = 0; rowIndex < runSpansByRow.length; rowIndex++) {
+    const rowSpans = runSpansByRow[rowIndex];
+    if (!rowSpans) continue;
+
+    for (const runSpan of rowSpans) {
+      addresses.push(runSpanToA1Address(runSpan, rowIndex, anchorRowIndex, anchorColumnIndex));
+    }
+  }
+
+  const chunks = packAddressesIntoChunks(addresses, options);
+
+  return summarizeRangeAreasChunks(addresses.length, chunks);
+}
+
+/**
+ * Builds RangeAreas diagnostic data for fill formatting, grouped by color
+ * because RangeAreas.format.fill.color is a single uniform value per call.
+ *
+ * runSpansByRow entries carry `{ start, end, color }`.
+ */
+export function buildFillRangeAreasDiagnosticsByColor(
+  runSpansByRow,
+  anchorRowIndex,
+  anchorColumnIndex,
+  options = {}
+) {
+  const addressesByColor = new Map();
+
+  for (let rowIndex = 0; rowIndex < runSpansByRow.length; rowIndex++) {
+    const rowSpans = runSpansByRow[rowIndex];
+    if (!rowSpans) continue;
+
+    for (const runSpan of rowSpans) {
+      const color = runSpan.color || "";
+      if (!color) continue;
+
+      const address = runSpanToA1Address(runSpan, rowIndex, anchorRowIndex, anchorColumnIndex);
+
+      if (!addressesByColor.has(color)) {
+        addressesByColor.set(color, []);
+      }
+
+      addressesByColor.get(color).push(address);
+    }
+  }
+
+  const perColor = [];
+  let totalAreaCount = 0;
+  let totalChunkCount = 0;
+  let maxAddressLength = 0;
+
+  for (const [color, addresses] of addressesByColor) {
+    const chunks = packAddressesIntoChunks(addresses, options);
+    const summary = summarizeRangeAreasChunks(addresses.length, chunks);
+
+    perColor.push({
+      color,
+      areaCount: summary.areaCountTotal,
+      chunkCount: summary.chunkCount,
+      commandCountEstimate: summary.commandCountEstimate,
+      maxAddressLength: summary.maxAddressLength,
+    });
+
+    totalAreaCount += summary.areaCountTotal;
+    totalChunkCount += summary.chunkCount;
+    if (summary.maxAddressLength > maxAddressLength) {
+      maxAddressLength = summary.maxAddressLength;
+    }
+  }
+
+  return {
+    perColor,
+    colorCount: perColor.length,
+    areaCountTotal: totalAreaCount,
+    chunkCount: totalChunkCount,
+    // Each chunk costs one getRanges + one format.fill.color setter.
+    commandCountEstimate: totalChunkCount * 2,
+    maxAddressLength,
+  };
+}
+
+function summarizeRangeAreasChunks(areaCountTotal, chunks) {
+  let maxAddressLength = 0;
+  for (const chunk of chunks) {
+    if (chunk.length > maxAddressLength) {
+      maxAddressLength = chunk.length;
+    }
+  }
+
+  return {
+    areaCountTotal,
+    chunkCount: chunks.length,
+    // Each chunk costs one getRanges + one format.font.bold (or .fill.color)
+    // setter. Sync count is unchanged: the chunked ops queue inside the
+    // existing single sync.
+    commandCountEstimate: chunks.length * 2,
+    maxAddressLength,
+  };
 }
