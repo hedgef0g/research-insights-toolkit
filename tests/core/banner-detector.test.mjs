@@ -508,6 +508,96 @@ describe("detectBannerStructure - group level selection", () => {
   });
 });
 
+describe("detectBannerStructure - compact w-number wave value labels", () => {
+  it("compact w-number labels in upper row with blank lower cells form one merged group with distinct sibling markers when autoDetectWaveBanners is false", () => {
+    // w6 / w7 in the upper row with blank lower cells must be recognised as
+    // technical wave-value labels so that mergeAdjacentWaveValueSpans merges
+    // them into a single two-column group instead of leaving two orphan
+    // one-column groups that both receive local label "a".
+    const bannerContext = {
+      selectedColumnCount: 6,
+      lowerBannerRow: ["", "", "w1", "w6", "w1", "w6"],
+      upperScanRows: [
+        ["w6", "w7", "Мужской", "", "Женский", ""],
+      ],
+    };
+
+    const result = detectBannerStructure(bannerContext, { autoDetectWaveBanners: false });
+
+    const groupForCol0 = result.groups.find((g) => g.columnIndexes.includes(0));
+    const groupForCol1 = result.groups.find((g) => g.columnIndexes.includes(1));
+
+    assert.ok(groupForCol0, "column 0 must be in a group");
+    assert.ok(groupForCol1, "column 1 must be in a group");
+    assert.strictEqual(
+      groupForCol0.groupKey,
+      groupForCol1.groupKey,
+      "columns 0 and 1 must share the same group key"
+    );
+    assert.deepStrictEqual(groupForCol0.columnIndexes, [0, 1]);
+
+    const groupForCol2 = result.groups.find((g) => g.columnIndexes.includes(2));
+    const groupForCol3 = result.groups.find((g) => g.columnIndexes.includes(3));
+
+    assert.ok(groupForCol2, "column 2 must be in a group");
+    assert.strictEqual(
+      groupForCol2.groupKey,
+      groupForCol3.groupKey,
+      "columns 2 and 3 must share the same group key"
+    );
+    assert.notStrictEqual(
+      groupForCol0.groupKey,
+      groupForCol2.groupKey,
+      "wave group and sibling group must be distinct"
+    );
+
+    const labelMap = buildBannerLocalSignificanceLabelMap(result, { autoDetectWaveBanners: false });
+
+    assert.strictEqual(labelMap.get(0), "a", "first column of wave group must get label a");
+    assert.strictEqual(labelMap.get(1), "b", "second column of wave group must get label b");
+    assert.strictEqual(labelMap.get(2), "a", "first column of sibling group must get label a");
+    assert.strictEqual(labelMap.get(3), "b", "second column of sibling group must get label b");
+
+    for (const group of result.groups) {
+      assert.notStrictEqual(group.recommendedComparisonMode, "previousColumn");
+    }
+  });
+
+  it("compact w-number labels in lower row promote previousColumn mode when autoDetectWaveBanners is true but not when false", () => {
+    const bannerContext = {
+      selectedColumnCount: 4,
+      lowerBannerRow: ["w6", "w7", "w6", "w7"],
+      upperScanRows: [
+        ["Group A", "", "Group B", ""],
+      ],
+    };
+
+    const resultTrue = detectBannerStructure(bannerContext, { autoDetectWaveBanners: true });
+
+    assert.deepStrictEqual(
+      resultTrue.groups.map((group) => ({
+        label: group.label,
+        columnIndexes: group.columnIndexes,
+        recommendedComparisonMode: group.recommendedComparisonMode,
+      })),
+      [
+        { label: "Group A", columnIndexes: [0, 1], recommendedComparisonMode: "previousColumn" },
+        { label: "Group B", columnIndexes: [2, 3], recommendedComparisonMode: "previousColumn" },
+      ]
+    );
+
+    const resultFalse = detectBannerStructure(bannerContext, { autoDetectWaveBanners: false });
+
+    for (const group of resultFalse.groups) {
+      assert.notStrictEqual(
+        group.recommendedComparisonMode,
+        "previousColumn",
+        "previousColumn mode must not be set when autoDetectWaveBanners is false"
+      );
+    }
+  });
+});
+
 describe("detectBannerStructure - sparse lower banner totals", () => {
   it("marks columns with empty lower label as local Total when nearest upper cell is total-like", () => {
     const bannerContext = {

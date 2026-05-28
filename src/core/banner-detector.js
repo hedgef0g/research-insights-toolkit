@@ -1612,6 +1612,15 @@ function isTechnicalWaveValueLabel(rawLabel) {
     return false;
   }
 
+  // Compact wave number: first token matches w<digits> (e.g. w1, w6, w06, w12).
+  // Parenthetical suffixes like "w6 (ноябрь 23)" are covered because
+  // normalization collapses parentheses to spaces and we only check the first token.
+  const firstToken = normalizedLabel.split(" ")[0];
+
+  if (/^w\d+$/.test(firstToken)) {
+    return true;
+  }
+
   const compactLabel = normalizedLabel.replace(/\s+/g, "");
 
   return (
