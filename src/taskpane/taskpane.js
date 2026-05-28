@@ -105,7 +105,13 @@ import {
   buildInventoryContentSkippedRow,
 } from "./taskpane-inventory-scan";
 
-import { perfNow, perfElapsed, perfLog, perfEnabled } from "./taskpane-performance";
+import {
+  perfNow,
+  perfElapsed,
+  perfLog,
+  perfEnabled,
+  perfBannerWriteProfileEnabled,
+} from "./taskpane-performance";
 
 const INVENTORY_CONTENT_SHEET_NAME = "Content";
 const RUN_REPORT_SHEET_NAME = "Run report";
@@ -484,6 +490,13 @@ function createAggregatedBannerPerfDetails() {
     planMs: 0,
     queueWriteMs: 0,
     syncCount: 0,
+    writeProfiledTables: 0,
+    numberFormatSyncMs: 0,
+    valueWriteSyncMs: 0,
+    profileSyncCount: 0,
+    numberFormatCells: 0,
+    valueWriteCells: 0,
+    markerRowsUsed: 0,
     maxWriteCommands: 0,
     tablesWithOverlappingBannerAreas: 0,
     perSheetBannerTablesMax: 0,
@@ -569,6 +582,13 @@ function mergeBannerPerfDetails(aggregate, bannerDetails, sheetName) {
   aggregate.planMs += bannerDetails.planMs || 0;
   aggregate.queueWriteMs += bannerDetails.queueWriteMs || 0;
   aggregate.syncCount += bannerDetails.syncCount || 0;
+  aggregate.writeProfiledTables += bannerDetails.writeProfileEnabled ? 1 : 0;
+  aggregate.numberFormatSyncMs += bannerDetails.numberFormatSyncMs || 0;
+  aggregate.valueWriteSyncMs += bannerDetails.valueWriteSyncMs || 0;
+  aggregate.profileSyncCount += bannerDetails.profileSyncCount || 0;
+  aggregate.numberFormatCells += bannerDetails.numberFormatCells || 0;
+  aggregate.valueWriteCells += bannerDetails.valueWriteCells || 0;
+  aggregate.markerRowsUsed += bannerDetails.markerRowsUsed || 0;
   if ((bannerDetails.writeCommands || 0) > aggregate.maxWriteCommands) {
     aggregate.maxWriteCommands = bannerDetails.writeCommands;
   }
@@ -5179,11 +5199,14 @@ function initializeSettingsTabs() {
  * contiguous same-row runs and split by markered/clear-only flag so the
  * legacy "@" number-format behaviour is preserved on marker writes.
  *
- * Sync count: 1 for the banner-area read (also flushes any pending data
- * writes from the caller) and 0 for the writes — the caller is expected to
- * issue its own final `context.sync()` to flush the queued banner writes.
- * This brings per-table banner sync count down from 5–7 (legacy) to 2 when
- * counting the caller's final sync.
+ * Sync count in normal mode: 1 for the banner-area read (also flushes any
+ * pending data writes from the caller) and 0 for the writes — the caller is
+ * expected to issue its own final `context.sync()` to flush queued banner
+ * writes.  This brings per-table banner sync count down from 5–7 (legacy) to
+ * 2 when counting the caller's final sync.
+ *
+ * Development-only banner write profiling can split numberFormat and values
+ * into separate syncs to measure host flush cost. It is disabled by default.
  *
  * Returns null when no banner work was needed.  Otherwise returns a perf
  * details object describing the work performed.
@@ -5403,8 +5426,18 @@ async function applyBannerMarkerUpdatesForRange(
   let markeredWriteCommands = 0;
   let clearOnlyWriteCommands = 0;
   let numberFormatCommands = 0;
+  let numberFormatCells = 0;
+  let valueWriteCells = 0;
+  let markerRowsUsed = 0;
   let maxRunLength = 0;
+  let numberFormatSyncMs = 0;
+  let valueWriteSyncMs = 0;
+  let profileSyncCount = 0;
+  const writeProfileEnabled = perfBannerWriteProfileEnabled();
 
+  const profiledValueWrites = [];
+  const markerRowIndexes = new Set();
+  let queueCommandEndMs = 0;
   if (cellsChanged > 0) {
     const worksheet = writeTargetRange.worksheet;
     for (const [rowIndex, items] of writesByRow) {
@@ -5431,11 +5464,18 @@ async function applyBannerMarkerUpdatesForRange(
         if (useStructure && slice[0].markered) {
           range.numberFormat = [texts.map(() => "@")];
           numberFormatCommands++;
+          numberFormatCells += runLength;
         }
-        range.values = [texts];
+
+        if (writeProfileEnabled) {
+          profiledValueWrites.push({ range, texts });
+        } else {
+          range.values = [texts];
+        }
 
         writeCommands++;
         changedCellRuns++;
+        valueWriteCells += runLength;
         if (runLength === 1) {
           oneCellWriteCommands++;
         } else {
@@ -5443,6 +5483,7 @@ async function applyBannerMarkerUpdatesForRange(
         }
         if (slice[0].markered) {
           markeredWriteCommands++;
+          markerRowIndexes.add(rowIndex);
         } else {
           clearOnlyWriteCommands++;
         }
@@ -5452,11 +5493,32 @@ async function applyBannerMarkerUpdatesForRange(
         i = j + 1;
       }
     }
-    // Intentionally NO context.sync() here.  Caller's final context.sync()
-    // flushes the queued banner writes alongside any other pending ops.
+    markerRowsUsed = markerRowIndexes.size;
+    queueCommandEndMs = perfNow();
+
+    if (writeProfileEnabled) {
+      if (numberFormatCommands > 0) {
+        const numberFormatSyncStartMs = perfNow();
+        await context.sync();
+        numberFormatSyncMs = perfNow() - numberFormatSyncStartMs;
+        syncCount++;
+        profileSyncCount++;
+      }
+
+      const valueWriteSyncStartMs = perfNow();
+      for (const pending of profiledValueWrites) {
+        pending.range.values = [pending.texts];
+      }
+      await context.sync();
+      valueWriteSyncMs = perfNow() - valueWriteSyncStartMs;
+      syncCount++;
+      profileSyncCount++;
+    }
+    // In normal mode, intentionally NO context.sync() here.  Caller's final
+    // context.sync() flushes queued banner writes alongside other pending ops.
   }
 
-  const queueWriteEndMs = perfNow();
+  const queueWriteEndMs = queueCommandEndMs || perfNow();
   const details = {
     rowsScanned: totalScanRowCount,
     cellsRead: totalScanRowCount * scanColCount,
@@ -5483,6 +5545,13 @@ async function applyBannerMarkerUpdatesForRange(
     planMs: queueWriteStartMs - readSyncEndMs,
     queueWriteMs: queueWriteEndMs - queueWriteStartMs,
     syncCount,
+    writeProfileEnabled,
+    numberFormatSyncMs,
+    valueWriteSyncMs,
+    profileSyncCount,
+    numberFormatCells,
+    valueWriteCells,
+    markerRowsUsed,
   };
 
   Object.defineProperty(details, BANNER_SCAN_AREA_STATS, {
