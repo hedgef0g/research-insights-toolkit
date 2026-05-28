@@ -5401,10 +5401,12 @@ async function applyBannerMarkerUpdatesForRange(
       const absRow = targetStartRowIndex - totalScanRowCount + r;
       const absCol = scanStartColIndex + c;
       if (!writesByRow.has(absRow)) writesByRow.set(absRow, []);
+      const isMarkered = markedCellKeys.has(key);
       writesByRow.get(absRow).push({
         colIndex: absCol,
         text: nxt,
-        markered: markedCellKeys.has(key),
+        markered: isMarkered,
+        needsNF: isMarkered && needsNumberFormatForBannerMarker(nxt),
       });
       cellsChanged++;
     }
@@ -5445,14 +5447,14 @@ async function applyBannerMarkerUpdatesForRange(
       let i = 0;
       while (i < items.length) {
         let j = i;
-        // Group adjacent columns with the same markered flag so the "@"
-        // number format is applied only to marker writes in structure mode —
-        // matches legacy behaviour where clear-only cells were written
-        // without touching numberFormat.
+        // Group adjacent columns with the same markered and needsNF flags so
+        // the "@" number format is applied only to bare-marker cells —
+        // non-bare marker text like "Wave 1 (a)" does not need "@".
         while (
           j + 1 < items.length &&
           items[j + 1].colIndex === items[j].colIndex + 1 &&
-          items[j + 1].markered === items[j].markered
+          items[j + 1].markered === items[j].markered &&
+          items[j + 1].needsNF === items[j].needsNF
         ) {
           j++;
         }
@@ -5461,7 +5463,7 @@ async function applyBannerMarkerUpdatesForRange(
         const range = worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1);
         const runLength = texts.length;
 
-        if (useStructure && slice[0].markered) {
+        if (useStructure && slice[0].markered && slice[0].needsNF) {
           range.numberFormat = [texts.map(() => "@")];
           numberFormatCommands++;
           numberFormatCells += runLength;
@@ -6191,6 +6193,17 @@ function getFirstBannerStructureError(bannerStructure) {
   }
 
   return bannerStructure.messages.find((message) => message.severity === "error") || null;
+}
+
+/**
+ * Returns true when a banner marker write needs numberFormat = "@".
+ *
+ * Only bare-marker cells risk Excel auto-formatting and need the guard.
+ * A cell is "bare" when the only content is the marker itself, e.g. "(a)".
+ * Cells with actual text like "Wave 1 (a)" are already text-safe without "@".
+ */
+function needsNumberFormatForBannerMarker(text) {
+  return removeTrailingBannerMarker(text) === "";
 }
 
 /**
