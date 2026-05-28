@@ -456,6 +456,38 @@ function mergeFillRangeAreasProjection(target, source) {
   }
 }
 
+function createAggregatedBannerPerfDetails() {
+  return {
+    tablesWithBannerDetails: 0,
+    rowsScanned: 0,
+    cellsRead: 0,
+    cellsPlanned: 0,
+    cellsChanged: 0,
+    writeCommands: 0,
+    skippedNoOpWrites: 0,
+    syncCount: 0,
+    maxWriteCommands: 0,
+  };
+}
+
+function mergeBannerPerfDetails(aggregate, bannerDetails) {
+  if (!aggregate || !bannerDetails) {
+    return;
+  }
+
+  aggregate.tablesWithBannerDetails += 1;
+  aggregate.rowsScanned += bannerDetails.rowsScanned || 0;
+  aggregate.cellsRead += bannerDetails.cellsRead || 0;
+  aggregate.cellsPlanned += bannerDetails.cellsPlanned || 0;
+  aggregate.cellsChanged += bannerDetails.cellsChanged || 0;
+  aggregate.writeCommands += bannerDetails.writeCommands || 0;
+  aggregate.skippedNoOpWrites += bannerDetails.skippedNoOpWrites || 0;
+  aggregate.syncCount += bannerDetails.syncCount || 0;
+  if ((bannerDetails.writeCommands || 0) > aggregate.maxWriteCommands) {
+    aggregate.maxWriteCommands = bannerDetails.writeCommands;
+  }
+}
+
 // ─── Action + Scope shell (issue #167 PR1) ───────────────────────────────────
 
 let _currentAction = "run";
@@ -833,36 +865,23 @@ async function runSignificanceFromSelection() {
     };
 
     if (calculationSettings.writeBannerLetters) {
-      // Pre-clear all existing banner markers above the write range before
-      // writing fresh ones.  Without this, stale markers survive in vertically
-      // merged banner cells: the write helpers only update cells they target on
-      // this run, so any cell targeted by a previous run (possibly in a higher
-      // banner row due to a vertical merge) that is not targeted this run keeps
-      // its old marker.  clearBannerMarkersAboveRange reads .text (which returns
-      // text from the top-left of each merge) and removes any trailing RIT marker
-      // from every banner row above the data range.
+      // Combined banner clear + write: one read sync (which also flushes the
+      // queued data writes above) followed by queued marker writes that are
+      // flushed by the final context.sync() below.  Replaces the legacy
+      // clearBannerMarkersAboveRange + writeBannerMarkers* pair, cutting per-
+      // table banner sync count from 5–6 down to 2.
       //
       // sourceStartColIndex widens the scan to cover any columns between the
-      // selection start and the write target start, cleaning stale RIT markers
-      // that an earlier run may have written when dataColOffset was smaller.
-      await clearBannerMarkersAboveRange(context, writeTargetRange, _knownDims, selectedRange.columnIndex);
-
-      if (calculationSettings.respectBannerStructure && bannerStructure) {
-        await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
-          context,
-          writeTargetRange,
-          bannerStructure,
-          calculationSettings,
-          _knownDims
-        );
-      } else {
-        await writeBannerMarkersAboveSelectedRange(
-          context,
-          writeTargetRange,
-          calculationSettings,
-          _knownDims
-        );
-      }
+      // selection start and the write target start, absorbing the stale-left
+      // marker cleanup.
+      await applyBannerMarkerUpdatesForRange(
+        context,
+        writeTargetRange,
+        calculationSettings,
+        bannerStructure,
+        _knownDims,
+        selectedRange.columnIndex
+      );
     }
 
     await context.sync();
@@ -1086,38 +1105,45 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
   let _pStaleLeftClear = _pValueWrite;
   let _pBannerClear = _pValueWrite;
   let _pBannerWrite = _pValueWrite;
+  let bannerDetails = null;
 
   if (calculationSettings.writeBannerLetters) {
-    // staleLeftClear phase: no separate sync needed.  clearBannerMarkersAboveRange
-    // below receives sourceRange.columnIndex so it widens its scan to cover any
-    // columns between the source start and the write target start — absorbing the
-    // former clearStaleBannerMarkersLeftOfWriteRange work into a single sync.
+    // staleLeftClear phase: no separate sync needed.  The combined banner
+    // updater below receives sourceRange.columnIndex so its scan also covers
+    // any columns between the source start and the write target start,
+    // absorbing the former clearStaleBannerMarkersLeftOfWriteRange work.
     _pStaleLeftClear = _pValueWrite;
 
-    // Pre-clear all existing banner markers above the write range before writing
-    // fresh ones.  sourceRange.columnIndex widens the scan left so stale markers
-    // in label/leading-empty columns (written when dataColOffset was smaller) are
-    // also removed.  This first sync also flushes any pending data-body writes
-    // queued above.
-    await clearBannerMarkersAboveRange(context, writeTargetRange, _knownDims, sourceRange.columnIndex);
+    // Combined clear + write in a single read/plan/write phase.  The first
+    // sync inside applyBannerMarkerUpdatesForRange reads the banner area and
+    // also flushes pending data-body writes; the queued marker writes are
+    // flushed by the final context.sync() below.  bannerClearMs measures the
+    // read+plan portion and bannerWriteMs measures the write portion so the
+    // perf log shape is preserved.
+    bannerDetails = await applyBannerMarkerUpdatesForRange(
+      context,
+      writeTargetRange,
+      calculationSettings,
+      bannerStructure,
+      _knownDims,
+      sourceRange.columnIndex
+    );
     _pBannerClear = perfNow();
-
-    if (calculationSettings.respectBannerStructure && bannerStructure) {
-      await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
-        context,
-        writeTargetRange,
-        bannerStructure,
-        calculationSettings,
-        _knownDims
-      );
-    } else {
-      await writeBannerMarkersAboveSelectedRange(context, writeTargetRange, calculationSettings, _knownDims);
-    }
-    _pBannerWrite = perfNow();
+    // No second sync inside the combined function; the final sync flushes
+    // queued writes.  bannerWriteMs is captured around that final sync below.
+    _pBannerWrite = _pBannerClear;
   }
 
   await context.sync();
   const _pWrite = perfNow();
+  // After the final sync, attribute the time it took to flush queued banner
+  // writes (if any) to bannerWriteMs so the legacy log shape continues to
+  // separate "load / plan" cost from "write" cost.  When banner letters are
+  // disabled the final sync only flushes data writes and we leave
+  // bannerWriteMs at 0.
+  if (calculationSettings.writeBannerLetters) {
+    _pBannerWrite = _pWrite;
+  }
 
   return {
     status: "processed",
@@ -1134,8 +1160,9 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
         staleLeftClearMs: _pStaleLeftClear - _pValueWrite,
         bannerClearMs: _pBannerClear - _pStaleLeftClear,
         bannerWriteMs: _pBannerWrite - _pBannerClear,
-        finalSyncMs: _pWrite - _pBannerWrite,
+        finalSyncMs: calculationSettings.writeBannerLetters ? 0 : (_pWrite - _pBannerWrite),
         ...(writerDetails ? { writerDetails } : {}),
+        ...(bannerDetails ? { bannerDetails } : {}),
       },
     } : null,
   };
@@ -1546,6 +1573,7 @@ async function runAutoSignificance() {
       bannerWriteMs: 0,
       finalSyncMs: 0,
       writerDetails: createAggregatedWriterPerfDetails(),
+      bannerDetails: createAggregatedBannerPerfDetails(),
     },
   };
   let _batchEndedAt = 0;
@@ -1584,6 +1612,10 @@ async function runAutoSignificance() {
               mergeWriterPerfDetails(
                 _perfPhases.writeDetails.writerDetails,
                 result._phasesMs.writeDetails.writerDetails
+              );
+              mergeBannerPerfDetails(
+                _perfPhases.writeDetails.bannerDetails,
+                result._phasesMs.writeDetails.bannerDetails
               );
             }
           }
@@ -1654,6 +1686,10 @@ async function runAutoSignificance() {
           mergeWriterPerfDetails(
             _perfPhases.writeDetails.writerDetails,
             result._phasesMs.writeDetails.writerDetails
+          );
+          mergeBannerPerfDetails(
+            _perfPhases.writeDetails.bannerDetails,
+            result._phasesMs.writeDetails.bannerDetails
           );
         }
       }
@@ -2347,6 +2383,7 @@ async function runCurrentSheetSignificance() {
       bannerWriteMs: 0,
       finalSyncMs: 0,
       writerDetails: createAggregatedWriterPerfDetails(),
+      bannerDetails: createAggregatedBannerPerfDetails(),
     },
   };
   let _batchEndedAt = 0;
@@ -2385,6 +2422,10 @@ async function runCurrentSheetSignificance() {
               mergeWriterPerfDetails(
                 _perfPhases.writeDetails.writerDetails,
                 result._phasesMs.writeDetails.writerDetails
+              );
+              mergeBannerPerfDetails(
+                _perfPhases.writeDetails.bannerDetails,
+                result._phasesMs.writeDetails.bannerDetails
               );
             }
           }
@@ -2455,6 +2496,10 @@ async function runCurrentSheetSignificance() {
           mergeWriterPerfDetails(
             _perfPhases.writeDetails.writerDetails,
             result._phasesMs.writeDetails.writerDetails
+          );
+          mergeBannerPerfDetails(
+            _perfPhases.writeDetails.bannerDetails,
+            result._phasesMs.writeDetails.bannerDetails
           );
         }
       }
@@ -5007,6 +5052,275 @@ function initializeSettingsTabs() {
       panel.style.display = panel.dataset.settingsPanel === targetPanel ? "" : "none";
     });
   });
+}
+
+/**
+ * Combined banner-marker clear + write for a Run pass.
+ *
+ * Replaces the legacy `clearBannerMarkersAboveRange` + `writeBannerMarkers*`
+ * pair with a single read/plan/write phase.  Reads the full banner scan area
+ * once, strips all RIT trailing markers in-memory (the clear phase), then
+ * applies the desired markers using the same placement rules as the two
+ * legacy writers (lower banner row when non-empty, otherwise nearest
+ * non-empty cell above; uses `bannerStructure` labels when respect-banner-
+ * structure is on, otherwise sequential significance labels with the
+ * first-column-is-total adjustment).  Diffs the desired matrix against the
+ * read texts and writes back only cells that actually changed, batched into
+ * contiguous same-row runs and split by markered/clear-only flag so the
+ * legacy "@" number-format behaviour is preserved on marker writes.
+ *
+ * Sync count: 1 for the banner-area read (also flushes any pending data
+ * writes from the caller) and 0 for the writes — the caller is expected to
+ * issue its own final `context.sync()` to flush the queued banner writes.
+ * This brings per-table banner sync count down from 5–7 (legacy) to 2 when
+ * counting the caller's final sync.
+ *
+ * Returns null when no banner work was needed.  Otherwise returns a perf
+ * details object describing the work performed.
+ */
+async function applyBannerMarkerUpdatesForRange(
+  context,
+  writeTargetRange,
+  calculationSettings,
+  bannerStructure,
+  knownDimensions,
+  sourceStartColIndex
+) {
+  if (!calculationSettings.writeBannerLetters) {
+    return null;
+  }
+
+  const BANNER_UPPER_SCAN_LIMIT = 5;
+  const BANNER_SCAN_ROW_COUNT = BANNER_UPPER_SCAN_LIMIT + 1;
+
+  let targetStartRowIndex, targetStartColumnIndex, targetColumnCount;
+  if (knownDimensions) {
+    targetStartRowIndex = knownDimensions.rowIndex;
+    targetStartColumnIndex = knownDimensions.columnIndex;
+    targetColumnCount = knownDimensions.columnCount;
+  } else {
+    writeTargetRange.load(["rowIndex", "columnIndex", "columnCount"]);
+    await context.sync();
+    targetStartRowIndex = writeTargetRange.rowIndex;
+    targetStartColumnIndex = writeTargetRange.columnIndex;
+    targetColumnCount = writeTargetRange.columnCount;
+  }
+
+  if (targetStartRowIndex === 0 || targetColumnCount < 1) {
+    return null;
+  }
+
+  const totalScanRowCount = Math.min(BANNER_SCAN_ROW_COUNT, targetStartRowIndex);
+  if (totalScanRowCount < 1) {
+    return null;
+  }
+
+  // Widen the scan left to absorb stale-left marker cleanup when the source
+  // selection extends further left than the actual write target.  Matches the
+  // legacy `clearBannerMarkersAboveRange` widened-scan behaviour (#272).
+  const scanStartColIndex =
+    sourceStartColIndex !== undefined && sourceStartColIndex < targetStartColumnIndex
+      ? sourceStartColIndex
+      : targetStartColumnIndex;
+  const scanColCount = targetStartColumnIndex + targetColumnCount - scanStartColIndex;
+
+  if (scanColCount < 1) {
+    return null;
+  }
+
+  const bannerScanRange = writeTargetRange.worksheet.getRangeByIndexes(
+    targetStartRowIndex - totalScanRowCount,
+    scanStartColIndex,
+    totalScanRowCount,
+    scanColCount
+  );
+  bannerScanRange.load("text");
+  await context.sync();
+  let syncCount = 1;
+
+  const bannerTexts = bannerScanRange.text;
+
+  // Desired-text matrix.  Initialised from current texts, then mutated in
+  // place by step 1 (strip RIT markers) and step 3 (place markers).
+  const desiredTexts = new Array(totalScanRowCount);
+  for (let r = 0; r < totalScanRowCount; r++) {
+    const row = bannerTexts[r] || [];
+    const destRow = new Array(scanColCount);
+    for (let c = 0; c < scanColCount; c++) {
+      destRow[c] = row[c] || "";
+    }
+    desiredTexts[r] = destRow;
+  }
+
+  // Step 1: strip RIT trailing markers from every cell in the scan area.
+  // Mirrors the legacy `clearBannerMarkersAboveRange` pass — keeps non-RIT
+  // parenthesised text (e.g. "Wave (quarter)") intact because
+  // getTrailingBannerMarker only matches single-character significance labels.
+  for (let r = 0; r < totalScanRowCount; r++) {
+    const row = desiredTexts[r];
+    for (let c = 0; c < scanColCount; c++) {
+      const t = row[c];
+      if (t && getTrailingBannerMarker(t)) {
+        row[c] = removeTrailingBannerMarker(t);
+      }
+    }
+  }
+
+  // Step 2: compute the label for each data column.
+  const useStructure = !!(calculationSettings.respectBannerStructure && bannerStructure);
+  let labelMap;
+  if (useStructure) {
+    labelMap = buildBannerLocalSignificanceLabelMap(bannerStructure, calculationSettings);
+  } else {
+    const significanceLabels = generateSignificanceLabels();
+    labelMap = new Map();
+    for (let dataCol = 0; dataCol < targetColumnCount; dataCol++) {
+      if (calculationSettings.firstColumnIsTotal && dataCol === 0) {
+        // Total column 0: legacy `writeBannerMarkersAboveSelectedRange`
+        // explicitly clears any marker here; step 1 above already stripped
+        // any RIT marker from the lower row and the upper rows, so no
+        // additional label work is required for this column.
+        continue;
+      }
+      const markerIndex = calculationSettings.firstColumnIsTotal ? dataCol - 1 : dataCol;
+      const marker = significanceLabels[markerIndex];
+      if (marker) {
+        labelMap.set(dataCol, marker);
+      }
+    }
+  }
+
+  // Step 3: place each marker into the lower banner row (immediately above
+  // the data) or, if that cell is blank, the nearest non-empty cell above.
+  const lowerRowIdx = totalScanRowCount - 1;
+  const dataColOffsetInScan = targetStartColumnIndex - scanStartColIndex;
+  const markedCellKeys = new Set();
+  let cellsPlanned = 0;
+
+  for (let dataCol = 0; dataCol < targetColumnCount; dataCol++) {
+    const label = labelMap.get(dataCol);
+    if (!label) continue;
+    cellsPlanned++;
+
+    const scanCol = dataColOffsetInScan + dataCol;
+
+    // After step 1 the lower-cell text has any RIT marker stripped.  Use that
+    // post-strip text to decide whether the cell is "blank" — matches the
+    // legacy writers, which read the same pre-existing text and decided via
+    // appendOrReplaceTrailingBannerMarker (which also operates on a stripped
+    // basis when a marker is already present).
+    const lowerStripped = desiredTexts[lowerRowIdx][scanCol] || "";
+    if (lowerStripped !== "") {
+      desiredTexts[lowerRowIdx][scanCol] = appendOrReplaceTrailingBannerMarker(lowerStripped, label);
+      markedCellKeys.add(`${lowerRowIdx},${scanCol}`);
+      continue;
+    }
+
+    // Lower banner cell is blank — walk upward to the nearest non-empty cell
+    // and place the marker there.  This is the legacy "vertically merged /
+    // multi-row banner" behaviour: when the lower row is empty because the
+    // visible header lives in a higher row, the marker follows the visible
+    // text.
+    let placed = false;
+    for (let r = lowerRowIdx - 1; r >= 0; r--) {
+      const upperStripped = desiredTexts[r][scanCol] || "";
+      if (upperStripped !== "") {
+        desiredTexts[r][scanCol] = appendOrReplaceTrailingBannerMarker(upperStripped, label);
+        markedCellKeys.add(`${r},${scanCol}`);
+        placed = true;
+        break;
+      }
+    }
+
+    if (!placed) {
+      // Fallback when no non-empty upper cell exists: write the bare marker
+      // text into the lower banner row.  Both legacy writers reach this
+      // branch — structure-mode via its explicit "fall back to the lower
+      // banner row" arm, non-structure via fall-through past the upper-scan
+      // loop into the bottom "queue write to lower banner row" branch.  The
+      // @ number-format distinction between the two paths is preserved by
+      // the use of `useStructure` later when batching writes.
+      desiredTexts[lowerRowIdx][scanCol] = appendOrReplaceTrailingBannerMarker("", label);
+      markedCellKeys.add(`${lowerRowIdx},${scanCol}`);
+    }
+  }
+
+  // Step 4: diff against the original texts and queue only changed cells.
+  const writesByRow = new Map();
+  let cellsChanged = 0;
+  let skippedNoOpWrites = 0;
+
+  for (let r = 0; r < totalScanRowCount; r++) {
+    for (let c = 0; c < scanColCount; c++) {
+      const cur = (bannerTexts[r] && bannerTexts[r][c]) || "";
+      const nxt = desiredTexts[r][c] || "";
+      const key = `${r},${c}`;
+
+      if (cur === nxt) {
+        if (markedCellKeys.has(key)) {
+          skippedNoOpWrites++;
+        }
+        continue;
+      }
+
+      const absRow = targetStartRowIndex - totalScanRowCount + r;
+      const absCol = scanStartColIndex + c;
+      if (!writesByRow.has(absRow)) writesByRow.set(absRow, []);
+      writesByRow.get(absRow).push({
+        colIndex: absCol,
+        text: nxt,
+        markered: markedCellKeys.has(key),
+      });
+      cellsChanged++;
+    }
+  }
+
+  let writeCommands = 0;
+
+  if (cellsChanged > 0) {
+    const worksheet = writeTargetRange.worksheet;
+    for (const [rowIndex, items] of writesByRow) {
+      items.sort((a, b) => a.colIndex - b.colIndex);
+      let i = 0;
+      while (i < items.length) {
+        let j = i;
+        // Group adjacent columns with the same markered flag so the "@"
+        // number format is applied only to marker writes in structure mode —
+        // matches legacy behaviour where clear-only cells were written
+        // without touching numberFormat.
+        while (
+          j + 1 < items.length &&
+          items[j + 1].colIndex === items[j].colIndex + 1 &&
+          items[j + 1].markered === items[j].markered
+        ) {
+          j++;
+        }
+        const slice = items.slice(i, j + 1);
+        const texts = slice.map((x) => x.text);
+        const range = worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1);
+
+        if (useStructure && slice[0].markered) {
+          range.numberFormat = [texts.map(() => "@")];
+        }
+        range.values = [texts];
+
+        writeCommands++;
+        i = j + 1;
+      }
+    }
+    // Intentionally NO context.sync() here.  Caller's final context.sync()
+    // flushes the queued banner writes alongside any other pending ops.
+  }
+
+  return {
+    rowsScanned: totalScanRowCount,
+    cellsRead: totalScanRowCount * scanColCount,
+    cellsPlanned,
+    cellsChanged,
+    writeCommands,
+    skippedNoOpWrites,
+    syncCount,
+  };
 }
 
 /**
