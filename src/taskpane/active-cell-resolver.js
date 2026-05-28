@@ -33,9 +33,33 @@
 import { scanWorksheetForTables } from "../core/table-inventory-scanner";
 import { findCandidateForActiveCell, extractCandidateSlice } from "../core/active-cell-table-finder";
 import { hasEmptyDataRowGap } from "../core/range-normalizer";
+import { INVENTORY_SCAN_EMERGENCY_CELL_LIMIT } from "./taskpane-inventory-scan";
 
 const RESOLVER_GENERATED_SHEET_NAMES = new Set(["Content", "Run report"]);
-const RESOLVER_SCAN_CELL_LIMIT = 250000;
+
+function shouldBlockResolverScan(
+  rowCount,
+  columnCount,
+  limit = INVENTORY_SCAN_EMERGENCY_CELL_LIMIT
+) {
+  return rowCount * columnCount > limit;
+}
+
+function buildResolverScanBlockedResult(sheetName, rowCount, columnCount) {
+  const cellCount = rowCount * columnCount;
+
+  return {
+    status: "blocked",
+    sheetName,
+    message: `Лист аварийно пропущен — UsedRange слишком большой (${rowCount}×${columnCount} = ${cellCount} ячеек, аварийный лимит: ${INVENTORY_SCAN_EMERGENCY_CELL_LIMIT}).`,
+    details: {
+      rowCount,
+      columnCount,
+      cellCount,
+      limit: INVENTORY_SCAN_EMERGENCY_CELL_LIMIT,
+    },
+  };
+}
 
 /**
  * Resolves which inventory candidate contains the active cell.
@@ -55,7 +79,7 @@ const RESOLVER_SCAN_CELL_LIMIT = 250000;
  *   { status: "no-table" | "generated-sheet" | "ambiguous-boundary" | "blocked" | "error",
  *     sheetName, message, details }
  */
-export async function resolveCurrentTableFromActiveCell(context, settings) {
+async function resolveCurrentTableFromActiveCell(context, settings) {
   let sheetName = null;
 
   try {
@@ -96,18 +120,12 @@ export async function resolveCurrentTableFromActiveCell(context, settings) {
       };
     }
 
-    const cellCount = usedRange.rowCount * usedRange.columnCount;
-    if (cellCount > RESOLVER_SCAN_CELL_LIMIT) {
-      return {
-        status: "blocked",
+    if (shouldBlockResolverScan(usedRange.rowCount, usedRange.columnCount)) {
+      return buildResolverScanBlockedResult(
         sheetName,
-        message: `Лист слишком большой для сканирования (${usedRange.rowCount}×${usedRange.columnCount} = ${cellCount} ячеек).`,
-        details: {
-          rowCount: usedRange.rowCount,
-          columnCount: usedRange.columnCount,
-          cellCount,
-        },
-      };
+        usedRange.rowCount,
+        usedRange.columnCount
+      );
     }
 
     usedRange.load("values");
@@ -208,3 +226,5 @@ export async function resolveCurrentTableFromActiveCell(context, settings) {
     };
   }
 }
+
+export { resolveCurrentTableFromActiveCell, shouldBlockResolverScan };
