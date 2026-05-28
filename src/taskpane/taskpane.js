@@ -98,9 +98,15 @@ import {
   getContentRowReference,
 } from "./taskpane-inventory-formatters";
 
+import {
+  INVENTORY_SCAN_EMERGENCY_CELL_LIMIT,
+  inventoryScanErrorMessage,
+  formatInventorySkippedSheetLine,
+  buildInventoryContentSkippedRow,
+} from "./taskpane-inventory-scan";
+
 import { perfNow, perfElapsed, perfLog, perfEnabled } from "./taskpane-performance";
 
-const SCAN_CELL_LIMIT = 250000;
 const INVENTORY_CONTENT_SHEET_NAME = "Content";
 const RUN_REPORT_SHEET_NAME = "Run report";
 const GENERATED_SHEET_NAMES = new Set([INVENTORY_CONTENT_SHEET_NAME, RUN_REPORT_SHEET_NAME]);
@@ -1456,11 +1462,9 @@ async function runAutoSignificance() {
   const _tScan = perfNow();
   let inventoryResults;
   try {
-    await Excel.run(async (context) => {
-      inventoryResults = await collectWorkbookInventoryResults(context, calculationSettings);
-      // Normalize without inserting backlinks — only needed for resolvedRangeAddress.
-      normalizeBacklinkItems(inventoryResults.sheetResults, false);
-    });
+    inventoryResults = await collectWorkbookInventoryResults(calculationSettings);
+    // Normalize without inserting backlinks — only needed for resolvedRangeAddress.
+    normalizeBacklinkItems(inventoryResults.sheetResults, false);
   } catch (err) {
     setStatusMessage(`Автозапуск: ошибка при сканировании книги — ${err.message || err}`);
     return;
@@ -2139,10 +2143,8 @@ async function clearAutoSignificance() {
   setStatusMessage(runningStatusMessage("clear", "workbook"));
   let inventoryResults;
   try {
-    await Excel.run(async (context) => {
-      inventoryResults = await collectWorkbookInventoryResults(context, readCalculationSettingsFromPanel());
-      normalizeBacklinkItems(inventoryResults.sheetResults, false);
-    });
+    inventoryResults = await collectWorkbookInventoryResults(readCalculationSettingsFromPanel());
+    normalizeBacklinkItems(inventoryResults.sheetResults, false);
   } catch (err) {
     setStatusMessage(`Автоочистка: ошибка при сканировании книги — ${err.message || err}`);
     return;
@@ -2265,10 +2267,8 @@ async function runCurrentSheetSignificance() {
   const _tScan = perfNow();
   let inventoryResults;
   try {
-    await Excel.run(async (context) => {
-      inventoryResults = await collectActiveSheetInventoryResults(context, calculationSettings);
-      normalizeBacklinkItems(inventoryResults.sheetResults, false);
-    });
+    inventoryResults = await collectActiveSheetInventoryResults(calculationSettings);
+    normalizeBacklinkItems(inventoryResults.sheetResults, false);
   } catch (err) {
     setStatusMessage(`Лист — запуск: ошибка при сканировании листа — ${err.message || err}`);
     return;
@@ -2539,10 +2539,8 @@ async function clearCurrentSheetSignificance() {
   setStatusMessage(runningStatusMessage("clear", "sheet"));
   let inventoryResults;
   try {
-    await Excel.run(async (context) => {
-      inventoryResults = await collectActiveSheetInventoryResults(context, readCalculationSettingsFromPanel());
-      normalizeBacklinkItems(inventoryResults.sheetResults, false);
-    });
+    inventoryResults = await collectActiveSheetInventoryResults(readCalculationSettingsFromPanel());
+    normalizeBacklinkItems(inventoryResults.sheetResults, false);
   } catch (err) {
     setStatusMessage(`Лист — очистка: ошибка при сканировании листа — ${err.message || err}`);
     return;
@@ -2694,10 +2692,8 @@ async function runCurrentSheetCheck() {
   let activeSheetName = "";
 
   try {
-    await Excel.run(async (context) => {
-      inventoryResults = await collectActiveSheetInventoryResults(context, calculationSettings);
-      normalizeBacklinkItems(inventoryResults.sheetResults, false);
-    });
+    inventoryResults = await collectActiveSheetInventoryResults(calculationSettings);
+    normalizeBacklinkItems(inventoryResults.sheetResults, false);
   } catch (err) {
     setCheckMessage(
       `Лист — проверка: ошибка при сканировании листа — ${err.message || err}`
@@ -2712,16 +2708,16 @@ async function runCurrentSheetCheck() {
     activeSheetName = inventoryResults.skippedSheets[0].sheetName;
   }
 
-  // Handle empty / too-large active sheet (no candidates found).
+  // Handle empty / skipped active sheet (no candidates found).
   if (inventoryResults.sheetResults.length === 0) {
     const skipped = inventoryResults.skippedSheets || [];
     if (skipped.length > 0 && skipped[0].reason === "empty") {
       setCheckMessage(
         `Лист — проверка (только активный лист): лист «${activeSheetName || "?"}» пустой.`
       );
-    } else if (skipped.length > 0 && skipped[0].reason === "tooLarge") {
+    } else if (skipped.length > 0) {
       setCheckMessage(
-        `Лист — проверка (только активный лист): лист «${activeSheetName || "?"}» слишком большой для сканирования.`
+        `Лист — проверка (только активный лист): ${formatInventorySkippedSheetLine(skipped[0])}`
       );
     } else if (inventoryResults.scannedSheets === 0 && activeSheetName === "") {
       // Active sheet is the Content sheet — silently ignored.
@@ -2878,10 +2874,8 @@ async function runWorkbookCheck() {
 
   let inventoryResults;
   try {
-    await Excel.run(async (context) => {
-      inventoryResults = await collectWorkbookInventoryResults(context, calculationSettings);
-      normalizeBacklinkItems(inventoryResults.sheetResults, false);
-    });
+    inventoryResults = await collectWorkbookInventoryResults(calculationSettings);
+    normalizeBacklinkItems(inventoryResults.sheetResults, false);
   } catch (err) {
     setCheckMessage(`Книга — проверка: ошибка при сканировании — ${err.message || err}`);
     return;
@@ -2939,13 +2933,7 @@ async function runWorkbookCheck() {
     summaryLines.push("");
     summaryLines.push("Пропущенные листы:");
     for (const sheet of skippedSheets) {
-      if (sheet.reason === "empty") {
-        summaryLines.push(`- ${sheet.sheetName}: пустой лист.`);
-      } else {
-        summaryLines.push(
-          `- ${sheet.sheetName}: слишком большой для сканирования (${sheet.rowCount} стр. × ${sheet.columnCount} кол.).`
-        );
-      }
+      summaryLines.push(`- ${formatInventorySkippedSheetLine(sheet)}`);
     }
   }
 
@@ -3769,14 +3757,7 @@ function formatWorkbookInventoryMessage({ scannedSheets, sheetResults, skippedSh
     lines.push("Пропущенные листы:");
 
     skippedSheets.forEach((sheet) => {
-      if (sheet.reason === "empty") {
-        lines.push(`- ${sheet.sheetName}: пустой лист.`);
-        return;
-      }
-
-      lines.push(
-        `- ${sheet.sheetName}: слишком большой для сканирования (${sheet.rowCount} стр. × ${sheet.columnCount} кол. = ${sheet.cellCount} ячеек, лимит: ${SCAN_CELL_LIMIT}).`
-      );
+      lines.push(`- ${formatInventorySkippedSheetLine(sheet)}`);
     });
   }
 
@@ -3786,70 +3767,127 @@ function formatWorkbookInventoryMessage({ scannedSheets, sheetResults, skippedSh
   return lines.join("\n").trimEnd();
 }
 
-async function collectWorkbookInventoryResults(context, settings) {
-  const worksheets = context.workbook.worksheets;
-  worksheets.load("items/name");
+async function listWorkbookInventoryWorksheetNames() {
+  return Excel.run(async (context) => {
+    const worksheets = context.workbook.worksheets;
+    worksheets.load("items/name");
+
+    await context.sync();
+
+    return worksheets.items
+      .map((worksheet) => worksheet.name)
+      .filter((sheetName) => !GENERATED_SHEET_NAMES.has(sheetName));
+  });
+}
+
+async function collectWorksheetInventoryResultWithContext(context, worksheet, sheetName, settings) {
+  const usedRange = worksheet.getUsedRangeOrNullObject();
+  usedRange.load(["isNullObject", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
   await context.sync();
 
-  const worksheetEntries = worksheets.items
-    .filter((worksheet) => !GENERATED_SHEET_NAMES.has(worksheet.name))
-    .map((worksheet) => {
-      const usedRange = worksheet.getUsedRangeOrNullObject();
-      usedRange.load(["isNullObject", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+  if (usedRange.isNullObject) {
+    return {
+      scanned: false,
+      skippedSheet: { sheetName, reason: "empty" },
+    };
+  }
 
-      return { worksheet, usedRange };
-    });
-
-  await context.sync();
-
-  const scannedEntries = [];
-  const skippedSheets = [];
-
-  for (const entry of worksheetEntries) {
-    const { worksheet, usedRange } = entry;
-
-    if (usedRange.isNullObject) {
-      skippedSheets.push({ sheetName: worksheet.name, reason: "empty" });
-      continue;
-    }
-
-    const cellCount = usedRange.rowCount * usedRange.columnCount;
-    if (cellCount > SCAN_CELL_LIMIT) {
-      skippedSheets.push({
-        sheetName: worksheet.name,
-        reason: "tooLarge",
+  const cellCount = usedRange.rowCount * usedRange.columnCount;
+  if (cellCount > INVENTORY_SCAN_EMERGENCY_CELL_LIMIT) {
+    return {
+      scanned: false,
+      skippedSheet: {
+        sheetName,
+        reason: "emergencyLimit",
         rowCount: usedRange.rowCount,
         columnCount: usedRange.columnCount,
         cellCount,
-      });
-      continue;
-    }
-
-    usedRange.load("values");
-    scannedEntries.push(entry);
+      },
+    };
   }
 
-  await context.sync();
+  usedRange.load("values");
 
-  const sheetResults = scannedEntries
-    .map(({ worksheet, usedRange }) => ({
-      sheetName: worksheet.name,
+  try {
+    await context.sync();
+  } catch (error) {
+    return {
+      scanned: false,
+      skippedSheet: {
+        sheetName,
+        reason: "scanError",
+        rowCount: usedRange.rowCount,
+        columnCount: usedRange.columnCount,
+        cellCount,
+        message: inventoryScanErrorMessage(error),
+      },
+    };
+  }
+
+  try {
+    const items = scanWorksheetForTables({
+      values: usedRange.values,
       usedRangeRowOffset: usedRange.rowIndex,
       usedRangeColOffset: usedRange.columnIndex,
-      usedRangeValues: usedRange.values,
-      items: scanWorksheetForTables({
-        values: usedRange.values,
-        usedRangeRowOffset: usedRange.rowIndex,
-        usedRangeColOffset: usedRange.columnIndex,
-        sheetName: worksheet.name,
-        settings: { ...settings, backlinkMarker: BACKLINK_MARKER },
-      }),
-    }))
-    .filter((sheetResult) => sheetResult.items.length > 0);
+      sheetName,
+      settings: { ...settings, backlinkMarker: BACKLINK_MARKER },
+    });
+
+    return {
+      scanned: true,
+      sheetResult: items.length > 0
+        ? {
+            sheetName,
+            usedRangeRowOffset: usedRange.rowIndex,
+            usedRangeColOffset: usedRange.columnIndex,
+            usedRangeValues: usedRange.values,
+            items,
+          }
+        : null,
+    };
+  } catch (error) {
+    return {
+      scanned: false,
+      skippedSheet: {
+        sheetName,
+        reason: "scanError",
+        rowCount: usedRange.rowCount,
+        columnCount: usedRange.columnCount,
+        cellCount,
+        message: inventoryScanErrorMessage(error),
+      },
+    };
+  }
+}
+
+async function collectWorksheetInventoryResultByName(sheetName, settings) {
+  return Excel.run(async (context) => {
+    const worksheet = context.workbook.worksheets.getItem(sheetName);
+    return collectWorksheetInventoryResultWithContext(context, worksheet, sheetName, settings);
+  });
+}
+
+async function collectWorkbookInventoryResults(settings) {
+  const worksheetNames = await listWorkbookInventoryWorksheetNames();
+  const sheetResults = [];
+  const skippedSheets = [];
+  let scannedSheets = 0;
+
+  for (const sheetName of worksheetNames) {
+    const result = await collectWorksheetInventoryResultByName(sheetName, settings);
+    if (result.scanned) {
+      scannedSheets += 1;
+      if (result.sheetResult) {
+        sheetResults.push(result.sheetResult);
+      }
+    } else if (result.skippedSheet) {
+      skippedSheets.push(result.skippedSheet);
+    }
+  }
 
   return {
-    scannedSheets: scannedEntries.length,
+    scannedSheets,
     sheetResults,
     skippedSheets,
   };
@@ -3862,71 +3900,32 @@ async function collectWorkbookInventoryResults(context, settings) {
  * returning the same { scannedSheets, sheetResults, skippedSheets } shape so
  * that filterWorkbookCandidates() and normalizeBacklinkItems() work unchanged.
  */
-async function collectActiveSheetInventoryResults(context, settings) {
-  const worksheet = context.workbook.worksheets.getActiveWorksheet();
-  worksheet.load("name");
+async function collectActiveSheetInventoryResults(settings) {
+  return Excel.run(async (context) => {
+    const worksheet = context.workbook.worksheets.getActiveWorksheet();
+    worksheet.load("name");
 
-  await context.sync();
+    await context.sync();
 
-  if (GENERATED_SHEET_NAMES.has(worksheet.name)) {
-    return { scannedSheets: 0, sheetResults: [], skippedSheets: [] };
-  }
+    if (GENERATED_SHEET_NAMES.has(worksheet.name)) {
+      return { scannedSheets: 0, sheetResults: [], skippedSheets: [] };
+    }
 
-  const usedRange = worksheet.getUsedRangeOrNullObject();
-  usedRange.load(["isNullObject", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    const result = await collectWorksheetInventoryResultWithContext(context, worksheet, worksheet.name, settings);
+    if (!result.scanned) {
+      return {
+        scannedSheets: 0,
+        sheetResults: [],
+        skippedSheets: result.skippedSheet ? [result.skippedSheet] : [],
+      };
+    }
 
-  await context.sync();
-
-  if (usedRange.isNullObject) {
     return {
-      scannedSheets: 0,
-      sheetResults: [],
-      skippedSheets: [{ sheetName: worksheet.name, reason: "empty" }],
+      scannedSheets: 1,
+      sheetResults: result.sheetResult ? [result.sheetResult] : [],
+      skippedSheets: [],
     };
-  }
-
-  const cellCount = usedRange.rowCount * usedRange.columnCount;
-  if (cellCount > SCAN_CELL_LIMIT) {
-    return {
-      scannedSheets: 0,
-      sheetResults: [],
-      skippedSheets: [
-        {
-          sheetName: worksheet.name,
-          reason: "tooLarge",
-          rowCount: usedRange.rowCount,
-          columnCount: usedRange.columnCount,
-          cellCount,
-        },
-      ],
-    };
-  }
-
-  usedRange.load("values");
-
-  await context.sync();
-
-  const items = scanWorksheetForTables({
-    values: usedRange.values,
-    usedRangeRowOffset: usedRange.rowIndex,
-    usedRangeColOffset: usedRange.columnIndex,
-    sheetName: worksheet.name,
-    settings: { ...settings, backlinkMarker: BACKLINK_MARKER },
   });
-
-  const sheetResults = items.length > 0
-    ? [
-        {
-          sheetName: worksheet.name,
-          usedRangeRowOffset: usedRange.rowIndex,
-          usedRangeColOffset: usedRange.columnIndex,
-          usedRangeValues: usedRange.values,
-          items,
-        },
-      ]
-    : [];
-
-  return { scannedSheets: 1, sheetResults, skippedSheets: [] };
 }
 
 function buildInventoryContentCandidateRows(sheetResults) {
@@ -4021,19 +4020,7 @@ function buildInventoryContentSkippedRows(skippedSheets) {
     return [];
   }
 
-  return skippedSheets.map((sheet) => {
-    if (sheet.reason === "empty") {
-      return [sheet.sheetName, "Skipped", "Пустой лист", "", ""];
-    }
-
-    return [
-      sheet.sheetName,
-      "Skipped",
-      "Слишком большой для сканирования",
-      `${sheet.rowCount} строк, ${sheet.columnCount} колонок`,
-      `${sheet.cellCount} ячеек; лимит ${SCAN_CELL_LIMIT}`,
-    ];
-  });
+  return skippedSheets.map((sheet) => buildInventoryContentSkippedRow(sheet));
 }
 
 function readContentOutputModeFromPanel() {
@@ -4777,22 +4764,22 @@ async function writeInventoryContentSheet(context, inventoryResults) {
 
 async function runTableInventory() {
   setInventoryMessage(runningStatusMessage("content"));
+  const _t0 = perfNow();
+  const inventoryResults = await collectWorkbookInventoryResults(readCalculationSettingsFromPanel());
+  const _tScan = perfNow();
+  const addBacklinks = readBacklinkSettingFromPanel();
+  const contentMode = readContentOutputModeFromPanel();
+
+  // Always normalize: fixes resolvedRangeAddress for items whose detected range
+  // starts with a generated backlink row (in-range), even when backlinks are OFF.
+  // When backlinks are ON, also predicts the +1 end-row shift for will-insert.
+  normalizeBacklinkItems(inventoryResults.sheetResults, addBacklinks);
+
+  const contentRowMap = addBacklinks
+    ? buildContentRowMap(inventoryResults.sheetResults, contentMode)
+    : null;
+
   await Excel.run(async (context) => {
-    const _t0 = perfNow();
-    const inventoryResults = await collectWorkbookInventoryResults(context, readCalculationSettingsFromPanel());
-    const _tScan = perfNow();
-    const addBacklinks = readBacklinkSettingFromPanel();
-    const contentMode = readContentOutputModeFromPanel();
-
-    // Always normalize: fixes resolvedRangeAddress for items whose detected range
-    // starts with a generated backlink row (in-range), even when backlinks are OFF.
-    // When backlinks are ON, also predicts the +1 end-row shift for will-insert.
-    normalizeBacklinkItems(inventoryResults.sheetResults, addBacklinks);
-
-    const contentRowMap = addBacklinks
-      ? buildContentRowMap(inventoryResults.sheetResults, contentMode)
-      : null;
-
     // Write Content first (hyperlinks use resolvedRangeAddress when available).
     const contentWorksheet = await writeInventoryContentSheet(context, inventoryResults);
 
@@ -4805,20 +4792,20 @@ async function runTableInventory() {
     // Switch to the Content sheet after all writes are done.
     contentWorksheet.activate();
     await context.sync();
-
-    perfLog("runTableInventory", {
-      scanMs: _tScan - _t0,
-      contentWriteMs: perfElapsed(_tScan),
-      totalMs: perfElapsed(_t0),
-    });
-    setInventoryMessage(
-      formatWorkbookInventoryMessage({
-        scannedSheets: inventoryResults.scannedSheets,
-        sheetResults: inventoryResults.sheetResults,
-        skippedSheets: inventoryResults.skippedSheets,
-      })
-    );
   });
+
+  perfLog("runTableInventory", {
+    scanMs: _tScan - _t0,
+    contentWriteMs: perfElapsed(_tScan),
+    totalMs: perfElapsed(_t0),
+  });
+  setInventoryMessage(
+    formatWorkbookInventoryMessage({
+      scannedSheets: inventoryResults.scannedSheets,
+      sheetResults: inventoryResults.sheetResults,
+      skippedSheets: inventoryResults.skippedSheets,
+    })
+  );
 }
 
 /**
