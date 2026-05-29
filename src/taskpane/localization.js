@@ -146,6 +146,7 @@ const STRINGS = {
     "settings.smallBaseThreshold": "База <",
 
     "settings.roundCellValues": "Округлять значения в ячейках",
+    "settings.addTableFootnote": "Добавлять подпись под таблицей",
     "settings.fillsGroup": "Заливки",
     "settings.significantFillColor": "Обычная значимость",
     "settings.lowerThanTotalFillColor": "Заливка < Тотал",
@@ -291,6 +292,7 @@ const STRINGS = {
     "settings.smallBaseThreshold": "Base <",
 
     "settings.roundCellValues": "Round cell values",
+    "settings.addTableFootnote": "Add footnote below table",
     "settings.fillsGroup": "Fills",
     "settings.significantFillColor": "Regular significance",
     "settings.lowerThanTotalFillColor": "Fill < Total",
