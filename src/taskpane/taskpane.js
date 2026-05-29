@@ -24,12 +24,19 @@ import {
   detectMetricRowsFromLeftLabels,
   buildCalculationBlocks,
   getAllowedMarkerRowIndexes,
+  LABEL_SCAN_COLUMNS_LEFT,
 } from "../core/metric-detector";
 
 import { writeCellResultsToSelectedRange, resolveNumericOutput } from "../core/excel-writer";
 
 import { buildTablePreviewModel } from "../core/table-preview-model";
 import { scanWorksheetForTables } from "../core/table-inventory-scanner";
+
+import {
+  isGeneratedSignificanceFootnoteRow,
+  collectStatisticTypeLabels,
+  buildSignificanceFootnoteCellValue,
+} from "../core/significance-footnote";
 
 import { detectBannerStructure } from "../core/banner-detector";
 
@@ -1019,6 +1026,31 @@ async function runSignificanceFromSelection() {
 
     await context.sync();
 
+    // Footnote: a single processed table, so it is applied right after the
+    // calculation writes complete. Insertion happens after all calculation
+    // reads/writes so it cannot shift the range being calculated.
+    const footnoteJob = buildSignificanceFootnoteJob({
+      sheetName: "",
+      dataStartRowIndex: writeTargetRange.rowIndex,
+      dataStartColIndex: writeTargetRange.columnIndex,
+      dataRowCount: writeTargetRange.rowCount,
+      dataColCount: writeTargetRange.columnCount,
+      leftLabelValues,
+      calculationBlocks,
+      calculationSettings,
+    });
+    if (footnoteJob) {
+      try {
+        await writeOrInsertSignificanceFootnoteRow(
+          context,
+          writeTargetRange.worksheet,
+          footnoteJob
+        );
+      } catch (footnoteErr) {
+        console.warn("RIT: не удалось записать подпись под таблицей.", footnoteErr);
+      }
+    }
+
     const statusMessages = [t("status.runDone", { count: calculationBlocks.length })];
 
     if (normalizationStatusLines.length > 0) {
@@ -1278,11 +1310,25 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
     _pBannerWrite = _pWrite;
   }
 
+  // Footnote job (collected, not applied here). Applying it now would insert a
+  // worksheet row that shifts every candidate range still queued in the batch.
+  const footnoteJob = buildSignificanceFootnoteJob({
+    sheetName,
+    dataStartRowIndex: targetStartRowIndex,
+    dataStartColIndex: targetStartColIndex,
+    dataRowCount: valuesForCalculation.length,
+    dataColCount: valuesForCalculation[0].length,
+    leftLabelValues,
+    calculationBlocks,
+    calculationSettings,
+  });
+
   return {
     status: "processed",
     blocksProcessed: calculationBlocks.length,
     message: `обработано блоков: ${calculationBlocks.length}`,
     rangeAddress,
+    footnoteJob,
     _phasesMs: _p0 !== 0 ? {
       loadMs: _pLoad - _p0,
       interpMs: _pInterp - _pLoad,
@@ -1689,6 +1735,9 @@ async function runAutoSignificance() {
 
   let processed = 0;
   let errors = 0;
+  // Footnote jobs collected during the run and applied bottom-to-top per sheet
+  // AFTER all calculations finish (insertions must not shift pending ranges).
+  const footnoteJobs = [];
 
   // Process all eligible tables in a single Excel.run to amortise per-context
   // overhead. If any table causes an Office.js sync error (corrupting the shared
@@ -1725,6 +1774,7 @@ async function runAutoSignificance() {
           );
           if (result.status === "processed") {
             processed++;
+            if (result.footnoteJob) footnoteJobs.push(result.footnoteJob);
           } else if (result.status === "skipped" || result.status === "blocked") {
             skipped++;
             detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`);
@@ -1811,6 +1861,7 @@ async function runAutoSignificance() {
       const result = await runSignificanceForRange(candidate.sheetName, candidate.rangeAddress, calculationSettings);
       if (result.status === "processed") {
         processed++;
+        if (result.footnoteJob) footnoteJobs.push(result.footnoteJob);
       } else if (result.status === "skipped" || result.status === "blocked") {
         skipped++;
         detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`);
@@ -1883,6 +1934,9 @@ async function runAutoSignificance() {
       });
     }
   }
+
+  // Apply collected footnotes after ALL calculations (bottom-to-top per sheet).
+  await applySignificanceFootnoteJobsInOwnContext(footnoteJobs);
 
   const _tLoopDone = perfNow();
   const summaryLines = [
@@ -2086,6 +2140,12 @@ async function runAutoCurrentTableSignificance() {
   });
   setStatusMessage(statusMsg);
 
+  // Footnote applied after calculation (separate context). Single table, so
+  // bottom-to-top ordering is trivially satisfied.
+  if (result.status === "processed" && result.footnoteJob) {
+    await applySignificanceFootnoteJobsInOwnContext([result.footnoteJob]);
+  }
+
   if (addReport) {
     try {
       await Excel.run(async (context) => {
@@ -2166,6 +2226,9 @@ async function clearAutoCurrentTableSignificance() {
   }
 
   if (result.status === "cleared") {
+    if (result.footnoteRemovalJob) {
+      await applySignificanceFootnoteRemovalJobsInOwnContext([result.footnoteRemovalJob]);
+    }
     setStatusMessage(t("status.autorunCleared", { sheet: sheetName, range: rangeAddress }));
   } else {
     setStatusMessage(t("status.autorunClearSkipped", { msg: result.message || t("status.noDataInRange") }));
@@ -2336,17 +2399,32 @@ async function clearSignificanceForRangeInContext(context, sheetName, rangeAddre
   clearTargetRange.format.font.bold = false;
   clearTargetRange.format.fill.clear();
 
+  // Probe the row immediately below the cleared table for a generated footnote.
+  // Queued before the banner read so its sync (or the final sync) flushes it —
+  // no extra round-trip. Deletion happens later, bottom-to-top, by the caller.
+  const { range: footnoteProbeRange, footnoteRowIndex } = buildFootnoteProbe(
+    worksheet,
+    _knownDims,
+    targetValues.length
+  );
+  footnoteProbeRange.load("values");
+
   // No body sync here — deferred to the banner read sync inside
   // clearBannerMarkerUpdatesForRange, which flushes all queued writes.
   const bannerDetails = await clearBannerMarkerUpdatesForRange(context, clearTargetRange, _knownDims);
 
   await context.sync();
 
+  const footnoteRemovalJob = probeRowIsGeneratedFootnote(footnoteProbeRange.values)
+    ? { sheetName, footnoteRowIndex }
+    : null;
+
   const bodyCellsRead = targetValues.length * (targetValues[0] ? targetValues[0].length : 0);
 
   return {
     status: "cleared",
     message: "очищено",
+    footnoteRemovalJob,
     _clearDetails: {
       bodyCellsRead,
       bodyCellsChanged,
@@ -2656,16 +2734,28 @@ async function clearSignificanceForSheetBatched(context, worksheetRef, candidate
         rec.bannerStartRowAbs = targetStartRowIndex - totalScanRowCount;
       }
     }
+
+    // Probe the row below this table for a generated footnote (flushed by sync 3).
+    const probe = buildFootnoteProbe(worksheetRef, rec.knownDims, targetValues.length);
+    probe.range.load("values");
+    rec.footnoteProbeRange = probe.range;
+    rec.footnoteRowIndex = probe.footnoteRowIndex;
   }
   await context.sync(); // Sync 3 — flushes ALL body writes; reads ALL banner scan texts
 
   // ══════════════════════════════════════════════════════════════════════════
   // PHASE 4 — Diff banner texts; queue banner writes; final flush
   // ══════════════════════════════════════════════════════════════════════════
+  const footnoteRemovalRows = [];
   for (const rec of records) {
     if (rec.status !== "pending") continue;
 
     rec.status = "cleared"; // body writes already flushed in sync 3
+
+    // Generated footnote below this cleared table → schedule its row for deletion.
+    if (rec.footnoteProbeRange && probeRowIsGeneratedFootnote(rec.footnoteProbeRange.values)) {
+      footnoteRemovalRows.push(rec.footnoteRowIndex);
+    }
 
     if (!rec.bannerScanRange) continue;
 
@@ -2740,6 +2830,7 @@ async function clearSignificanceForSheetBatched(context, worksheetRef, candidate
 
   return {
     results,
+    footnoteRemovalRows,
     sheetDiags: {
       syncPhases: 4,
       sourceRangesLoaded: candidates.length,
@@ -3008,16 +3099,28 @@ async function clearSignificanceForWorkbookBatched(context, eligible) {
         rec.bannerStartRowAbs = targetStartRowIndex - totalScanRowCount;
       }
     }
+
+    // Probe the row below this table for a generated footnote (flushed by sync 3).
+    const probe = buildFootnoteProbe(wsRef, rec.knownDims, targetValues.length);
+    probe.range.load("values");
+    rec.footnoteProbeRange = probe.range;
+    rec.footnoteRowIndex = probe.footnoteRowIndex;
   }
   await context.sync(); // Sync 3 — flushes ALL body writes; reads ALL banner scan texts
 
   // ══════════════════════════════════════════════════════════════════════════
   // PHASE 4 — Diff banner texts; queue banner writes; final flush (all sheets)
   // ══════════════════════════════════════════════════════════════════════════
+  const footnoteRemovalJobs = [];
   for (const rec of records) {
     if (rec.status !== "pending") continue;
 
     rec.status = "cleared"; // body writes already flushed in sync 3
+
+    // Generated footnote below this cleared table → schedule its row for deletion.
+    if (rec.footnoteProbeRange && probeRowIsGeneratedFootnote(rec.footnoteProbeRange.values)) {
+      footnoteRemovalJobs.push({ sheetName: rec.sheetName, footnoteRowIndex: rec.footnoteRowIndex });
+    }
 
     if (!rec.bannerScanRange) continue;
 
@@ -3093,6 +3196,7 @@ async function clearSignificanceForWorkbookBatched(context, eligible) {
 
   return {
     results,
+    footnoteRemovalJobs,
     batchDiags: {
       syncPhases: 4,
       sourceRangesLoaded: eligible.length,
@@ -3167,6 +3271,9 @@ async function clearAutoSignificance() {
   // Always build the by-sheet map so the per-sheet fallback loop has it ready.
   const bySheet = groupCandidatesBySheet(eligible);
 
+  // Generated footnote rows to silently delete after all clearing completes.
+  const footnoteRemovalJobs = [];
+
   // ── ATTEMPT 1: workbook-level staged batch (1 context, 4 syncs total) ──────
   let _wbResults = null;
   let _wbBatchDiags = null;
@@ -3176,6 +3283,7 @@ async function clearAutoSignificance() {
       const r = await clearSignificanceForWorkbookBatched(context, eligible);
       _wbResults = r.results;
       _wbBatchDiags = r.batchDiags;
+      if (Array.isArray(r.footnoteRemovalJobs)) footnoteRemovalJobs.push(...r.footnoteRemovalJobs);
     });
     contextRuns = 1;
   } catch (_wbErr) {
@@ -3222,7 +3330,7 @@ async function clearAutoSignificance() {
       try {
         await Excel.run(async (context) => {
           const worksheetRef = context.workbook.worksheets.getItem(sheetName);
-          const { results: batchResults, sheetDiags } = await clearSignificanceForSheetBatched(
+          const { results: batchResults, sheetDiags, footnoteRemovalRows } = await clearSignificanceForSheetBatched(
             context,
             worksheetRef,
             sheetCandidates
@@ -3231,6 +3339,11 @@ async function clearAutoSignificance() {
           _clearAggregate.sourceRangesLoaded += sheetDiags.sourceRangesLoaded;
           _clearAggregate.targetRangesLoaded += sheetDiags.targetRangesLoaded;
           _clearAggregate.bannerRangesLoaded += sheetDiags.bannerRangesLoaded;
+          if (Array.isArray(footnoteRemovalRows)) {
+            for (const rowIndex of footnoteRemovalRows) {
+              footnoteRemovalJobs.push({ sheetName, footnoteRowIndex: rowIndex });
+            }
+          }
           for (let _si = 0; _si < batchResults.length; _si++) {
             const result = batchResults[_si];
             const candidate = sheetCandidates[_si];
@@ -3267,6 +3380,7 @@ async function clearAutoSignificance() {
             cleared++;
             sheetClearedCount++;
             accumulateClearDetails(_clearAggregate, result._clearDetails);
+            if (result.footnoteRemovalJob) footnoteRemovalJobs.push(result.footnoteRemovalJob);
           } else if (result.status === "skipped") {
             skipped++;
             detailLines.push(
@@ -3289,6 +3403,9 @@ async function clearAutoSignificance() {
       if (sheetClearedCount > 0) sheetsCleared++;
     }
   }
+
+  // Silently delete generated footnote rows for cleared tables (bottom-to-top).
+  await applySignificanceFootnoteRemovalJobsInOwnContext(footnoteRemovalJobs);
 
   const summaryLines = [
     "Автоочистка завершена.",
@@ -3441,6 +3558,9 @@ async function runCurrentSheetSignificance() {
 
   let processed = 0;
   let errors = 0;
+  // Footnote jobs collected during the run and applied bottom-to-top per sheet
+  // AFTER all calculations finish (insertions must not shift pending ranges).
+  const footnoteJobs = [];
 
   // Process all eligible tables in a single Excel.run to amortise per-context
   // overhead. Same fallback strategy as runAutoSignificance: on any Office.js
@@ -3477,6 +3597,7 @@ async function runCurrentSheetSignificance() {
           );
           if (result.status === "processed") {
             processed++;
+            if (result.footnoteJob) footnoteJobs.push(result.footnoteJob);
           } else if (result.status === "skipped" || result.status === "blocked") {
             skipped++;
             detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`);
@@ -3563,6 +3684,7 @@ async function runCurrentSheetSignificance() {
       const result = await runSignificanceForRange(candidate.sheetName, candidate.rangeAddress, calculationSettings);
       if (result.status === "processed") {
         processed++;
+        if (result.footnoteJob) footnoteJobs.push(result.footnoteJob);
       } else if (result.status === "skipped" || result.status === "blocked") {
         skipped++;
         detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`);
@@ -3635,6 +3757,9 @@ async function runCurrentSheetSignificance() {
       });
     }
   }
+
+  // Apply collected footnotes after ALL calculations (bottom-to-top per sheet).
+  await applySignificanceFootnoteJobsInOwnContext(footnoteJobs);
 
   const _tLoopDone = perfNow();
   const summaryLines = [
@@ -3730,6 +3855,9 @@ async function clearCurrentSheetSignificance() {
   // Group by sheet; each sheet is cleared in one staged 4-sync batch.
   const bySheet = groupCandidatesBySheet(eligible);
 
+  // Generated footnote rows to silently delete after all clearing completes.
+  const footnoteRemovalJobs = [];
+
   for (const [sheetName, sheetCandidates] of bySheet) {
     let batchEndedAt = 0;
     let sheetClearedCount = 0;
@@ -3739,7 +3867,7 @@ async function clearCurrentSheetSignificance() {
     try {
       await Excel.run(async (context) => {
         const worksheetRef = context.workbook.worksheets.getItem(sheetName);
-        const { results: batchResults, sheetDiags } = await clearSignificanceForSheetBatched(
+        const { results: batchResults, sheetDiags, footnoteRemovalRows } = await clearSignificanceForSheetBatched(
           context,
           worksheetRef,
           sheetCandidates
@@ -3748,6 +3876,11 @@ async function clearCurrentSheetSignificance() {
         _clearAggregate.sourceRangesLoaded += sheetDiags.sourceRangesLoaded;
         _clearAggregate.targetRangesLoaded += sheetDiags.targetRangesLoaded;
         _clearAggregate.bannerRangesLoaded += sheetDiags.bannerRangesLoaded;
+        if (Array.isArray(footnoteRemovalRows)) {
+          for (const rowIndex of footnoteRemovalRows) {
+            footnoteRemovalJobs.push({ sheetName, footnoteRowIndex: rowIndex });
+          }
+        }
         for (let _si = 0; _si < batchResults.length; _si++) {
           const result = batchResults[_si];
           const candidate = sheetCandidates[_si];
@@ -3783,6 +3916,7 @@ async function clearCurrentSheetSignificance() {
           cleared++;
           sheetClearedCount++;
           accumulateClearDetails(_clearAggregate, result._clearDetails);
+          if (result.footnoteRemovalJob) footnoteRemovalJobs.push(result.footnoteRemovalJob);
         } else if (result.status === "skipped") {
           skipped++;
           detailLines.push(
@@ -3804,6 +3938,9 @@ async function clearCurrentSheetSignificance() {
 
     if (sheetClearedCount > 0) sheetsCleared++;
   }
+
+  // Silently delete generated footnote rows for cleared tables (bottom-to-top).
+  await applySignificanceFootnoteRemovalJobsInOwnContext(footnoteRemovalJobs);
 
   const summaryLines = [
     "Лист — очистка завершена.",
@@ -4433,11 +4570,31 @@ async function clearSignificanceFromSelection() {
     clearTargetRange.format.font.bold = false;
     clearTargetRange.format.fill.clear();
 
+    // Probe the row immediately below the cleared table for a generated footnote
+    // (queued before the banner read so its sync flushes it — no extra round-trip).
+    const { range: footnoteProbeRange, footnoteRowIndex } = buildFootnoteProbe(
+      clearTargetRange.worksheet,
+      _knownDims,
+      targetValues.length
+    );
+    footnoteProbeRange.load("values");
+
     // No body sync here — deferred to the banner read sync inside
     // clearBannerMarkerUpdatesForRange, which flushes all queued writes.
     const bannerDetails = await clearBannerMarkerUpdatesForRange(context, clearTargetRange, _knownDims);
 
     await context.sync();
+
+    // Silently delete a generated footnote row directly below the cleared table.
+    // Single table → no bottom-to-top ordering concern. Only deletes a row that
+    // starts with the marker, so ordinary user notes under the table are kept.
+    if (probeRowIsGeneratedFootnote(footnoteProbeRange.values)) {
+      clearTargetRange.worksheet
+        .getRangeByIndexes(footnoteRowIndex, 0, 1, 1)
+        .getEntireRow()
+        .delete(Excel.DeleteShiftDirection.up);
+      await context.sync();
+    }
 
     perfLog("clearSignificanceFromSelection", {
       bodyCellsRead: targetValues.length * (targetValues[0] ? targetValues[0].length : 0),
@@ -5736,6 +5893,269 @@ async function ensureBacklinkRows(context, sheetResults, contentRowMap) {
   }
 }
 
+// ─── Significance settings footnote ────────────────────────────────────────────
+//
+// When the "Добавлять подпись под таблицей" setting is on, each PROCESSED table
+// gets one footnote row inserted directly below it, merged across the full table
+// width (label columns + data columns). Skipped/blocked/error tables get nothing.
+//
+// IMPORTANT ordering rule (see issue #281): footnotes must NOT be inserted while
+// calculations are still running, because inserting a worksheet row shifts every
+// candidate range below it and corrupts the ranges still queued for calculation.
+// Instead, each run flow collects footnote "jobs" (pure geometry + text, computed
+// from the already-known ranges) and applies them AFTER all calculations finish,
+// bottom-to-top per worksheet so earlier insertions never shift a not-yet-applied
+// job's row index.
+
+/**
+ * Builds a footnote job for a single processed table, or null when the footnote
+ * setting is off / geometry is unusable.
+ *
+ * Geometry is sheet-absolute and 0-based:
+ *   - dataStartRowIndex / dataStartColIndex: top-left of the data body.
+ *   - dataRowCount / dataColCount: data body dimensions.
+ *   - leftLabelValues: label columns immediately left of the data body. Their
+ *     width sets how far left the merged footnote extends (the "full table width
+ *     including label columns").
+ *
+ * Returns null when the footnote setting is off. The feature is explicitly
+ * incompatible with "labels on left side" mode (labels are not adjacent to the
+ * data, so a footnote cannot span the table correctly): readCalculationSettings-
+ * FromPanel already forces addTableFootnote=false in that mode, and this extra
+ * guard makes the rule independent of the caller.
+ */
+function buildSignificanceFootnoteJob({
+  sheetName,
+  dataStartRowIndex,
+  dataStartColIndex,
+  dataRowCount,
+  dataColCount,
+  leftLabelValues,
+  calculationBlocks,
+  calculationSettings,
+}) {
+  if (!calculationSettings.addTableFootnote) return null;
+  if (calculationSettings.labelsOnLeftSide) return null;
+  if (!Number.isFinite(dataStartRowIndex) || !Number.isFinite(dataStartColIndex)) return null;
+  if (!(dataRowCount > 0) || !(dataColCount > 0)) return null;
+
+  const labelColCount = Math.min(
+    Array.isArray(leftLabelValues) && Array.isArray(leftLabelValues[0]) ? leftLabelValues[0].length : 0,
+    dataStartColIndex
+  );
+
+  const tableLeftColIndex = Math.max(0, dataStartColIndex - labelColCount);
+  const tableRightColIndex = dataStartColIndex + dataColCount - 1;
+  const tableBottomRowIndex = dataStartRowIndex + dataRowCount - 1;
+
+  const footnoteCellValue = buildSignificanceFootnoteCellValue({
+    confidenceLevel: calculationSettings.confidenceLevel,
+    oneTailedTest: calculationSettings.oneTailedTest,
+    statisticLabels: collectStatisticTypeLabels(calculationBlocks),
+  });
+
+  return {
+    sheetName,
+    tableBottomRowIndex,
+    tableLeftColIndex,
+    tableRightColIndex,
+    footnoteCellValue,
+  };
+}
+
+/**
+ * Inserts or updates a single footnote row directly below one table.
+ *
+ * If a generated RIT footnote already sits immediately below the table, it is
+ * updated in place (no new row). Otherwise a brand-new worksheet row is inserted
+ * so existing content below the table is never overwritten. The footnote cells
+ * are merged across exactly [tableLeftColIndex .. tableRightColIndex].
+ */
+async function writeOrInsertSignificanceFootnoteRow(context, worksheet, job) {
+  const { tableBottomRowIndex, tableLeftColIndex, tableRightColIndex, footnoteCellValue } = job;
+  const width = tableRightColIndex - tableLeftColIndex + 1;
+  if (width < 1) return;
+
+  const footnoteRowIndex = tableBottomRowIndex + 1;
+
+  // Detect an existing RIT footnote at the row immediately below the table.
+  const probeCell = worksheet.getRangeByIndexes(footnoteRowIndex, tableLeftColIndex, 1, 1);
+  probeCell.load("values");
+  await context.sync();
+
+  const existingValue =
+    probeCell.values && probeCell.values[0] ? probeCell.values[0][0] : null;
+  const hasExistingFootnote = isGeneratedSignificanceFootnoteRow(existingValue);
+
+  if (!hasExistingFootnote) {
+    // Insert a new blank row so nothing existing below the table is overwritten.
+    worksheet
+      .getRangeByIndexes(footnoteRowIndex, 0, 1, 1)
+      .getEntireRow()
+      .insert(Excel.InsertShiftDirection.down);
+    await context.sync();
+  }
+
+  const footnoteRange = worksheet.getRangeByIndexes(footnoteRowIndex, tableLeftColIndex, 1, width);
+
+  // Clear any prior merge first: a merged range rejects multi-cell writes, and an
+  // existing footnote from a previous run may already be merged across this span.
+  footnoteRange.unmerge();
+  await context.sync();
+
+  const leftCell = worksheet.getRangeByIndexes(footnoteRowIndex, tableLeftColIndex, 1, 1);
+  leftCell.values = [[footnoteCellValue]];
+
+  if (width > 1) {
+    footnoteRange.merge();
+  }
+
+  footnoteRange.format.font.italic = true;
+  footnoteRange.format.font.bold = false;
+  footnoteRange.format.fill.clear();
+  footnoteRange.format.horizontalAlignment = "Left";
+  footnoteRange.format.verticalAlignment = "Center";
+  await context.sync();
+}
+
+/**
+ * Applies a list of footnote jobs. Jobs are grouped per worksheet and applied
+ * bottom-to-top (descending table bottom row) so that inserting a footnote row
+ * for a lower table never shifts the row index of a higher table still pending.
+ *
+ * Tolerant: a failure on one footnote is logged and skipped; it never aborts the
+ * Run itself (calculations have already completed and been written at this point).
+ */
+async function applySignificanceFootnoteJobs(context, jobs) {
+  if (!Array.isArray(jobs) || jobs.length === 0) return;
+
+  const jobsBySheet = new Map();
+  for (const job of jobs) {
+    if (!job || !job.sheetName) continue;
+    if (!jobsBySheet.has(job.sheetName)) jobsBySheet.set(job.sheetName, []);
+    jobsBySheet.get(job.sheetName).push(job);
+  }
+
+  for (const [sheetName, sheetJobs] of jobsBySheet) {
+    const worksheet = context.workbook.worksheets.getItem(sheetName);
+    const sorted = sheetJobs
+      .slice()
+      .sort((a, b) => b.tableBottomRowIndex - a.tableBottomRowIndex);
+    for (const job of sorted) {
+      try {
+        await writeOrInsertSignificanceFootnoteRow(context, worksheet, job);
+      } catch (footnoteErr) {
+        console.warn("RIT: не удалось записать подпись под таблицей.", footnoteErr);
+      }
+    }
+  }
+}
+
+/**
+ * Convenience wrapper that applies footnote jobs inside their own Excel.run.
+ * Used by run flows whose calculations completed in a different context.
+ */
+async function applySignificanceFootnoteJobsInOwnContext(jobs) {
+  if (!Array.isArray(jobs) || jobs.length === 0) return;
+  try {
+    await Excel.run(async (context) => {
+      await applySignificanceFootnoteJobs(context, jobs);
+    });
+  } catch (footnoteErr) {
+    console.warn("RIT: не удалось записать подписи под таблицами.", footnoteErr);
+  }
+}
+
+// ─── Significance footnote removal (Clear) ──────────────────────────────────────
+//
+// Clear Significance silently removes a RIT-generated footnote row directly below
+// a cleared table. Removal is unconditional (no separate setting) but strictly
+// guarded: only a row whose detected cell starts with SIGNIFICANCE_FOOTNOTE_MARKER
+// is deleted, so ordinary user comments/notes under a table are never touched.
+//
+// Detection reads the row immediately below the cleared data body, scanning a few
+// columns to the LEFT as well so the marker (which lives in the merged footnote's
+// top-left cell, i.e. the table's left label column) is seen. Detection piggybacks
+// on existing Clear syncs; the actual row deletions are applied afterwards,
+// bottom-to-top per worksheet, so they never shift ranges still being cleared.
+
+/**
+ * Builds the footnote probe range for one cleared table and the absolute index
+ * of the row immediately below it.
+ *
+ * @param worksheet         Excel.Worksheet proxy.
+ * @param knownDims         { rowIndex, columnIndex, columnCount } of the cleared body.
+ * @param dataBodyRowCount  row count of the cleared body.
+ */
+function buildFootnoteProbe(worksheet, knownDims, dataBodyRowCount) {
+  const footnoteRowIndex = knownDims.rowIndex + dataBodyRowCount; // bottom row + 1
+  const startCol = Math.max(0, knownDims.columnIndex - LABEL_SCAN_COLUMNS_LEFT);
+  const colCount = knownDims.columnIndex + knownDims.columnCount - startCol;
+  const range = worksheet.getRangeByIndexes(footnoteRowIndex, startCol, 1, Math.max(1, colCount));
+  return { range, footnoteRowIndex };
+}
+
+/**
+ * True when a probe row's loaded values contain a generated footnote marker cell.
+ */
+function probeRowIsGeneratedFootnote(probeValues) {
+  if (!probeValues || !probeValues[0]) return false;
+  return probeValues[0].some((cell) => isGeneratedSignificanceFootnoteRow(cell));
+}
+
+/**
+ * Deletes generated footnote rows for cleared tables. Jobs are grouped per sheet
+ * and deleted bottom-to-top (descending row) so each deletion never shifts the
+ * index of a not-yet-deleted footnote above it. Identical rows are de-duplicated.
+ * Only ever called with rows already confirmed to start with the footnote marker.
+ */
+async function applySignificanceFootnoteRemovalJobs(context, jobs) {
+  if (!Array.isArray(jobs) || jobs.length === 0) return;
+
+  const jobsBySheet = new Map();
+  for (const job of jobs) {
+    if (!job || !job.sheetName || !Number.isFinite(job.footnoteRowIndex)) continue;
+    if (!jobsBySheet.has(job.sheetName)) jobsBySheet.set(job.sheetName, []);
+    jobsBySheet.get(job.sheetName).push(job);
+  }
+
+  let queuedAnyDeletion = false;
+  for (const [sheetName, sheetJobs] of jobsBySheet) {
+    const worksheet = context.workbook.worksheets.getItem(sheetName);
+    const seenRows = new Set();
+    const sortedRows = sheetJobs
+      .map((j) => j.footnoteRowIndex)
+      .sort((a, b) => b - a);
+    for (const rowIndex of sortedRows) {
+      if (seenRows.has(rowIndex)) continue;
+      seenRows.add(rowIndex);
+      worksheet
+        .getRangeByIndexes(rowIndex, 0, 1, 1)
+        .getEntireRow()
+        .delete(Excel.DeleteShiftDirection.up);
+      queuedAnyDeletion = true;
+    }
+  }
+
+  if (queuedAnyDeletion) await context.sync();
+}
+
+/**
+ * Applies footnote removal jobs inside a dedicated Excel.run. Safe to call after
+ * the Clear pipeline has committed — row indices stay valid because clearing never
+ * inserts or deletes rows.
+ */
+async function applySignificanceFootnoteRemovalJobsInOwnContext(jobs) {
+  if (!Array.isArray(jobs) || jobs.length === 0) return;
+  try {
+    await Excel.run(async (context) => {
+      await applySignificanceFootnoteRemovalJobs(context, jobs);
+    });
+  } catch (footnoteErr) {
+    console.warn("RIT: не удалось удалить подписи под таблицами.", footnoteErr);
+  }
+}
+
 async function ensureInventoryContentWorksheet(context) {
   const worksheets = context.workbook.worksheets;
   const worksheet = worksheets.getItemOrNullObject(INVENTORY_CONTENT_SHEET_NAME);
@@ -6211,12 +6631,20 @@ function readCalculationSettingsFromPanel() {
 
   const oneTailedTestCheckbox = document.getElementById("one-tailed-test");
 
+  // Footnotes require label columns adjacent to the data, so they are
+  // incompatible with "labels on left side" mode. Force the feature off here so
+  // a stale saved setting (addTableFootnote: true) can never create a footnote
+  // while labelsOnLeftSide is true, independent of the disabled-UI affordance.
+  const labelsOnLeftSide = getCheckboxValue("labels-on-left-side");
+  const addTableFootnote = labelsOnLeftSide ? false : getCheckboxValue("add-table-footnote");
+
   return {
     confidenceLevel: confidenceLevelElement ? confidenceLevelElement.value : "95",
     oneTailedTest: oneTailedTestCheckbox ? oneTailedTestCheckbox.checked : false,
 
     roundCellValues: getCheckboxValue("round-cell-values"),
     resultFormattingLevel: getInputValue("result-formatting-level", "full"),
+    addTableFootnote,
 
     compareWithPreviousColumn: getCheckboxValue("compare-with-previous-column"),
     applyPreviousColumnFill: getCheckboxValue("apply-previous-column-fill"),
@@ -6224,7 +6652,7 @@ function readCalculationSettingsFromPanel() {
     writeBannerLetters: getCheckboxValue("write-banner-letters"),
     respectBannerStructure: getCheckboxValue("respect-banner-structure"),
     autoDetectWaveBanners: getCheckboxValue("auto-detect-wave-banners"),
-    labelsOnLeftSide: getCheckboxValue("labels-on-left-side"),
+    labelsOnLeftSide,
 
     compareOnlyWithTotal: getCheckboxValue("compare-only-with-total"),
     excludeTotalFromComparisons: getCheckboxValue("exclude-total-from-comparisons"),
@@ -7178,6 +7606,39 @@ function initializePreviousColumnComparisonSettings() {
 function refreshSettingsPanelState() {
   refreshPreviousColumnComparisonState();
   refreshBannerStructureSettingsState();
+  refreshTableFootnoteState();
+}
+
+/**
+ * Applies UI rules for the "Добавлять подпись под таблицей" (table footnote)
+ * option.
+ *
+ * Footnotes merge across the table width including the adjacent left label
+ * columns. When "labels on left side" is enabled the labels are read from the
+ * far-left of the sheet and are NOT adjacent to the data, so a footnote cannot
+ * be placed correctly. In that mode the footnote option is disabled and a
+ * warning is shown. This is a UI affordance only — readCalculationSettingsFromPanel
+ * and buildSignificanceFootnoteJob also force the feature off so a stale saved
+ * setting can never create a footnote while labelsOnLeftSide is true.
+ */
+function refreshTableFootnoteState() {
+  const addTableFootnoteCheckbox = document.getElementById("add-table-footnote");
+  const labelsOnLeftSideCheckbox = document.getElementById("labels-on-left-side");
+  const warningElement = document.getElementById("add-table-footnote-warning");
+
+  if (!addTableFootnoteCheckbox) {
+    return;
+  }
+
+  const labelsOnLeftSide = labelsOnLeftSideCheckbox ? labelsOnLeftSideCheckbox.checked : false;
+
+  // Disable (but do not uncheck) so the user's preference is preserved and
+  // restored if they turn labels-on-left-side off again.
+  addTableFootnoteCheckbox.disabled = labelsOnLeftSide;
+
+  if (warningElement) {
+    warningElement.style.display = labelsOnLeftSide ? "block" : "none";
+  }
 }
 
 /**

@@ -14,6 +14,7 @@ export const SETTINGS_CONTROL_CONFIG = [
 
   { id: "round-cell-values", type: "checked", settingName: "roundCellValues" },
   { id: "result-formatting-level", type: "value", settingName: "resultFormattingLevel" },
+  { id: "add-table-footnote", type: "checked", settingName: "addTableFootnote" },
 
   {
     id: "compare-with-previous-column",
@@ -77,6 +78,7 @@ export const DEFAULT_CALCULATION_SETTINGS = {
 
   roundCellValues: false,
   resultFormattingLevel: "full",
+  addTableFootnote: false,
 
   compareWithPreviousColumn: false,
   applyPreviousColumnFill: false,

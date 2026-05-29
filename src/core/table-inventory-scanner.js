@@ -26,6 +26,7 @@
  */
 
 import { buildTablePreviewModel } from "./table-preview-model";
+import { isGeneratedSignificanceFootnoteRow } from "./significance-footnote";
 
 const LABEL_SCAN_COLUMNS_LEFT = 2;
 const MIN_BAND_ROWS = 2;
@@ -66,8 +67,16 @@ function isCellEmpty(cell) {
   return cell === "" || cell === null || cell === undefined;
 }
 
+// A generated significance footnote row is non-empty (it carries an invisible
+// marker prefix in its leftmost cell), but it is RIT-generated output below a
+// table — never table content. Treat such cells as empty for band detection so
+// the row acts as a separator and is never absorbed into a table candidate.
+function isCellEmptyOrGeneratedFootnote(cell) {
+  return isCellEmpty(cell) || isGeneratedSignificanceFootnoteRow(cell);
+}
+
 function isRowEmpty(row) {
-  return !row || row.every(isCellEmpty);
+  return !row || row.every(isCellEmptyOrGeneratedFootnote);
 }
 
 function isNumericCell(cell) {
