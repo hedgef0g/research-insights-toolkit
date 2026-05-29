@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { scanWorksheetForTables } from "../../src/core/table-inventory-scanner.js";
+import { SIGNIFICANCE_FOOTNOTE_MARKER } from "../../src/core/significance-footnote.js";
 
 const SHEET = "Sheet1";
 const OFFSET = { usedRangeRowOffset: 0, usedRangeColOffset: 0, sheetName: SHEET };
@@ -91,6 +92,51 @@ describe("scanWorksheetForTables", () => {
     assert.strictEqual(item.labelSplitConfidence, "confident");
     assert.strictEqual(item.columnCount, 4);
     assert.strictEqual(item.isLikelyTable, true);
+  });
+
+  // ─── Generated significance footnote rows (issue #281) ───────────────────
+
+  it("a generated footnote row directly below a table acts as a separator", () => {
+    // Footnote row carries the invisible marker in its leftmost (merged) cell;
+    // remaining cells are empty (Excel stores merged values only top-left).
+    const footnoteRow = [
+      SIGNIFICANCE_FOOTNOTE_MARKER + "Уровень значимости: 95%; тест: двусторонний; статистика: Z-критерий для долей.",
+      null,
+      null,
+      null,
+    ];
+    const values = [
+      ["Label1", 10, 20, 30],
+      ["Label2", 40, 50, 60],
+      ["Base", 100, 100, 100],
+      footnoteRow,
+      ["Label3", 70, 80, 90],
+      ["Label4", 10, 20, 30],
+      ["Base", 200, 200, 200],
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    // Without separator handling the footnote row would glue both tables into a
+    // single band. It must split them into two distinct candidates.
+    assert.strictEqual(items.length, 2, `expected 2 items, got ${items.length}`);
+  });
+
+  it("a footnote row appended to a single table is not treated as a body row", () => {
+    const footnoteRow = [
+      SIGNIFICANCE_FOOTNOTE_MARKER + "Уровень значимости: 95%; тест: двусторонний; статистика: Z-критерий для долей.",
+      null,
+      null,
+      null,
+    ];
+    const values = [
+      ["Label1", 10, 20, 30],
+      ["Label2", 40, 50, 60],
+      ["Base", 100, 100, 100],
+      footnoteRow,
+    ];
+    const items = scanWorksheetForTables({ values, ...OFFSET });
+    assert.strictEqual(items.length, 1, `expected 1 item, got ${items.length}`);
+    // Range covers only the 3 real data rows (A1:D3), not the footnote row.
+    assert.strictEqual(items[0].rangeAddress, "A1:D3", `got ${items[0].rangeAddress}`);
   });
 
   // ─── New hardening tests for issue #110 ──────────────────────────────────
