@@ -58,7 +58,14 @@ import {
   formatStatusWithSelectedRangeGuardrails,
   buildCheckResolverMessage,
   runningStatusMessage,
+  buildBatchProgressStatus,
 } from "./taskpane-status";
+
+// Minimal UI yield so the browser can repaint the live progress status between
+// table-level batch updates. Intentionally a 0ms timeout — no artificial delay.
+function yieldToUi() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 import {
   SETTINGS_CONTROL_CONFIG,
@@ -1610,6 +1617,7 @@ async function runAutoSignificance() {
   }
 
   setStatusMessage(runningStatusMessage("run", "workbook"));
+  const _progressScope = "workbook";
 
   // Collect inventory to identify eligible candidates.
   const _tScan = perfNow();
@@ -1759,6 +1767,17 @@ async function runAutoSignificance() {
             warningDetails: runReportWarningDetails(item),
             blocksProcessed: result.blocksProcessed != null ? result.blocksProcessed : "",
           });
+          // Live table-level progress (after each processed table).
+          setStatusMessage(
+            buildBatchProgressStatus({
+              action: "run",
+              scope: _progressScope,
+              currentIndex: _bi + 1,
+              total: eligible.length,
+              sheetName: candidate.sheetName,
+            })
+          );
+          await yieldToUi();
         } catch (err) {
           errors++;
           const errMsg = err.message || "неизвестная ошибка";
@@ -1834,6 +1853,17 @@ async function runAutoSignificance() {
         warningDetails: runReportWarningDetails(item),
         blocksProcessed: result.blocksProcessed != null ? result.blocksProcessed : "",
       });
+      // Live table-level progress (after each processed table).
+      setStatusMessage(
+        buildBatchProgressStatus({
+          action: "run",
+          scope: _progressScope,
+          currentIndex: _fi + 1,
+          total: eligible.length,
+          sheetName: candidate.sheetName,
+        })
+      );
+      await yieldToUi();
     } catch (err) {
       errors++;
       const errMsg = err.message || "неизвестная ошибка";
@@ -3344,6 +3374,7 @@ async function runCurrentSheetSignificance() {
   }
 
   setStatusMessage(runningStatusMessage("run", "sheet"));
+  const _progressScope = "sheet";
 
   const _tScan = perfNow();
   let inventoryResults;
@@ -3488,6 +3519,17 @@ async function runCurrentSheetSignificance() {
             warningDetails: runReportWarningDetails(item),
             blocksProcessed: result.blocksProcessed != null ? result.blocksProcessed : "",
           });
+          // Live table-level progress (after each processed table).
+          setStatusMessage(
+            buildBatchProgressStatus({
+              action: "run",
+              scope: _progressScope,
+              currentIndex: _bi + 1,
+              total: eligible.length,
+              sheetName: candidate.sheetName,
+            })
+          );
+          await yieldToUi();
         } catch (err) {
           errors++;
           const errMsg = err.message || "неизвестная ошибка";
@@ -3563,6 +3605,17 @@ async function runCurrentSheetSignificance() {
         warningDetails: runReportWarningDetails(item),
         blocksProcessed: result.blocksProcessed != null ? result.blocksProcessed : "",
       });
+      // Live table-level progress (after each processed table).
+      setStatusMessage(
+        buildBatchProgressStatus({
+          action: "run",
+          scope: _progressScope,
+          currentIndex: _fi + 1,
+          total: eligible.length,
+          sheetName: candidate.sheetName,
+        })
+      );
+      await yieldToUi();
     } catch (err) {
       errors++;
       const errMsg = err.message || "неизвестная ошибка";
