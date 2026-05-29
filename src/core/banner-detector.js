@@ -1459,6 +1459,24 @@ function detectGroupKeysWithNestedWaveDimension({
       continue;
     }
 
+    // Also check upper scan rows for wave VALUE labels.
+    //
+    // PURPOSE: In real Excel workbooks the wave-value label (e.g. "2025Q4",
+    // "w18 (ноябрь 24)") sometimes sits one or more rows above the immediate
+    // lower banner row — either because the user's selection starts below the
+    // wave-value row, or because Excel's vertical-merge model makes the
+    // non-top cells of a merged area return empty text, so the value only
+    // appears in the upper scan rows.
+    //
+    // The existing lowerBannerRow check handles the common single-level
+    // layout; this companion check handles the merged/multi-level layout.
+    if (
+      hasWaveValueLabelsInIntermediateUpperRow(columnIndexes, upperScanRows, groupLevelRowIndex)
+    ) {
+      waveGroupKeys.add(groupKey);
+      continue;
+    }
+
     if (
       hasWaveDescriptorInIntermediateUpperRow(columnIndexes, upperScanRows, groupLevelRowIndex)
     ) {
@@ -1518,6 +1536,43 @@ function hasWaveDescriptorInIntermediateUpperRow(
     }
 
     if (descriptorCount >= 2) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Returns true if any non-group-level upper scan row contains at least two
+ * wave VALUE labels (e.g. "2025Q4", "w18 (ноябрь 24)") among the given column
+ * indexes.
+ *
+ * Mirrors hasWaveDescriptorInIntermediateUpperRow but uses isTechnicalWaveValueLabel
+ * instead of isTechnicalWaveDescriptorLabel so that concrete wave/quarter values
+ * that appear in upper scan rows (rather than the lowerBannerRow) are recognised.
+ */
+function hasWaveValueLabelsInIntermediateUpperRow(
+  columnIndexes,
+  upperScanRows,
+  groupLevelRowIndex
+) {
+  if (!Array.isArray(upperScanRows) || upperScanRows.length === 0) {
+    return false;
+  }
+
+  for (let rowIndex = 0; rowIndex < upperScanRows.length; rowIndex++) {
+    if (rowIndex === groupLevelRowIndex) {
+      continue;
+    }
+
+    const row = upperScanRows[rowIndex];
+
+    if (!row) {
+      continue;
+    }
+
+    if (countWaveValueLabelsInColumns(columnIndexes, row) >= 2) {
       return true;
     }
   }

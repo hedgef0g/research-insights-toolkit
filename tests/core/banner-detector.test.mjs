@@ -596,6 +596,154 @@ describe("detectBannerStructure - compact w-number wave value labels", () => {
       );
     }
   });
+
+  it("compact lower-row w18/w19 labels under semantic parent groups promote wave mode only when autoDetectWaveBanners is true", () => {
+    // Regression test for realistic compact wave labels like "w18 (ноябрь 24)" in
+    // the lowerBannerRow under named semantic groups.  Covers both the true and
+    // false autoDetectWaveBanners paths.
+    const bannerContext = {
+      selectedColumnCount: 6,
+      lowerBannerRow: [
+        "w18 (ноябрь 24)", "w19 (май 25)",
+        "w18 (ноябрь 24)", "w19 (май 25)",
+        "w18 (ноябрь 24)", "w19 (май 25)",
+      ],
+      upperScanRows: [
+        ["Всего", "", "Мужской", "", "Женский", ""],
+      ],
+    };
+
+    const resultTrue = detectBannerStructure(bannerContext, { autoDetectWaveBanners: true });
+
+    assert.deepStrictEqual(
+      resultTrue.groups.map((g) => ({
+        label: g.label,
+        columnIndexes: g.columnIndexes,
+        recommendedComparisonMode: g.recommendedComparisonMode,
+      })),
+      [
+        { label: "Всего",   columnIndexes: [0, 1], recommendedComparisonMode: "previousColumn" },
+        { label: "Мужской", columnIndexes: [2, 3], recommendedComparisonMode: "previousColumn" },
+        { label: "Женский", columnIndexes: [4, 5], recommendedComparisonMode: "previousColumn" },
+      ]
+    );
+
+    const resultFalse = detectBannerStructure(bannerContext, { autoDetectWaveBanners: false });
+
+    // sibling groups must remain separate and marker labels must restart
+    assert.strictEqual(resultFalse.groups.length, 3, "three sibling groups expected");
+
+    const groupKeys = resultFalse.groups.map((g) => g.groupKey);
+    assert.strictEqual(new Set(groupKeys).size, 3, "all three groups must have distinct keys");
+
+    const labelMap = buildBannerLocalSignificanceLabelMap(resultFalse, { autoDetectWaveBanners: false });
+
+    for (let base = 0; base < 6; base += 2) {
+      assert.strictEqual(labelMap.get(base),     "a", `column ${base} must get label a`);
+      assert.strictEqual(labelMap.get(base + 1), "b", `column ${base + 1} must get label b`);
+    }
+
+    for (const group of resultFalse.groups) {
+      assert.notStrictEqual(group.recommendedComparisonMode, "previousColumn");
+    }
+  });
+
+  it("compact w-number labels in upper scan row (vertically merged-like) promote wave groups only when autoDetectWaveBanners is true", () => {
+    // Reproduces the Excel smoke failure: Office.js returns blank text for the
+    // non-top cell of a vertically-merged banner cell, so the wave-value label
+    // (e.g. "w18 (ноябрь 24)") appears in upperScanRows rather than
+    // lowerBannerRow.  detectGroupKeysWithNestedWaveDimension must therefore
+    // also scan upper scan rows for wave value labels.
+    const bannerContext = {
+      selectedColumnCount: 4,
+      lowerBannerRow: ["", "", "", ""],
+      upperScanRows: [
+        ["w18 (ноябрь 24)", "w19 (май 25)", "w18 (ноябрь 24)", "w19 (май 25)"],
+        ["Всего", "", "Мужской", ""],
+      ],
+    };
+
+    const resultTrue = detectBannerStructure(bannerContext, { autoDetectWaveBanners: true });
+
+    assert.deepStrictEqual(
+      resultTrue.groups.map((g) => ({
+        label: g.label,
+        columnIndexes: g.columnIndexes,
+        recommendedComparisonMode: g.recommendedComparisonMode,
+      })),
+      [
+        { label: "Всего",   columnIndexes: [0, 1], recommendedComparisonMode: "previousColumn" },
+        { label: "Мужской", columnIndexes: [2, 3], recommendedComparisonMode: "previousColumn" },
+      ]
+    );
+
+    const resultFalse = detectBannerStructure(bannerContext, { autoDetectWaveBanners: false });
+
+    // sibling groups stay separate with restarting labels even without wave mode
+    assert.strictEqual(resultFalse.groups.length, 2, "two sibling groups expected");
+
+    const g0 = resultFalse.groups.find((g) => g.columnIndexes.includes(0));
+    const g2 = resultFalse.groups.find((g) => g.columnIndexes.includes(2));
+    assert.notStrictEqual(g0.groupKey, g2.groupKey, "groups must be distinct");
+
+    const labelMap = buildBannerLocalSignificanceLabelMap(resultFalse, { autoDetectWaveBanners: false });
+
+    assert.strictEqual(labelMap.get(0), "a");
+    assert.strictEqual(labelMap.get(1), "b");
+    assert.strictEqual(labelMap.get(2), "a");
+    assert.strictEqual(labelMap.get(3), "b");
+
+    for (const group of resultFalse.groups) {
+      assert.notStrictEqual(group.recommendedComparisonMode, "previousColumn");
+    }
+  });
+
+  it("quarter value labels (2025Q4 / 2026Q1) in upper scan row promote wave groups only when autoDetectWaveBanners is true", () => {
+    // Same scenario as the compact-w test above, but with existing quarter-style
+    // labels so there is a regression test for the vertically-merged layout for
+    // both label families in the same fix.
+    const bannerContext = {
+      selectedColumnCount: 4,
+      lowerBannerRow: ["", "", "", ""],
+      upperScanRows: [
+        ["2025Q4", "2026Q1", "2025Q4", "2026Q1"],
+        ["Всего", "", "Мужской", ""],
+      ],
+    };
+
+    const resultTrue = detectBannerStructure(bannerContext, { autoDetectWaveBanners: true });
+
+    assert.deepStrictEqual(
+      resultTrue.groups.map((g) => ({
+        label: g.label,
+        columnIndexes: g.columnIndexes,
+        recommendedComparisonMode: g.recommendedComparisonMode,
+      })),
+      [
+        { label: "Всего",   columnIndexes: [0, 1], recommendedComparisonMode: "previousColumn" },
+        { label: "Мужской", columnIndexes: [2, 3], recommendedComparisonMode: "previousColumn" },
+      ]
+    );
+
+    const resultFalse = detectBannerStructure(bannerContext, { autoDetectWaveBanners: false });
+
+    assert.strictEqual(resultFalse.groups.length, 2, "two sibling groups expected");
+
+    const g0 = resultFalse.groups.find((g) => g.columnIndexes.includes(0));
+    const g2 = resultFalse.groups.find((g) => g.columnIndexes.includes(2));
+    assert.notStrictEqual(g0.groupKey, g2.groupKey, "groups must be distinct");
+
+    const labelMap = buildBannerLocalSignificanceLabelMap(resultFalse, { autoDetectWaveBanners: false });
+
+    assert.strictEqual(labelMap.get(0), "a");
+    assert.strictEqual(labelMap.get(1), "b");
+    assert.strictEqual(labelMap.get(2), "a");
+    assert.strictEqual(labelMap.get(3), "b");
+
+    for (const group of resultFalse.groups) {
+      assert.notStrictEqual(group.recommendedComparisonMode, "previousColumn");
+    }
+  });
 });
 
 describe("detectBannerStructure - sparse lower banner totals", () => {
