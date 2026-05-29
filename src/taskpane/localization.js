@@ -147,6 +147,8 @@ const STRINGS = {
 
     "settings.roundCellValues": "Округлять значения в ячейках",
     "settings.addTableFootnote": "Добавлять подпись под таблицей",
+    "settings.addTableFootnoteUnavailable":
+      "Подпись под таблицей недоступна, когда лейблы не примыкают к данным.",
     "settings.fillsGroup": "Заливки",
     "settings.significantFillColor": "Обычная значимость",
     "settings.lowerThanTotalFillColor": "Заливка < Тотал",
@@ -293,6 +295,8 @@ const STRINGS = {
 
     "settings.roundCellValues": "Round cell values",
     "settings.addTableFootnote": "Add footnote below table",
+    "settings.addTableFootnoteUnavailable":
+      "Table footnote is unavailable when labels are not adjoined.",
     "settings.fillsGroup": "Fills",
     "settings.significantFillColor": "Regular significance",
     "settings.lowerThanTotalFillColor": "Fill < Total",

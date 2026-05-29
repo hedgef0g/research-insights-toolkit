@@ -5916,8 +5916,13 @@ async function ensureBacklinkRows(context, sheetResults, contentRowMap) {
  *   - dataRowCount / dataColCount: data body dimensions.
  *   - leftLabelValues: label columns immediately left of the data body. Their
  *     width sets how far left the merged footnote extends (the "full table width
- *     including label columns"). Skipped when labels are read from the far-left
- *     of the sheet (labelsOnLeftSide), where the labels are not adjacent to data.
+ *     including label columns").
+ *
+ * Returns null when the footnote setting is off. The feature is explicitly
+ * incompatible with "labels on left side" mode (labels are not adjacent to the
+ * data, so a footnote cannot span the table correctly): readCalculationSettings-
+ * FromPanel already forces addTableFootnote=false in that mode, and this extra
+ * guard makes the rule independent of the caller.
  */
 function buildSignificanceFootnoteJob({
   sheetName,
@@ -5930,15 +5935,14 @@ function buildSignificanceFootnoteJob({
   calculationSettings,
 }) {
   if (!calculationSettings.addTableFootnote) return null;
+  if (calculationSettings.labelsOnLeftSide) return null;
   if (!Number.isFinite(dataStartRowIndex) || !Number.isFinite(dataStartColIndex)) return null;
   if (!(dataRowCount > 0) || !(dataColCount > 0)) return null;
 
-  const labelColCount = calculationSettings.labelsOnLeftSide
-    ? 0
-    : Math.min(
-        Array.isArray(leftLabelValues) && Array.isArray(leftLabelValues[0]) ? leftLabelValues[0].length : 0,
-        dataStartColIndex
-      );
+  const labelColCount = Math.min(
+    Array.isArray(leftLabelValues) && Array.isArray(leftLabelValues[0]) ? leftLabelValues[0].length : 0,
+    dataStartColIndex
+  );
 
   const tableLeftColIndex = Math.max(0, dataStartColIndex - labelColCount);
   const tableRightColIndex = dataStartColIndex + dataColCount - 1;
@@ -6627,13 +6631,20 @@ function readCalculationSettingsFromPanel() {
 
   const oneTailedTestCheckbox = document.getElementById("one-tailed-test");
 
+  // Footnotes require label columns adjacent to the data, so they are
+  // incompatible with "labels on left side" mode. Force the feature off here so
+  // a stale saved setting (addTableFootnote: true) can never create a footnote
+  // while labelsOnLeftSide is true, independent of the disabled-UI affordance.
+  const labelsOnLeftSide = getCheckboxValue("labels-on-left-side");
+  const addTableFootnote = labelsOnLeftSide ? false : getCheckboxValue("add-table-footnote");
+
   return {
     confidenceLevel: confidenceLevelElement ? confidenceLevelElement.value : "95",
     oneTailedTest: oneTailedTestCheckbox ? oneTailedTestCheckbox.checked : false,
 
     roundCellValues: getCheckboxValue("round-cell-values"),
     resultFormattingLevel: getInputValue("result-formatting-level", "full"),
-    addTableFootnote: getCheckboxValue("add-table-footnote"),
+    addTableFootnote,
 
     compareWithPreviousColumn: getCheckboxValue("compare-with-previous-column"),
     applyPreviousColumnFill: getCheckboxValue("apply-previous-column-fill"),
@@ -6641,7 +6652,7 @@ function readCalculationSettingsFromPanel() {
     writeBannerLetters: getCheckboxValue("write-banner-letters"),
     respectBannerStructure: getCheckboxValue("respect-banner-structure"),
     autoDetectWaveBanners: getCheckboxValue("auto-detect-wave-banners"),
-    labelsOnLeftSide: getCheckboxValue("labels-on-left-side"),
+    labelsOnLeftSide,
 
     compareOnlyWithTotal: getCheckboxValue("compare-only-with-total"),
     excludeTotalFromComparisons: getCheckboxValue("exclude-total-from-comparisons"),
@@ -7595,6 +7606,39 @@ function initializePreviousColumnComparisonSettings() {
 function refreshSettingsPanelState() {
   refreshPreviousColumnComparisonState();
   refreshBannerStructureSettingsState();
+  refreshTableFootnoteState();
+}
+
+/**
+ * Applies UI rules for the "Добавлять подпись под таблицей" (table footnote)
+ * option.
+ *
+ * Footnotes merge across the table width including the adjacent left label
+ * columns. When "labels on left side" is enabled the labels are read from the
+ * far-left of the sheet and are NOT adjacent to the data, so a footnote cannot
+ * be placed correctly. In that mode the footnote option is disabled and a
+ * warning is shown. This is a UI affordance only — readCalculationSettingsFromPanel
+ * and buildSignificanceFootnoteJob also force the feature off so a stale saved
+ * setting can never create a footnote while labelsOnLeftSide is true.
+ */
+function refreshTableFootnoteState() {
+  const addTableFootnoteCheckbox = document.getElementById("add-table-footnote");
+  const labelsOnLeftSideCheckbox = document.getElementById("labels-on-left-side");
+  const warningElement = document.getElementById("add-table-footnote-warning");
+
+  if (!addTableFootnoteCheckbox) {
+    return;
+  }
+
+  const labelsOnLeftSide = labelsOnLeftSideCheckbox ? labelsOnLeftSideCheckbox.checked : false;
+
+  // Disable (but do not uncheck) so the user's preference is preserved and
+  // restored if they turn labels-on-left-side off again.
+  addTableFootnoteCheckbox.disabled = labelsOnLeftSide;
+
+  if (warningElement) {
+    warningElement.style.display = labelsOnLeftSide ? "block" : "none";
+  }
 }
 
 /**
