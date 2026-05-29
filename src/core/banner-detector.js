@@ -1470,9 +1470,14 @@ function detectGroupKeysWithNestedWaveDimension({
     //
     // The existing lowerBannerRow check handles the common single-level
     // layout; this companion check handles the merged/multi-level layout.
-    if (
-      hasWaveValueLabelsInIntermediateUpperRow(columnIndexes, upperScanRows, groupLevelRowIndex)
-    ) {
+    //
+    // Unlike hasWaveDescriptorInIntermediateUpperRow, the group-level row is
+    // NOT skipped here. When the wave-value row is the only upper scan row the
+    // detector elects it as the group level (technical candidate, no better
+    // semantic row). Skipping it would prevent wave promotion for that layout.
+    // Semantic group labels ("Gender", "Age", etc.) never match
+    // isTechnicalWaveValueLabel so there is no false-positive risk.
+    if (hasWaveValueLabelsInIntermediateUpperRow(columnIndexes, upperScanRows)) {
       waveGroupKeys.add(groupKey);
       continue;
     }
@@ -1544,28 +1549,25 @@ function hasWaveDescriptorInIntermediateUpperRow(
 }
 
 /**
- * Returns true if any non-group-level upper scan row contains at least two
- * wave VALUE labels (e.g. "2025Q4", "w18 (ноябрь 24)") among the given column
- * indexes.
+ * Returns true if any upper scan row contains at least two wave VALUE labels
+ * (e.g. "2025Q4", "w18 (ноябрь 24)") among the given column indexes.
  *
  * Mirrors hasWaveDescriptorInIntermediateUpperRow but uses isTechnicalWaveValueLabel
  * instead of isTechnicalWaveDescriptorLabel so that concrete wave/quarter values
  * that appear in upper scan rows (rather than the lowerBannerRow) are recognised.
+ *
+ * Unlike the descriptor counterpart, every upper scan row is checked including
+ * the group-level row. When the wave-value row is the only upper scan row the
+ * detector may elect it as the group level; skipping it would suppress wave
+ * promotion for that common single-row layout. Semantic group labels never match
+ * isTechnicalWaveValueLabel so there is no false-positive risk.
  */
-function hasWaveValueLabelsInIntermediateUpperRow(
-  columnIndexes,
-  upperScanRows,
-  groupLevelRowIndex
-) {
+function hasWaveValueLabelsInIntermediateUpperRow(columnIndexes, upperScanRows) {
   if (!Array.isArray(upperScanRows) || upperScanRows.length === 0) {
     return false;
   }
 
   for (let rowIndex = 0; rowIndex < upperScanRows.length; rowIndex++) {
-    if (rowIndex === groupLevelRowIndex) {
-      continue;
-    }
-
     const row = upperScanRows[rowIndex];
 
     if (!row) {
@@ -1667,12 +1669,22 @@ function isTechnicalWaveValueLabel(rawLabel) {
     return false;
   }
 
-  // Compact wave number: first token matches w<digits> (e.g. w1, w6, w06, w12).
-  // Parenthetical suffixes like "w6 (ноябрь 23)" are covered because
-  // normalization collapses parentheses to spaces and we only check the first token.
-  const firstToken = normalizedLabel.split(" ")[0];
-
-  if (/^w\d+$/.test(firstToken)) {
+  // Compact wave number: label starts with  w <optional-separator> <digits>.
+  //
+  // Covers all realistic real-workbook variants:
+  //   w18            — no separator
+  //   w 18           — space (also NBSP, collapsed to space by normalization)
+  //   w-18           — hyphen  (not stripped by normalizeLookupText)
+  //   w_18           — underscore  (not stripped by normalizeLookupText)
+  //   W18            — uppercase  (lowercased by normalization)
+  //   w18 (ноябрь 24) — parenthetical suffix (parens→spaces by normalization)
+  //   w 18 (ноябрь 24) — both space separator and suffix
+  //
+  // (?!\w) prevents "w3c"-style false positives: the wave number must not be
+  // immediately followed by an ASCII letter, digit, or underscore.
+  // Ordinary words like "woman", "work", "wave 18" do not match because they
+  // have a non-digit character immediately after the leading 'w'.
+  if (/^w[\s\-_]?\d+(?!\w)/.test(normalizedLabel)) {
     return true;
   }
 

@@ -698,6 +698,115 @@ describe("detectBannerStructure - compact w-number wave value labels", () => {
     }
   });
 
+  it("w-label variants with space / hyphen / underscore separator all promote wave groups when autoDetectWaveBanners is true", () => {
+    // Root-cause regression for the real-workbook smoke failure:
+    // Excel cells may render the wave number with a space ("w 18 (ноябрь 24)"),
+    // a hyphen ("w-18"), or an underscore ("w_18").
+    // normalizeLookupText does NOT strip hyphens or underscores, so the old
+    // /^w\d+$/ first-token test failed for those variants.
+    // The new regex /^w[\s\-_]?\d+(?!\w)/ on the full normalized label fixes all.
+    const separator_variants = [
+      ["w 18 (ноябрь 24)", "w 19 (май 25)"],   // space — the most common real-world format
+      ["w-18 (ноябрь 24)", "w-19 (май 25)"],    // hyphen
+      ["w_18 (ноябрь 24)", "w_19 (май 25)"],    // underscore
+      ["W 18 (ноябрь 24)", "W 19 (май 25)"],    // uppercase + space
+    ];
+
+    for (const [label1, label2] of separator_variants) {
+      const bannerContext = {
+        selectedColumnCount: 4,
+        lowerBannerRow: [label1, label2, label1, label2],
+        upperScanRows: [["Всего", "", "Мужской", ""]],
+      };
+
+      const result = detectBannerStructure(bannerContext, { autoDetectWaveBanners: true });
+
+      for (const group of result.groups) {
+        assert.strictEqual(
+          group.recommendedComparisonMode,
+          "previousColumn",
+          `variant "${label1}" / "${label2}" should promote previousColumn but got ${group.recommendedComparisonMode}`
+        );
+      }
+
+      // autoDetectWaveBanners: false must never enable previousColumn
+      const resultFalse = detectBannerStructure(bannerContext, { autoDetectWaveBanners: false });
+
+      for (const group of resultFalse.groups) {
+        assert.notStrictEqual(
+          group.recommendedComparisonMode,
+          "previousColumn",
+          `variant "${label1}" must not trigger previousColumn when autoDetectWaveBanners is false`
+        );
+      }
+    }
+  });
+
+  it("ordinary w-words (woman, work) are not recognised as wave value labels", () => {
+    // Ensures the broadened regex does not create false positives for ordinary
+    // words that start with the letter w but are not wave-number labels.
+    // Note: "wave awareness" is intentionally omitted here because it does
+    // trigger the existing WAVE_GROUP_LABEL_KEYWORDS descriptor path ("wave" is
+    // in that list); that is expected and correct behaviour, not a false positive.
+    const nonWaveWords = ["woman", "work"];
+
+    for (const word of nonWaveWords) {
+      const bannerContext = {
+        selectedColumnCount: 4,
+        lowerBannerRow: [word, word, word, word],
+        upperScanRows: [["Group A", "", "Group B", ""]],
+      };
+
+      const result = detectBannerStructure(bannerContext, { autoDetectWaveBanners: true });
+
+      for (const group of result.groups) {
+        assert.notStrictEqual(
+          group.recommendedComparisonMode,
+          "previousColumn",
+          `"${word}" must not trigger wave detection`
+        );
+      }
+    }
+  });
+
+  it("compact w-number labels as the only upper scan row still promote wave groups when autoDetectWaveBanners is true", () => {
+    // Root-cause regression for the groupLevelRowIndex skip bug:
+    // When wave-value labels appear in the only upper scan row, the detector
+    // elects that row as the group level (it is the only candidate, even though
+    // it is technical).  The old hasWaveValueLabelsInIntermediateUpperRow skipped
+    // the group-level row and therefore returned false, preventing wave promotion.
+    // After removing the skip, the function finds the wave values and promotes.
+    const bannerContext = {
+      selectedColumnCount: 4,
+      lowerBannerRow: ["", "", "", ""],
+      upperScanRows: [
+        ["w18 (ноябрь 24)", "w19 (май 25)", "w18 (ноябрь 24)", "w19 (май 25)"],
+        // Only one upper row — after mergeAdjacentWaveValueSpans it becomes a
+        // four-column technical span elected as the group level.
+      ],
+    };
+
+    const resultTrue = detectBannerStructure(bannerContext, { autoDetectWaveBanners: true });
+
+    for (const group of resultTrue.groups) {
+      assert.strictEqual(
+        group.recommendedComparisonMode,
+        "previousColumn",
+        "all groups in a pure wave-value banner should be wave-aware"
+      );
+    }
+
+    const resultFalse = detectBannerStructure(bannerContext, { autoDetectWaveBanners: false });
+
+    for (const group of resultFalse.groups) {
+      assert.notStrictEqual(
+        group.recommendedComparisonMode,
+        "previousColumn",
+        "previousColumn must not be enabled when autoDetectWaveBanners is false"
+      );
+    }
+  });
+
   it("quarter value labels (2025Q4 / 2026Q1) in upper scan row promote wave groups only when autoDetectWaveBanners is true", () => {
     // Same scenario as the compact-w test above, but with existing quarter-style
     // labels so there is a regression test for the vertically-merged layout for
