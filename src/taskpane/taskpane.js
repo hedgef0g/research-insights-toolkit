@@ -24,6 +24,7 @@ import {
   detectMetricRowsFromLeftLabels,
   buildCalculationBlocks,
   getAllowedMarkerRowIndexes,
+  LABEL_SCAN_COLUMNS_LEFT,
 } from "../core/metric-detector";
 
 import { writeCellResultsToSelectedRange, resolveNumericOutput } from "../core/excel-writer";
@@ -2225,6 +2226,9 @@ async function clearAutoCurrentTableSignificance() {
   }
 
   if (result.status === "cleared") {
+    if (result.footnoteRemovalJob) {
+      await applySignificanceFootnoteRemovalJobsInOwnContext([result.footnoteRemovalJob]);
+    }
     setStatusMessage(t("status.autorunCleared", { sheet: sheetName, range: rangeAddress }));
   } else {
     setStatusMessage(t("status.autorunClearSkipped", { msg: result.message || t("status.noDataInRange") }));
@@ -2395,17 +2399,32 @@ async function clearSignificanceForRangeInContext(context, sheetName, rangeAddre
   clearTargetRange.format.font.bold = false;
   clearTargetRange.format.fill.clear();
 
+  // Probe the row immediately below the cleared table for a generated footnote.
+  // Queued before the banner read so its sync (or the final sync) flushes it —
+  // no extra round-trip. Deletion happens later, bottom-to-top, by the caller.
+  const { range: footnoteProbeRange, footnoteRowIndex } = buildFootnoteProbe(
+    worksheet,
+    _knownDims,
+    targetValues.length
+  );
+  footnoteProbeRange.load("values");
+
   // No body sync here — deferred to the banner read sync inside
   // clearBannerMarkerUpdatesForRange, which flushes all queued writes.
   const bannerDetails = await clearBannerMarkerUpdatesForRange(context, clearTargetRange, _knownDims);
 
   await context.sync();
 
+  const footnoteRemovalJob = probeRowIsGeneratedFootnote(footnoteProbeRange.values)
+    ? { sheetName, footnoteRowIndex }
+    : null;
+
   const bodyCellsRead = targetValues.length * (targetValues[0] ? targetValues[0].length : 0);
 
   return {
     status: "cleared",
     message: "очищено",
+    footnoteRemovalJob,
     _clearDetails: {
       bodyCellsRead,
       bodyCellsChanged,
@@ -2715,16 +2734,28 @@ async function clearSignificanceForSheetBatched(context, worksheetRef, candidate
         rec.bannerStartRowAbs = targetStartRowIndex - totalScanRowCount;
       }
     }
+
+    // Probe the row below this table for a generated footnote (flushed by sync 3).
+    const probe = buildFootnoteProbe(worksheetRef, rec.knownDims, targetValues.length);
+    probe.range.load("values");
+    rec.footnoteProbeRange = probe.range;
+    rec.footnoteRowIndex = probe.footnoteRowIndex;
   }
   await context.sync(); // Sync 3 — flushes ALL body writes; reads ALL banner scan texts
 
   // ══════════════════════════════════════════════════════════════════════════
   // PHASE 4 — Diff banner texts; queue banner writes; final flush
   // ══════════════════════════════════════════════════════════════════════════
+  const footnoteRemovalRows = [];
   for (const rec of records) {
     if (rec.status !== "pending") continue;
 
     rec.status = "cleared"; // body writes already flushed in sync 3
+
+    // Generated footnote below this cleared table → schedule its row for deletion.
+    if (rec.footnoteProbeRange && probeRowIsGeneratedFootnote(rec.footnoteProbeRange.values)) {
+      footnoteRemovalRows.push(rec.footnoteRowIndex);
+    }
 
     if (!rec.bannerScanRange) continue;
 
@@ -2799,6 +2830,7 @@ async function clearSignificanceForSheetBatched(context, worksheetRef, candidate
 
   return {
     results,
+    footnoteRemovalRows,
     sheetDiags: {
       syncPhases: 4,
       sourceRangesLoaded: candidates.length,
@@ -3067,16 +3099,28 @@ async function clearSignificanceForWorkbookBatched(context, eligible) {
         rec.bannerStartRowAbs = targetStartRowIndex - totalScanRowCount;
       }
     }
+
+    // Probe the row below this table for a generated footnote (flushed by sync 3).
+    const probe = buildFootnoteProbe(wsRef, rec.knownDims, targetValues.length);
+    probe.range.load("values");
+    rec.footnoteProbeRange = probe.range;
+    rec.footnoteRowIndex = probe.footnoteRowIndex;
   }
   await context.sync(); // Sync 3 — flushes ALL body writes; reads ALL banner scan texts
 
   // ══════════════════════════════════════════════════════════════════════════
   // PHASE 4 — Diff banner texts; queue banner writes; final flush (all sheets)
   // ══════════════════════════════════════════════════════════════════════════
+  const footnoteRemovalJobs = [];
   for (const rec of records) {
     if (rec.status !== "pending") continue;
 
     rec.status = "cleared"; // body writes already flushed in sync 3
+
+    // Generated footnote below this cleared table → schedule its row for deletion.
+    if (rec.footnoteProbeRange && probeRowIsGeneratedFootnote(rec.footnoteProbeRange.values)) {
+      footnoteRemovalJobs.push({ sheetName: rec.sheetName, footnoteRowIndex: rec.footnoteRowIndex });
+    }
 
     if (!rec.bannerScanRange) continue;
 
@@ -3152,6 +3196,7 @@ async function clearSignificanceForWorkbookBatched(context, eligible) {
 
   return {
     results,
+    footnoteRemovalJobs,
     batchDiags: {
       syncPhases: 4,
       sourceRangesLoaded: eligible.length,
@@ -3226,6 +3271,9 @@ async function clearAutoSignificance() {
   // Always build the by-sheet map so the per-sheet fallback loop has it ready.
   const bySheet = groupCandidatesBySheet(eligible);
 
+  // Generated footnote rows to silently delete after all clearing completes.
+  const footnoteRemovalJobs = [];
+
   // ── ATTEMPT 1: workbook-level staged batch (1 context, 4 syncs total) ──────
   let _wbResults = null;
   let _wbBatchDiags = null;
@@ -3235,6 +3283,7 @@ async function clearAutoSignificance() {
       const r = await clearSignificanceForWorkbookBatched(context, eligible);
       _wbResults = r.results;
       _wbBatchDiags = r.batchDiags;
+      if (Array.isArray(r.footnoteRemovalJobs)) footnoteRemovalJobs.push(...r.footnoteRemovalJobs);
     });
     contextRuns = 1;
   } catch (_wbErr) {
@@ -3281,7 +3330,7 @@ async function clearAutoSignificance() {
       try {
         await Excel.run(async (context) => {
           const worksheetRef = context.workbook.worksheets.getItem(sheetName);
-          const { results: batchResults, sheetDiags } = await clearSignificanceForSheetBatched(
+          const { results: batchResults, sheetDiags, footnoteRemovalRows } = await clearSignificanceForSheetBatched(
             context,
             worksheetRef,
             sheetCandidates
@@ -3290,6 +3339,11 @@ async function clearAutoSignificance() {
           _clearAggregate.sourceRangesLoaded += sheetDiags.sourceRangesLoaded;
           _clearAggregate.targetRangesLoaded += sheetDiags.targetRangesLoaded;
           _clearAggregate.bannerRangesLoaded += sheetDiags.bannerRangesLoaded;
+          if (Array.isArray(footnoteRemovalRows)) {
+            for (const rowIndex of footnoteRemovalRows) {
+              footnoteRemovalJobs.push({ sheetName, footnoteRowIndex: rowIndex });
+            }
+          }
           for (let _si = 0; _si < batchResults.length; _si++) {
             const result = batchResults[_si];
             const candidate = sheetCandidates[_si];
@@ -3326,6 +3380,7 @@ async function clearAutoSignificance() {
             cleared++;
             sheetClearedCount++;
             accumulateClearDetails(_clearAggregate, result._clearDetails);
+            if (result.footnoteRemovalJob) footnoteRemovalJobs.push(result.footnoteRemovalJob);
           } else if (result.status === "skipped") {
             skipped++;
             detailLines.push(
@@ -3348,6 +3403,9 @@ async function clearAutoSignificance() {
       if (sheetClearedCount > 0) sheetsCleared++;
     }
   }
+
+  // Silently delete generated footnote rows for cleared tables (bottom-to-top).
+  await applySignificanceFootnoteRemovalJobsInOwnContext(footnoteRemovalJobs);
 
   const summaryLines = [
     "Автоочистка завершена.",
@@ -3797,6 +3855,9 @@ async function clearCurrentSheetSignificance() {
   // Group by sheet; each sheet is cleared in one staged 4-sync batch.
   const bySheet = groupCandidatesBySheet(eligible);
 
+  // Generated footnote rows to silently delete after all clearing completes.
+  const footnoteRemovalJobs = [];
+
   for (const [sheetName, sheetCandidates] of bySheet) {
     let batchEndedAt = 0;
     let sheetClearedCount = 0;
@@ -3806,7 +3867,7 @@ async function clearCurrentSheetSignificance() {
     try {
       await Excel.run(async (context) => {
         const worksheetRef = context.workbook.worksheets.getItem(sheetName);
-        const { results: batchResults, sheetDiags } = await clearSignificanceForSheetBatched(
+        const { results: batchResults, sheetDiags, footnoteRemovalRows } = await clearSignificanceForSheetBatched(
           context,
           worksheetRef,
           sheetCandidates
@@ -3815,6 +3876,11 @@ async function clearCurrentSheetSignificance() {
         _clearAggregate.sourceRangesLoaded += sheetDiags.sourceRangesLoaded;
         _clearAggregate.targetRangesLoaded += sheetDiags.targetRangesLoaded;
         _clearAggregate.bannerRangesLoaded += sheetDiags.bannerRangesLoaded;
+        if (Array.isArray(footnoteRemovalRows)) {
+          for (const rowIndex of footnoteRemovalRows) {
+            footnoteRemovalJobs.push({ sheetName, footnoteRowIndex: rowIndex });
+          }
+        }
         for (let _si = 0; _si < batchResults.length; _si++) {
           const result = batchResults[_si];
           const candidate = sheetCandidates[_si];
@@ -3850,6 +3916,7 @@ async function clearCurrentSheetSignificance() {
           cleared++;
           sheetClearedCount++;
           accumulateClearDetails(_clearAggregate, result._clearDetails);
+          if (result.footnoteRemovalJob) footnoteRemovalJobs.push(result.footnoteRemovalJob);
         } else if (result.status === "skipped") {
           skipped++;
           detailLines.push(
@@ -3871,6 +3938,9 @@ async function clearCurrentSheetSignificance() {
 
     if (sheetClearedCount > 0) sheetsCleared++;
   }
+
+  // Silently delete generated footnote rows for cleared tables (bottom-to-top).
+  await applySignificanceFootnoteRemovalJobsInOwnContext(footnoteRemovalJobs);
 
   const summaryLines = [
     "Лист — очистка завершена.",
@@ -4500,11 +4570,31 @@ async function clearSignificanceFromSelection() {
     clearTargetRange.format.font.bold = false;
     clearTargetRange.format.fill.clear();
 
+    // Probe the row immediately below the cleared table for a generated footnote
+    // (queued before the banner read so its sync flushes it — no extra round-trip).
+    const { range: footnoteProbeRange, footnoteRowIndex } = buildFootnoteProbe(
+      clearTargetRange.worksheet,
+      _knownDims,
+      targetValues.length
+    );
+    footnoteProbeRange.load("values");
+
     // No body sync here — deferred to the banner read sync inside
     // clearBannerMarkerUpdatesForRange, which flushes all queued writes.
     const bannerDetails = await clearBannerMarkerUpdatesForRange(context, clearTargetRange, _knownDims);
 
     await context.sync();
+
+    // Silently delete a generated footnote row directly below the cleared table.
+    // Single table → no bottom-to-top ordering concern. Only deletes a row that
+    // starts with the marker, so ordinary user notes under the table are kept.
+    if (probeRowIsGeneratedFootnote(footnoteProbeRange.values)) {
+      clearTargetRange.worksheet
+        .getRangeByIndexes(footnoteRowIndex, 0, 1, 1)
+        .getEntireRow()
+        .delete(Excel.DeleteShiftDirection.up);
+      await context.sync();
+    }
 
     perfLog("clearSignificanceFromSelection", {
       bodyCellsRead: targetValues.length * (targetValues[0] ? targetValues[0].length : 0),
@@ -5969,6 +6059,96 @@ async function applySignificanceFootnoteJobsInOwnContext(jobs) {
     });
   } catch (footnoteErr) {
     console.warn("RIT: не удалось записать подписи под таблицами.", footnoteErr);
+  }
+}
+
+// ─── Significance footnote removal (Clear) ──────────────────────────────────────
+//
+// Clear Significance silently removes a RIT-generated footnote row directly below
+// a cleared table. Removal is unconditional (no separate setting) but strictly
+// guarded: only a row whose detected cell starts with SIGNIFICANCE_FOOTNOTE_MARKER
+// is deleted, so ordinary user comments/notes under a table are never touched.
+//
+// Detection reads the row immediately below the cleared data body, scanning a few
+// columns to the LEFT as well so the marker (which lives in the merged footnote's
+// top-left cell, i.e. the table's left label column) is seen. Detection piggybacks
+// on existing Clear syncs; the actual row deletions are applied afterwards,
+// bottom-to-top per worksheet, so they never shift ranges still being cleared.
+
+/**
+ * Builds the footnote probe range for one cleared table and the absolute index
+ * of the row immediately below it.
+ *
+ * @param worksheet         Excel.Worksheet proxy.
+ * @param knownDims         { rowIndex, columnIndex, columnCount } of the cleared body.
+ * @param dataBodyRowCount  row count of the cleared body.
+ */
+function buildFootnoteProbe(worksheet, knownDims, dataBodyRowCount) {
+  const footnoteRowIndex = knownDims.rowIndex + dataBodyRowCount; // bottom row + 1
+  const startCol = Math.max(0, knownDims.columnIndex - LABEL_SCAN_COLUMNS_LEFT);
+  const colCount = knownDims.columnIndex + knownDims.columnCount - startCol;
+  const range = worksheet.getRangeByIndexes(footnoteRowIndex, startCol, 1, Math.max(1, colCount));
+  return { range, footnoteRowIndex };
+}
+
+/**
+ * True when a probe row's loaded values contain a generated footnote marker cell.
+ */
+function probeRowIsGeneratedFootnote(probeValues) {
+  if (!probeValues || !probeValues[0]) return false;
+  return probeValues[0].some((cell) => isGeneratedSignificanceFootnoteRow(cell));
+}
+
+/**
+ * Deletes generated footnote rows for cleared tables. Jobs are grouped per sheet
+ * and deleted bottom-to-top (descending row) so each deletion never shifts the
+ * index of a not-yet-deleted footnote above it. Identical rows are de-duplicated.
+ * Only ever called with rows already confirmed to start with the footnote marker.
+ */
+async function applySignificanceFootnoteRemovalJobs(context, jobs) {
+  if (!Array.isArray(jobs) || jobs.length === 0) return;
+
+  const jobsBySheet = new Map();
+  for (const job of jobs) {
+    if (!job || !job.sheetName || !Number.isFinite(job.footnoteRowIndex)) continue;
+    if (!jobsBySheet.has(job.sheetName)) jobsBySheet.set(job.sheetName, []);
+    jobsBySheet.get(job.sheetName).push(job);
+  }
+
+  let queuedAnyDeletion = false;
+  for (const [sheetName, sheetJobs] of jobsBySheet) {
+    const worksheet = context.workbook.worksheets.getItem(sheetName);
+    const seenRows = new Set();
+    const sortedRows = sheetJobs
+      .map((j) => j.footnoteRowIndex)
+      .sort((a, b) => b - a);
+    for (const rowIndex of sortedRows) {
+      if (seenRows.has(rowIndex)) continue;
+      seenRows.add(rowIndex);
+      worksheet
+        .getRangeByIndexes(rowIndex, 0, 1, 1)
+        .getEntireRow()
+        .delete(Excel.DeleteShiftDirection.up);
+      queuedAnyDeletion = true;
+    }
+  }
+
+  if (queuedAnyDeletion) await context.sync();
+}
+
+/**
+ * Applies footnote removal jobs inside a dedicated Excel.run. Safe to call after
+ * the Clear pipeline has committed — row indices stay valid because clearing never
+ * inserts or deletes rows.
+ */
+async function applySignificanceFootnoteRemovalJobsInOwnContext(jobs) {
+  if (!Array.isArray(jobs) || jobs.length === 0) return;
+  try {
+    await Excel.run(async (context) => {
+      await applySignificanceFootnoteRemovalJobs(context, jobs);
+    });
+  } catch (footnoteErr) {
+    console.warn("RIT: не удалось удалить подписи под таблицами.", footnoteErr);
   }
 }
 
