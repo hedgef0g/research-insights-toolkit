@@ -140,6 +140,65 @@ export function runningStatusMessage(action, scope) {
   return detail ? `${prefix} ${detail}` : prefix;
 }
 
+// Width (in characters) of the text progress bar used by buildBatchProgressStatus.
+export const BATCH_PROGRESS_BAR_WIDTH = 20;
+
+/**
+ * Build a plain-text progress bar like [████░░░░░░░░░░░░░░░░].
+ *
+ * Returns plain text only (no markup) because setStatusMessage writes
+ * textContent. The percent is clamped to 0..100 before filling.
+ */
+export function buildBatchProgressBar(percent, width = BATCH_PROGRESS_BAR_WIDTH) {
+  const safeWidth = Number.isFinite(width) && width > 0 ? Math.round(width) : BATCH_PROGRESS_BAR_WIDTH;
+  const clamped = Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0));
+  const filled = Math.round((clamped / 100) * safeWidth);
+  return `[${"█".repeat(filled)}${"░".repeat(safeWidth - filled)}]`;
+}
+
+/**
+ * Build a live progress status string for heavy Run/Clear batch operations.
+ *
+ * Pure helper — returns plain text only. Shows the current table index, total,
+ * percent complete, current sheet name, a text progress bar and the remaining
+ * count. Uses a 1-based currentIndex and Math.round(currentIndex / total * 100).
+ *
+ * @param {object} opts
+ * @param {"run"|"clear"} opts.action
+ * @param {"sheet"|"workbook"} opts.scope
+ * @param {number} opts.currentIndex 1-based index of the table just processed.
+ * @param {number} opts.total Total number of tables in the batch.
+ * @param {string} [opts.sheetName] Sheet name of the current table.
+ */
+export function buildBatchProgressStatus({ action, scope, currentIndex, total, sheetName } = {}) {
+  const safeTotal = Number.isFinite(total) && total > 0 ? Math.floor(total) : 0;
+  const rawIndex = Number.isFinite(currentIndex) && currentIndex > 0 ? Math.floor(currentIndex) : 0;
+  const boundedIndex = safeTotal > 0 ? Math.min(rawIndex, safeTotal) : rawIndex;
+  const percent = safeTotal > 0 ? Math.round((boundedIndex / safeTotal) * 100) : 0;
+  const remaining = safeTotal > 0 ? Math.max(0, safeTotal - boundedIndex) : 0;
+
+  const prefix =
+    {
+      run: "Расчёт",
+      clear: "Очистка",
+    }[action] || "Обработка";
+  const scopeLabel =
+    {
+      sheet: "текущий лист",
+      workbook: "вся книга",
+    }[scope] || "";
+
+  const headline = scopeLabel ? `${prefix} — ${scopeLabel}` : prefix;
+  const bar = buildBatchProgressBar(percent);
+
+  return [
+    headline,
+    `${bar} ${percent}%`,
+    `Таблица ${boundedIndex} из ${safeTotal} · Лист: ${sheetName || "—"}`,
+    `Осталось: ${remaining}`,
+  ].join("\n");
+}
+
 export function buildCheckResolverMessage(resolverResult) {
   if (resolverResult.message) return resolverResult.message;
   switch (resolverResult.status) {
