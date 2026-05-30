@@ -80,6 +80,63 @@ export function countAdjacentLabelColumns(leftLabelValues) {
 }
 
 /**
+ * Resolves the adjacent row-label column count — the shared source of truth used
+ * by both Check (label-column report) and design recolor — from selected-range
+ * interpretation data.
+ *
+ * This is the meaningful, recolorable adjacent label AREA width, which can be
+ * wider than the normalizer's text-only `labelColCount`. In a normalized
+ * selection EVERY column to the left of the data body is part of the row-label /
+ * structure area (label text columns plus any merged or blank label-area columns
+ * a two-column label header may leave empty), so the area width is exactly the
+ * data-body column offset. This is what fixes Mean + SD/Variance + Base tables
+ * whose labels are merged across two columns or stored only in the left column:
+ * the blank data-adjacent label column is no longer dropped.
+ *
+ * Genuine gaps are still excluded:
+ *   - `labelsOnLeftSide`            → 0 (far-left labels, recolor disabled);
+ *   - pass-through `leadingEmptyColumns > 0` → 0 (external labels separated from
+ *     the data body by a blank helper/spacer column — a real gap).
+ *
+ * @param {object} args
+ * @param {"normalized"|"passThrough"|"blocked"} args.state
+ * @param {boolean} args.labelsOnLeftSide
+ * @param {number}  args.dataColumnOffset   - columns left of the data body inside
+ *        the selection (normalizer label columns + embedded + stripped blanks).
+ *        Used for the normalized state only.
+ * @param {number}  args.leadingEmptyColumns - pass-through leading blank helper
+ *        columns between an external label column and the data body.
+ * @param {Array<Array<*>>} args.leftLabelValues - label matrix (rightmost column
+ *        adjacent to the data body) for externally/embedded-loaded labels.
+ * @returns {number}
+ */
+export function resolveAdjacentLabelColumnCount({
+  state,
+  labelsOnLeftSide,
+  dataColumnOffset = 0,
+  leadingEmptyColumns = 0,
+  leftLabelValues,
+} = {}) {
+  if (labelsOnLeftSide) return 0;
+  if (state === "blocked") return 0;
+
+  if (state === "normalized") {
+    // Every column left of the data body in a normalized table is label/structure
+    // (label text + merged/blank label-area columns). Width = data column offset.
+    if (dataColumnOffset > 0) return dataColumnOffset;
+    // No in-selection label columns: labels were loaded externally, immediately
+    // left of the data body — fall back to scanning the loaded matrix.
+    return countAdjacentLabelColumns(leftLabelValues);
+  }
+
+  // pass-through: external/embedded labels immediately left of the data body.
+  // A leading empty helper column means external labels are separated from the
+  // data body by a real gap, so there is no adjacent label area to recolor.
+  if (leadingEmptyColumns > 0) return 0;
+  return countAdjacentLabelColumns(leftLabelValues);
+}
+
+/**
  * Builds a design recolor job for a single processed table, or null when the
  * feature is off / geometry is unusable.
  *

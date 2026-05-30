@@ -16,7 +16,7 @@
 import { removeSignificanceMarkersFromMatrix, generateSignificanceLabels } from "../core/significance";
 import { LABEL_SCAN_COLUMNS_LEFT } from "../core/metric-detector";
 import { normalizeSelectedRange } from "../core/range-normalizer";
-import { countAdjacentLabelColumns } from "../core/design-recolor";
+import { resolveAdjacentLabelColumnCount } from "../core/design-recolor";
 
 const SELECTED_RANGE_GUARDRAIL_WARNING_TEXT =
   "Похоже, вы выделили лейблы строк или шапку вместе с данными. Сейчас RIT ожидает выделение только числовой части таблицы.";
@@ -831,14 +831,19 @@ export async function interpretSelectedRange(
       dataColOffset: effectiveDataColOffset,
       dataRowCount: valuesForCalculation.length,
       dataColCount: valuesForCalculation[0].length,
-      // Design-recolor geometry (issue #306). The interpreted left-label columns
-      // are adjacent to the data body in every normalized sub-case EXCEPT when a
-      // leading all-blank helper column was stripped (additionalLeadingEmptyCols),
-      // which inserts a gap between the labels and the data body — force 0 there.
-      adjacentLabelColumnCount:
-        calculationSettings.labelsOnLeftSide || additionalLeadingEmptyCols > 0
-          ? 0
-          : countAdjacentLabelColumns(leftLabelValues),
+      // Design-recolor / Check label geometry (issue #306). In a normalized
+      // selection every column left of the data body is label/structure, so the
+      // adjacent label AREA width is the data column offset — this keeps merged /
+      // left-stored two-column label headers (e.g. Mean + SD/Variance + Base)
+      // whose data-adjacent label column is blank from collapsing to one column.
+      // A stripped leading-empty column is therefore part of that area, not a gap;
+      // real gaps (labelsOnLeftSide) are still excluded by the shared resolver.
+      adjacentLabelColumnCount: resolveAdjacentLabelColumnCount({
+        state: "normalized",
+        labelsOnLeftSide: calculationSettings.labelsOnLeftSide,
+        dataColumnOffset: effectiveDataColOffset,
+        leftLabelValues,
+      }),
       // Banner band the normalizer identified directly above the data body. This
       // excludes title/subtitle rows, which are tracked separately.
       bannerRowsAboveData: Array.isArray(normalized.bannerRows)
@@ -949,14 +954,17 @@ export async function interpretSelectedRange(
     dataColOffset: embeddedLabelCols > 0 ? embeddedLabelCols : leadingEmptyCols,
     dataRowCount: valuesForCalculation.length,
     dataColCount,
-    // Design-recolor geometry (issue #306). leftLabelValues sit immediately left
-    // of the data body for embedded/external labels, so a blank-stop scan yields
-    // the true adjacent label width. A stripped leading empty column inserts a
-    // gap between the (externally loaded) labels and the data body — force 0.
-    adjacentLabelColumnCount:
-      calculationSettings.labelsOnLeftSide || leadingEmptyCols > 0
-        ? 0
-        : countAdjacentLabelColumns(leftLabelValues),
+    // Design-recolor / Check label geometry (issue #306). leftLabelValues sit
+    // immediately left of the data body for embedded/external labels, so the
+    // shared resolver counts the adjacent label area (right-blank two-column
+    // layouts included). A stripped leading empty column means the externally
+    // loaded labels are separated from the data by a real gap — force 0.
+    adjacentLabelColumnCount: resolveAdjacentLabelColumnCount({
+      state: "passThrough",
+      labelsOnLeftSide: calculationSettings.labelsOnLeftSide,
+      leadingEmptyColumns: leadingEmptyCols,
+      leftLabelValues,
+    }),
     // In pass-through the selection is the data body itself; any banner sits
     // above the selection in the sheet, not inside it. The run flow recolors the
     // single header row directly above the data body for this case.

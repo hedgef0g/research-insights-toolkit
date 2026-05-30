@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   countAdjacentLabelColumns,
+  resolveAdjacentLabelColumnCount,
   buildDesignRecolorJob,
 } from "../../src/core/design-recolor.js";
 
@@ -72,6 +73,98 @@ describe("countAdjacentLabelColumns", () => {
       ["SD", 0],
     ];
     assert.strictEqual(countAdjacentLabelColumns(labels), 2);
+  });
+});
+
+describe("resolveAdjacentLabelColumnCount", () => {
+  it("normalized: uses the data column offset as the label-area width", () => {
+    // Mean + SD/Variance + Base with a merged/left-stored two-column label area:
+    // normalizer label col (1) + stripped blank data-adjacent label col (1) →
+    // effective data column offset 2. Label text lives only in the left column.
+    const count = resolveAdjacentLabelColumnCount({
+      state: "normalized",
+      labelsOnLeftSide: false,
+      dataColumnOffset: 2,
+      leftLabelValues: [["Mean"], ["Standard deviation"], ["Base"]],
+    });
+    assert.strictEqual(count, 2);
+  });
+
+  it("normalized: Mean + Variance + Base merged labels also resolve to 2", () => {
+    const count = resolveAdjacentLabelColumnCount({
+      state: "normalized",
+      labelsOnLeftSide: false,
+      dataColumnOffset: 2,
+      leftLabelValues: [["Mean"], ["Variance"], ["Base"]],
+    });
+    assert.strictEqual(count, 2);
+  });
+
+  it("normalized: a true single-column label table resolves to 1", () => {
+    const count = resolveAdjacentLabelColumnCount({
+      state: "normalized",
+      labelsOnLeftSide: false,
+      dataColumnOffset: 1,
+      leftLabelValues: [["Agree"], ["Disagree"], ["Base"]],
+    });
+    assert.strictEqual(count, 1);
+  });
+
+  it("normalized: external labels (offset 0) fall back to scanning the matrix", () => {
+    const count = resolveAdjacentLabelColumnCount({
+      state: "normalized",
+      labelsOnLeftSide: false,
+      dataColumnOffset: 0,
+      leftLabelValues: [["", "Agree"], ["", "Disagree"], ["", "Base"]],
+    });
+    assert.strictEqual(count, 1);
+  });
+
+  it("pass-through: scans the adjacent label matrix (right-blank two-column → 2)", () => {
+    const count = resolveAdjacentLabelColumnCount({
+      state: "passThrough",
+      labelsOnLeftSide: false,
+      leadingEmptyColumns: 0,
+      leftLabelValues: [["Mean", ""], ["SD", ""], ["Base", ""]],
+    });
+    assert.strictEqual(count, 2);
+  });
+
+  it("pass-through: a real blank helper gap (leadingEmptyColumns > 0) resolves to 0", () => {
+    const count = resolveAdjacentLabelColumnCount({
+      state: "passThrough",
+      labelsOnLeftSide: false,
+      leadingEmptyColumns: 1,
+      leftLabelValues: [["Mean", ""], ["SD", ""], ["Base", ""]],
+    });
+    assert.strictEqual(count, 0);
+  });
+
+  it("labelsOnLeftSide forces 0 in any state", () => {
+    assert.strictEqual(
+      resolveAdjacentLabelColumnCount({
+        state: "normalized",
+        labelsOnLeftSide: true,
+        dataColumnOffset: 2,
+        leftLabelValues: [["Mean"], ["SD"]],
+      }),
+      0
+    );
+    assert.strictEqual(
+      resolveAdjacentLabelColumnCount({
+        state: "passThrough",
+        labelsOnLeftSide: true,
+        leftLabelValues: [["Mean", "x"]],
+      }),
+      0
+    );
+  });
+
+  it("blocked state resolves to 0", () => {
+    assert.strictEqual(
+      resolveAdjacentLabelColumnCount({ state: "blocked", labelsOnLeftSide: false }),
+      0
+    );
   });
 });
 
@@ -237,6 +330,33 @@ describe("buildDesignRecolorJob", () => {
     });
     assert.deepStrictEqual(job.rects, [
       { rowIndex: 5, columnIndex: 1, rowCount: 3, columnCount: 2 },
+    ]);
+  });
+
+  it("regression: normalized Mean + SD + Base (blank data-adjacent label col) recolors 2 columns", () => {
+    // Interpreter path: normalizer detects 1 text label column, the blank
+    // data-adjacent label column is stripped from the body (effective data column
+    // offset 2). The shared resolver yields 2; recolor covers both label columns.
+    const adjacentLabelColumnCount = resolveAdjacentLabelColumnCount({
+      state: "normalized",
+      labelsOnLeftSide: false,
+      dataColumnOffset: 2,
+      leftLabelValues: [["Mean"], ["Standard deviation"], ["Base"]],
+    });
+    assert.strictEqual(adjacentLabelColumnCount, 2);
+
+    const job = buildDesignRecolorJob({
+      sheetName: "Sheet1",
+      dataStartRowIndex: 4,
+      dataStartColIndex: 3, // data body starts at col 3 → label cols 1 and 2
+      dataRowCount: 3,
+      dataColCount: 5,
+      adjacentLabelColumnCount,
+      bannerRowCount: 0,
+      calculationSettings: ON,
+    });
+    assert.deepStrictEqual(job.rects, [
+      { rowIndex: 4, columnIndex: 1, rowCount: 3, columnCount: 2 },
     ]);
   });
 });

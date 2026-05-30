@@ -5007,8 +5007,11 @@ async function checkSelectedRangePreview(context, sheetName, rangeAddress, setti
       parts.push(`подзаголовков: ${normalized.subtitleRows.length}`);
     if (normalized.bannerRows.length > 0)
       parts.push(`строк баннера: ${normalized.bannerRows.length}`);
-    if (normalized.labelColumns.length > 0)
-      parts.push(`колонок меток: ${normalized.labelColumns.length}`);
+    // Report the adjacent label AREA width (shared source of truth with design
+    // recolor), not just the normalizer's text-only label columns: a merged or
+    // left-stored two-column label header counts as two label columns.
+    if (interpretation.adjacentLabelColumnCount > 0)
+      parts.push(`колонок меток: ${interpretation.adjacentLabelColumnCount}`);
     if (parts.length > 0) normalizationLines.push(`Отделено: ${parts.join(", ")}.`);
   }
 
