@@ -67,6 +67,13 @@ export const SETTINGS_CONTROL_CONFIG = [
   { id: "small-base-threshold", type: "number", settingName: "smallBaseThreshold" },
   { id: "small-base-fill-color", type: "value", settingName: "smallBaseFillColor" },
 
+  {
+    id: "recolor-banner-and-labels",
+    type: "checked",
+    settingName: "recolorBannerAndLabels",
+  },
+  { id: "banner-label-fill-color", type: "value", settingName: "bannerLabelFillColor" },
+
   { id: "preferred-base", type: "value", settingName: "preferredBase" },
 
   { id: "settings-storage-mode", type: "value", settingName: "settingsStorageMode" },
@@ -102,6 +109,9 @@ export const DEFAULT_CALCULATION_SETTINGS = {
   excludeSmallBasesFromComparisons: false,
   smallBaseThreshold: 50,
   smallBaseFillColor: "#D0D0D0",
+
+  recolorBannerAndLabels: false,
+  bannerLabelFillColor: "#FFF2CC",
 
   preferredBase: "auto",
 

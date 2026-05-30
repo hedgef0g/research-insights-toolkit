@@ -85,6 +85,11 @@
 
         <div class="action-workspace" data-workspace="run-current_table">
           <p class="run-scope-fixed" data-i18n="hint.runCurrentTable">Область: выделенный диапазон</p>
+          <div id="manual-run-recolor-warning" class="settings-warning" style="display: none">
+            <span data-i18n="hint.manualRunRecolorUnavailable"
+              >Перекраска баннера и лейблов недоступна в ручном расчёте. Используйте автозапуск по текущей таблице, листу или книге.</span
+            >
+          </div>
           <div class="action-buttons-row">
             <button id="calculate-significance" class="primary-action-button">
               <svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="16" y1="14" x2="16" y2="18"/><line x1="8" y1="10" x2="8" y2="10.01"/><line x1="12" y1="10" x2="12" y2="10.01"/><line x1="16" y1="10" x2="16" y2="10.01"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="8" y1="18" x2="8" y2="18.01"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
@@ -422,6 +427,20 @@
           <div class="settings-group">
             <label for="small-base-fill-color" data-i18n="settings.smallBaseFillColor">Заливка маленькой базы</label>
             <input type="color" id="small-base-fill-color" value="#D0D0D0" />
+          </div>
+
+          <div class="settings-group">
+            <label class="inline-checkbox-label" for="recolor-banner-and-labels">
+              <input type="checkbox" id="recolor-banner-and-labels" />
+              <span data-i18n="settings.recolorBannerAndLabels">Перекрашивать баннер и лейблы</span>
+            </label>
+            <label for="banner-label-fill-color" data-i18n="settings.bannerLabelFillColor">Цвет баннера и лейблов</label>
+            <input type="color" id="banner-label-fill-color" value="#FFF2CC" />
+            <div id="recolor-banner-and-labels-warning" class="settings-warning" style="display: none">
+              <span data-i18n="settings.recolorBannerAndLabelsUnavailable"
+                >Перекраска баннера и лейблов недоступна, когда лейблы не примыкают к данным.</span
+              >
+            </div>
           </div>
         </div>
 

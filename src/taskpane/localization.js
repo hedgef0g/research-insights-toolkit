@@ -34,6 +34,8 @@ const STRINGS = {
     "btn.createContents": "Создать оглавление",
 
     "hint.runCurrentTable": "Область: выделенный диапазон",
+    "hint.manualRunRecolorUnavailable":
+      "Перекраска баннера и лейблов недоступна в ручном расчёте. Используйте автозапуск по текущей таблице, листу или книге.",
     "hint.autorunCurrentTable": "Область: активная ячейка → таблица",
     "hint.checkCurrentTable": "Проверяет таблицу вокруг активной ячейки.",
     "hint.checkCurrentSheet": "Проверяет таблицы на текущем листе.",
@@ -154,6 +156,10 @@ const STRINGS = {
     "settings.lowerThanTotalFillColor": "Заливка < Тотал",
     "settings.fillOnlyTotalComparisons": "Заливка только для Тотала",
     "settings.smallBaseFillColor": "Заливка маленькой базы",
+    "settings.recolorBannerAndLabels": "Перекрашивать баннер и лейблы",
+    "settings.bannerLabelFillColor": "Цвет баннера и лейблов",
+    "settings.recolorBannerAndLabelsUnavailable":
+      "Перекраска баннера и лейблов недоступна, когда лейблы не примыкают к данным.",
 
     "settings.oneTailedTest": "Односторонний тест",
     "settings.preferredBaseAuto": "Авто",
@@ -182,6 +188,8 @@ const STRINGS = {
     "btn.createContents": "Create contents",
 
     "hint.runCurrentTable": "Scope: selected range",
+    "hint.manualRunRecolorUnavailable":
+      "Banner and label recolor is unavailable in Manual Run. Use current-table, current-sheet, or workbook autorun.",
     "hint.autorunCurrentTable": "Scope: active cell → table",
     "hint.checkCurrentTable": "Checks the table around the active cell.",
     "hint.checkCurrentSheet": "Checks tables on the current sheet.",
@@ -302,6 +310,10 @@ const STRINGS = {
     "settings.lowerThanTotalFillColor": "Fill < Total",
     "settings.fillOnlyTotalComparisons": "Fill only for Total comparisons",
     "settings.smallBaseFillColor": "Small base fill",
+    "settings.recolorBannerAndLabels": "Recolor banner and labels",
+    "settings.bannerLabelFillColor": "Banner and label color",
+    "settings.recolorBannerAndLabelsUnavailable":
+      "Banner and label recolor is unavailable when labels are not adjacent to the data.",
 
     "settings.oneTailedTest": "One-tailed test",
     "settings.preferredBaseAuto": "Auto",
