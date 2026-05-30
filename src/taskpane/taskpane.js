@@ -37,6 +37,8 @@ import {
   collectStatisticTypeLabels,
   buildSignificanceFootnoteCellValue,
   buildProcessedRangeFootnoteSuffix,
+  resolveFootnotePlacement,
+  FOOTNOTE_SCAN_WINDOW_ROWS,
 } from "../core/significance-footnote";
 
 import { detectBannerStructure } from "../core/banner-detector";
@@ -6036,40 +6038,73 @@ function buildSignificanceFootnoteJob({
     tableBottomRowIndex,
     tableLeftColIndex,
     tableRightColIndex,
+    dataStartColIndex,
     footnoteCellValue,
   };
 }
 
 /**
- * Inserts or updates a single footnote row directly below one table.
+ * Inserts or updates a single footnote row for one table.
  *
- * If a generated RIT footnote already sits immediately below the table, it is
- * updated in place (no new row). Otherwise a brand-new worksheet row is inserted
- * so existing content below the table is never overwritten. The footnote cells
- * are merged across exactly [tableLeftColIndex .. tableRightColIndex].
+ * A small bounded window of rows below the table body is scanned (values loaded
+ * across a span that also covers a couple of columns to the LEFT, so the marker
+ * is seen even when a label/data blank-gap column shifts the merged footnote's
+ * anchor). Placement is decided by the pure resolveFootnotePlacement helper:
+ *
+ *  - if a generated RIT footnote already exists for the table (marker-based), it
+ *    is updated in place — no new row, no duplicate;
+ *  - ordinary user note rows directly below the table are skipped, and the
+ *    generated footnote is inserted BELOW them (never overwriting them);
+ *  - otherwise a brand-new worksheet row is inserted so nothing is overwritten.
+ *
+ * The footnote cells are merged across exactly [tableLeftColIndex .. tableRightColIndex].
  */
 async function writeOrInsertSignificanceFootnoteRow(context, worksheet, job) {
-  const { tableBottomRowIndex, tableLeftColIndex, tableRightColIndex, footnoteCellValue } = job;
+  const { tableBottomRowIndex, tableLeftColIndex, tableRightColIndex, dataStartColIndex, footnoteCellValue } = job;
   const width = tableRightColIndex - tableLeftColIndex + 1;
   if (width < 1) return;
 
-  const footnoteRowIndex = tableBottomRowIndex + 1;
+  const firstRowBelowTable = tableBottomRowIndex + 1;
 
-  // Detect an existing RIT footnote at the row immediately below the table.
-  const probeCell = worksheet.getRangeByIndexes(footnoteRowIndex, tableLeftColIndex, 1, 1);
-  probeCell.load("values");
+  // Scan a span starting a few columns LEFT of the table so a left-offset marker
+  // (from a run whose label/gap geometry differed) is still detected.
+  const scanStartCol = Math.max(0, tableLeftColIndex - LABEL_SCAN_COLUMNS_LEFT);
+  const scanColCount = tableRightColIndex - scanStartCol + 1;
+  const dataColRef = Number.isFinite(dataStartColIndex) ? dataStartColIndex : tableLeftColIndex;
+  const dataColStartOffset = dataColRef - scanStartCol;
+
+  // Load the bounded window of rows below the table to decide placement.
+  const scanRange = worksheet.getRangeByIndexes(
+    firstRowBelowTable,
+    scanStartCol,
+    FOOTNOTE_SCAN_WINDOW_ROWS,
+    scanColCount
+  );
+  scanRange.load("values");
   await context.sync();
 
-  const existingValue =
-    probeCell.values && probeCell.values[0] ? probeCell.values[0][0] : null;
-  const hasExistingFootnote = isGeneratedSignificanceFootnoteRow(existingValue);
+  const placement = resolveFootnotePlacement(
+    scanRange.values,
+    firstRowBelowTable,
+    dataColStartOffset
+  );
+  const footnoteRowIndex = placement.rowIndex;
 
-  if (!hasExistingFootnote) {
+  if (placement.mode === "insert") {
     // Insert a new blank row so nothing existing below the table is overwritten.
     worksheet
       .getRangeByIndexes(footnoteRowIndex, 0, 1, 1)
       .getEntireRow()
       .insert(Excel.InsertShiftDirection.down);
+    await context.sync();
+  } else {
+    // Updating an existing generated footnote row in place: clear the full scan
+    // span first so a prior merge and any left-offset marker cell are removed
+    // before the row is rewritten at the current geometry. The row is RIT's own
+    // generated footnote row, so clearing its span never touches user content.
+    const priorRange = worksheet.getRangeByIndexes(footnoteRowIndex, scanStartCol, 1, scanColCount);
+    priorRange.unmerge();
+    priorRange.clear(Excel.ClearApplyTo.contents);
     await context.sync();
   }
 

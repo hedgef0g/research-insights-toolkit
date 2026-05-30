@@ -8,7 +8,14 @@ import {
   buildSignificanceFootnoteCellValue,
   buildProcessedRangeFootnoteSuffix,
   appendFootnoteScopeDetail,
+  classifyFootnoteScanRow,
+  resolveFootnotePlacement,
+  isFootnoteScanCellBlank,
+  FOOTNOTE_SCAN_WINDOW_ROWS,
 } from "../../src/core/significance-footnote.js";
+
+const MARKER = SIGNIFICANCE_FOOTNOTE_MARKER;
+const footnoteCell = (text = "Уровень значимости: 95%.") => MARKER + text;
 
 describe("significance footnote helpers", () => {
   it("marker is the fixed invisible prefix \\u2063\\u2063\\u2060\\u2063\\u2060", () => {
@@ -155,5 +162,87 @@ describe("processed-scope footnote suffixes", () => {
     assert.strictEqual(appendFootnoteScopeDetail("base.", ""), "base.");
     assert.strictEqual(appendFootnoteScopeDetail("base.", "   "), "base.");
     assert.strictEqual(appendFootnoteScopeDetail("base.", " X."), "base. X.");
+  });
+});
+
+describe("footnote placement (idempotent insert/replace)", () => {
+  it("classifies scanned rows by content and data-region population", () => {
+    // dataColStartOffset = 1: index 0 is a label/margin column, index >= 1 is data.
+    assert.strictEqual(classifyFootnoteScanRow([null, "", "  "], 1), "blank");
+    assert.strictEqual(classifyFootnoteScanRow([footnoteCell(), "", ""], 1), "marker");
+    // Marker is authoritative even when offset into the row (left blank-gap case).
+    assert.strictEqual(classifyFootnoteScanRow(["", "", footnoteCell()], 1), "marker");
+    // Populated only in the label/margin region → ordinary user note.
+    assert.strictEqual(classifyFootnoteScanRow(["Все респонденты", "", ""], 1), "note");
+    // Populated in the data region → start of another table.
+    assert.strictEqual(classifyFootnoteScanRow(["Возраст", "18-24", "25-34"], 1), "table");
+  });
+
+  it("isFootnoteScanCellBlank treats nullish / whitespace as blank", () => {
+    assert.strictEqual(isFootnoteScanCellBlank(null), true);
+    assert.strictEqual(isFootnoteScanCellBlank(undefined), true);
+    assert.strictEqual(isFootnoteScanCellBlank("   "), true);
+    assert.strictEqual(isFootnoteScanCellBlank(0), false);
+    assert.strictEqual(isFootnoteScanCellBlank("x"), false);
+  });
+
+  it("updates in place when a generated footnote is immediately below the table", () => {
+    // Regression 1: existing generated footnote is updated, not duplicated.
+    const scan = [[footnoteCell(), "", ""], [null, null, null]];
+    assert.deepStrictEqual(resolveFootnotePlacement(scan, 10, 1), {
+      mode: "update",
+      rowIndex: 10,
+    });
+  });
+
+  it("finds the generated footnote even with a label/data blank gap (left-offset marker)", () => {
+    // Regression 2: marker sits in a left column because of a blank gap column;
+    // the windowed scan still detects it and updates in place.
+    const scan = [["", "", footnoteCell()], [null, null, null]];
+    assert.deepStrictEqual(resolveFootnotePlacement(scan, 20, 2), {
+      mode: "update",
+      rowIndex: 20,
+    });
+  });
+
+  it("inserts below an ordinary user note row, preserving it", () => {
+    // Regression 3: note immediately below → footnote inserted on the next row.
+    const scan = [["Все респонденты", "", ""], [null, null, null]];
+    assert.deepStrictEqual(resolveFootnotePlacement(scan, 30, 1), {
+      mode: "insert",
+      rowIndex: 31,
+    });
+  });
+
+  it("updates a generated footnote that sits below an ordinary user note row", () => {
+    // Regression 4: note + existing generated footnote below it → update in place.
+    const scan = [["Все респонденты", "", ""], [footnoteCell(), "", ""], [null, null, null]];
+    assert.deepStrictEqual(resolveFootnotePlacement(scan, 40, 1), {
+      mode: "update",
+      rowIndex: 41,
+    });
+  });
+
+  it("does not attach to the next table below the current one", () => {
+    // Regression 7: next table starts right below → insert at the first row below
+    // this table (pushing the next table down), never updating the next table.
+    const scan = [["Возраст", "18-24", "25-34"], ["BASE", "100", "120"]];
+    assert.deepStrictEqual(resolveFootnotePlacement(scan, 50, 1), {
+      mode: "insert",
+      rowIndex: 50,
+    });
+  });
+
+  it("stops at a blank separation rather than adopting a distant marker", () => {
+    // A marker beyond a blank row belongs to another table; do not adopt it.
+    const scan = [[null, null, null], [footnoteCell(), "", ""]];
+    assert.deepStrictEqual(resolveFootnotePlacement(scan, 60, 1), {
+      mode: "insert",
+      rowIndex: 60,
+    });
+  });
+
+  it("scan window constant is small and bounded", () => {
+    assert.ok(FOOTNOTE_SCAN_WINDOW_ROWS >= 2 && FOOTNOTE_SCAN_WINDOW_ROWS <= 6);
   });
 });

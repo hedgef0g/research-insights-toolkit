@@ -146,3 +146,94 @@ export function buildProcessedRangeFootnoteSuffix(rangeAddress) {
 export function buildSignificanceFootnoteCellValue(options) {
   return SIGNIFICANCE_FOOTNOTE_MARKER + buildSignificanceFootnoteVisibleText(options);
 }
+
+// ─── Footnote placement (pure) ──────────────────────────────────────────────
+//
+// A generated footnote must be idempotent: re-running (Manual or Auto) over a
+// table that already has one must REPLACE it, never duplicate it. It must also
+// sit BELOW any ordinary user note rows ("Все респонденты", etc.) that belong
+// to the table, and must never overwrite them.
+//
+// The placement decision is pure: the Office-bound caller loads a small window
+// of rows below the table and hands the values matrix here. Detection of an
+// existing generated footnote is strictly marker-based, so ordinary notes are
+// never mistaken for a generated row.
+
+// How many rows below the table body to scan when deciding placement. Small and
+// bounded so the scan never walks unboundedly into the sheet.
+export const FOOTNOTE_SCAN_WINDOW_ROWS = 4;
+
+/**
+ * True when a scanned cell value is blank (null / undefined / whitespace-only).
+ */
+export function isFootnoteScanCellBlank(cellValue) {
+  return cellValue === null || cellValue === undefined || String(cellValue).trim() === "";
+}
+
+/**
+ * Classifies one scanned row below a table. `dataColStartOffset` is the index,
+ * within the scanned row array, at which the table's DATA columns begin (cells
+ * left of it are the table's label/margin columns).
+ *
+ * - "marker": contains a generated RIT footnote (marker-based, authoritative).
+ * - "blank":  no populated cells.
+ * - "note":   populated only in the label/margin columns → an ordinary user
+ *             note/footnote belonging to the table (e.g. "Все респонденты").
+ * - "table":  populated in the data region → the start of another table.
+ *
+ * @param {Array<*>} rowValues
+ * @param {number} dataColStartOffset
+ * @returns {"marker"|"blank"|"note"|"table"}
+ */
+export function classifyFootnoteScanRow(rowValues, dataColStartOffset = 0) {
+  if (!Array.isArray(rowValues)) return "blank";
+  if (rowValues.some((cell) => isGeneratedSignificanceFootnoteRow(cell))) return "marker";
+
+  let anyPopulated = false;
+  for (let i = 0; i < rowValues.length; i++) {
+    if (isFootnoteScanCellBlank(rowValues[i])) continue;
+    anyPopulated = true;
+    if (i >= dataColStartOffset) return "table";
+  }
+  return anyPopulated ? "note" : "blank";
+}
+
+/**
+ * Resolves where a single table's generated footnote should be written.
+ *
+ * `scanRows[i]` is the loaded value row at absolute index
+ * `firstRowBelowTable + i` (row immediately below the table body is i = 0).
+ * `dataColStartOffset` is passed through to classifyFootnoteScanRow.
+ *
+ * Algorithm (top-down, stopping at the first blank or next-table boundary):
+ *  - an existing generated footnote (marker row) reached before any blank/table
+ *    is updated IN PLACE — no row is inserted;
+ *  - consecutive ordinary note rows immediately below the table are skipped over
+ *    so the generated footnote is inserted BELOW them;
+ *  - otherwise the footnote is inserted at the first row below the table (after
+ *    any trailing notes), never overwriting existing content.
+ *
+ * @param {Array<Array<*>>} scanRows
+ * @param {number} firstRowBelowTable - absolute index of scanRows[0]
+ * @param {number} dataColStartOffset
+ * @returns {{ mode: "update"|"insert", rowIndex: number }}
+ */
+export function resolveFootnotePlacement(scanRows, firstRowBelowTable, dataColStartOffset = 0) {
+  const rows = Array.isArray(scanRows) ? scanRows : [];
+  let insertOffset = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    const kind = classifyFootnoteScanRow(rows[i], dataColStartOffset);
+    if (kind === "marker") {
+      return { mode: "update", rowIndex: firstRowBelowTable + i };
+    }
+    if (kind === "note") {
+      insertOffset = i + 1;
+      continue;
+    }
+    // "blank" or "table": the trailing note area (if any) has ended.
+    break;
+  }
+
+  return { mode: "insert", rowIndex: firstRowBelowTable + insertOffset };
+}
