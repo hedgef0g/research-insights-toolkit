@@ -33,11 +33,11 @@ import { buildTablePreviewModel } from "../core/table-preview-model";
 import { scanWorksheetForTables } from "../core/table-inventory-scanner";
 
 import {
-  isGeneratedSignificanceFootnoteRow,
   collectStatisticTypeLabels,
   buildSignificanceFootnoteCellValue,
   buildProcessedRangeFootnoteSuffix,
   resolveFootnotePlacement,
+  resolveFootnoteRemovalRow,
   FOOTNOTE_SCAN_WINDOW_ROWS,
 } from "../core/significance-footnote";
 
@@ -2461,7 +2461,7 @@ async function clearSignificanceForRangeInContext(context, sheetName, rangeAddre
   // Probe the row immediately below the cleared table for a generated footnote.
   // Queued before the banner read so its sync (or the final sync) flushes it —
   // no extra round-trip. Deletion happens later, bottom-to-top, by the caller.
-  const { range: footnoteProbeRange, footnoteRowIndex } = buildFootnoteProbe(
+  const { range: footnoteProbeRange, firstRowBelowTable, dataColStartOffset } = buildFootnoteProbe(
     worksheet,
     _knownDims,
     targetValues.length
@@ -2474,9 +2474,13 @@ async function clearSignificanceForRangeInContext(context, sheetName, rangeAddre
 
   await context.sync();
 
-  const footnoteRemovalJob = probeRowIsGeneratedFootnote(footnoteProbeRange.values)
-    ? { sheetName, footnoteRowIndex }
-    : null;
+  const footnoteRemovalRow = resolveFootnoteRemovalRow(
+    footnoteProbeRange.values,
+    firstRowBelowTable,
+    dataColStartOffset
+  );
+  const footnoteRemovalJob =
+    footnoteRemovalRow !== null ? { sheetName, footnoteRowIndex: footnoteRemovalRow } : null;
 
   const bodyCellsRead = targetValues.length * (targetValues[0] ? targetValues[0].length : 0);
 
@@ -2794,11 +2798,12 @@ async function clearSignificanceForSheetBatched(context, worksheetRef, candidate
       }
     }
 
-    // Probe the row below this table for a generated footnote (flushed by sync 3).
+    // Probe the rows below this table for a generated footnote (flushed by sync 3).
     const probe = buildFootnoteProbe(worksheetRef, rec.knownDims, targetValues.length);
     probe.range.load("values");
     rec.footnoteProbeRange = probe.range;
-    rec.footnoteRowIndex = probe.footnoteRowIndex;
+    rec.footnoteFirstRowBelow = probe.firstRowBelowTable;
+    rec.footnoteDataColStartOffset = probe.dataColStartOffset;
   }
   await context.sync(); // Sync 3 — flushes ALL body writes; reads ALL banner scan texts
 
@@ -2811,9 +2816,15 @@ async function clearSignificanceForSheetBatched(context, worksheetRef, candidate
 
     rec.status = "cleared"; // body writes already flushed in sync 3
 
-    // Generated footnote below this cleared table → schedule its row for deletion.
-    if (rec.footnoteProbeRange && probeRowIsGeneratedFootnote(rec.footnoteProbeRange.values)) {
-      footnoteRemovalRows.push(rec.footnoteRowIndex);
+    // Generated footnote in the trailing area below this cleared table → schedule
+    // its row for deletion (ordinary user notes are skipped, not removed).
+    if (rec.footnoteProbeRange) {
+      const removalRow = resolveFootnoteRemovalRow(
+        rec.footnoteProbeRange.values,
+        rec.footnoteFirstRowBelow,
+        rec.footnoteDataColStartOffset
+      );
+      if (removalRow !== null) footnoteRemovalRows.push(removalRow);
     }
 
     if (!rec.bannerScanRange) continue;
@@ -3159,11 +3170,12 @@ async function clearSignificanceForWorkbookBatched(context, eligible) {
       }
     }
 
-    // Probe the row below this table for a generated footnote (flushed by sync 3).
+    // Probe the rows below this table for a generated footnote (flushed by sync 3).
     const probe = buildFootnoteProbe(wsRef, rec.knownDims, targetValues.length);
     probe.range.load("values");
     rec.footnoteProbeRange = probe.range;
-    rec.footnoteRowIndex = probe.footnoteRowIndex;
+    rec.footnoteFirstRowBelow = probe.firstRowBelowTable;
+    rec.footnoteDataColStartOffset = probe.dataColStartOffset;
   }
   await context.sync(); // Sync 3 — flushes ALL body writes; reads ALL banner scan texts
 
@@ -3176,9 +3188,17 @@ async function clearSignificanceForWorkbookBatched(context, eligible) {
 
     rec.status = "cleared"; // body writes already flushed in sync 3
 
-    // Generated footnote below this cleared table → schedule its row for deletion.
-    if (rec.footnoteProbeRange && probeRowIsGeneratedFootnote(rec.footnoteProbeRange.values)) {
-      footnoteRemovalJobs.push({ sheetName: rec.sheetName, footnoteRowIndex: rec.footnoteRowIndex });
+    // Generated footnote in the trailing area below this cleared table → schedule
+    // its row for deletion (ordinary user notes are skipped, not removed).
+    if (rec.footnoteProbeRange) {
+      const removalRow = resolveFootnoteRemovalRow(
+        rec.footnoteProbeRange.values,
+        rec.footnoteFirstRowBelow,
+        rec.footnoteDataColStartOffset
+      );
+      if (removalRow !== null) {
+        footnoteRemovalJobs.push({ sheetName: rec.sheetName, footnoteRowIndex: removalRow });
+      }
     }
 
     if (!rec.bannerScanRange) continue;
@@ -4641,7 +4661,7 @@ async function clearSignificanceFromSelection() {
 
     // Probe the row immediately below the cleared table for a generated footnote
     // (queued before the banner read so its sync flushes it — no extra round-trip).
-    const { range: footnoteProbeRange, footnoteRowIndex } = buildFootnoteProbe(
+    const { range: footnoteProbeRange, firstRowBelowTable, dataColStartOffset } = buildFootnoteProbe(
       clearTargetRange.worksheet,
       _knownDims,
       targetValues.length
@@ -4654,12 +4674,18 @@ async function clearSignificanceFromSelection() {
 
     await context.sync();
 
-    // Silently delete a generated footnote row directly below the cleared table.
-    // Single table → no bottom-to-top ordering concern. Only deletes a row that
-    // starts with the marker, so ordinary user notes under the table are kept.
-    if (probeRowIsGeneratedFootnote(footnoteProbeRange.values)) {
+    // Silently delete the generated footnote row in the trailing area below the
+    // cleared table. Single table → no bottom-to-top ordering concern. Only a row
+    // holding the marker is deleted; ordinary user notes (even above the footnote)
+    // are skipped and preserved.
+    const footnoteRemovalRow = resolveFootnoteRemovalRow(
+      footnoteProbeRange.values,
+      firstRowBelowTable,
+      dataColStartOffset
+    );
+    if (footnoteRemovalRow !== null) {
       clearTargetRange.worksheet
-        .getRangeByIndexes(footnoteRowIndex, 0, 1, 1)
+        .getRangeByIndexes(footnoteRemovalRow, 0, 1, 1)
         .getEntireRow()
         .delete(Excel.DeleteShiftDirection.up);
       await context.sync();
@@ -6280,34 +6306,36 @@ function resolveBannerRecolorRowCount(interpretation, dataStartRowIndex) {
 // guarded: only a row whose detected cell starts with SIGNIFICANCE_FOOTNOTE_MARKER
 // is deleted, so ordinary user comments/notes under a table are never touched.
 //
-// Detection reads the row immediately below the cleared data body, scanning a few
-// columns to the LEFT as well so the marker (which lives in the merged footnote's
-// top-left cell, i.e. the table's left label column) is seen. Detection piggybacks
-// on existing Clear syncs; the actual row deletions are applied afterwards,
-// bottom-to-top per worksheet, so they never shift ranges still being cleared.
+// Detection scans the same bounded trailing area below the cleared data body as
+// the insert/update model (FOOTNOTE_SCAN_WINDOW_ROWS rows, a few columns to the
+// LEFT as well so a left-offset marker is seen), skipping ordinary user note
+// rows and stopping at a blank / next-table boundary. Only a row holding the
+// SIGNIFICANCE_FOOTNOTE_MARKER is removed, so ordinary user notes are preserved
+// even when the generated footnote sits below them. Detection piggybacks on
+// existing Clear syncs; deletions are applied afterwards, bottom-to-top per
+// worksheet, so they never shift ranges still being cleared.
 
 /**
- * Builds the footnote probe range for one cleared table and the absolute index
- * of the row immediately below it.
+ * Builds the footnote probe range (a bounded window of rows below the cleared
+ * table) plus the metadata the pure removal resolver needs.
  *
  * @param worksheet         Excel.Worksheet proxy.
  * @param knownDims         { rowIndex, columnIndex, columnCount } of the cleared body.
  * @param dataBodyRowCount  row count of the cleared body.
+ * @returns { range, firstRowBelowTable, dataColStartOffset }
  */
 function buildFootnoteProbe(worksheet, knownDims, dataBodyRowCount) {
-  const footnoteRowIndex = knownDims.rowIndex + dataBodyRowCount; // bottom row + 1
+  const firstRowBelowTable = knownDims.rowIndex + dataBodyRowCount; // bottom row + 1
   const startCol = Math.max(0, knownDims.columnIndex - LABEL_SCAN_COLUMNS_LEFT);
   const colCount = knownDims.columnIndex + knownDims.columnCount - startCol;
-  const range = worksheet.getRangeByIndexes(footnoteRowIndex, startCol, 1, Math.max(1, colCount));
-  return { range, footnoteRowIndex };
-}
-
-/**
- * True when a probe row's loaded values contain a generated footnote marker cell.
- */
-function probeRowIsGeneratedFootnote(probeValues) {
-  if (!probeValues || !probeValues[0]) return false;
-  return probeValues[0].some((cell) => isGeneratedSignificanceFootnoteRow(cell));
+  const dataColStartOffset = knownDims.columnIndex - startCol;
+  const range = worksheet.getRangeByIndexes(
+    firstRowBelowTable,
+    startCol,
+    FOOTNOTE_SCAN_WINDOW_ROWS,
+    Math.max(1, colCount)
+  );
+  return { range, firstRowBelowTable, dataColStartOffset };
 }
 
 /**

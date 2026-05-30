@@ -10,6 +10,7 @@ import {
   appendFootnoteScopeDetail,
   classifyFootnoteScanRow,
   resolveFootnotePlacement,
+  resolveFootnoteRemovalRow,
   isFootnoteScanCellBlank,
   FOOTNOTE_SCAN_WINDOW_ROWS,
 } from "../../src/core/significance-footnote.js";
@@ -244,5 +245,48 @@ describe("footnote placement (idempotent insert/replace)", () => {
 
   it("scan window constant is small and bounded", () => {
     assert.ok(FOOTNOTE_SCAN_WINDOW_ROWS >= 2 && FOOTNOTE_SCAN_WINDOW_ROWS <= 6);
+  });
+});
+
+describe("footnote removal (Clear, marker-based bounded scan)", () => {
+  it("removes a generated footnote immediately below the table", () => {
+    // 1. marker immediately below → remove that row.
+    const scan = [[footnoteCell(), "", ""], [null, null, null]];
+    assert.strictEqual(resolveFootnoteRemovalRow(scan, 10, 1), 10);
+  });
+
+  it("removes a generated footnote below a user note, preserving the note", () => {
+    // 2. note row then marker → remove the marker row (note is only traversed).
+    const scan = [["Все респонденты", "", ""], [footnoteCell(), "", ""], [null, null, null]];
+    assert.strictEqual(resolveFootnoteRemovalRow(scan, 20, 1), 21);
+  });
+
+  it("removes nothing when a user note is followed by a blank row", () => {
+    // 3. note then blank → no generated footnote → remove nothing.
+    const scan = [["Все респонденты", "", ""], [null, null, null]];
+    assert.strictEqual(resolveFootnoteRemovalRow(scan, 30, 1), null);
+  });
+
+  it("does not adopt a marker beyond a blank separation", () => {
+    // 4. blank then marker → marker belongs to another table → remove nothing.
+    const scan = [[null, null, null], [footnoteCell(), "", ""]];
+    assert.strictEqual(resolveFootnoteRemovalRow(scan, 40, 1), null);
+  });
+
+  it("stops at a next-table boundary before any marker", () => {
+    // 5. next-table row before marker → remove nothing.
+    const scan = [["Возраст", "18-24", "25-34"], [footnoteCell(), "", ""]];
+    assert.strictEqual(resolveFootnoteRemovalRow(scan, 50, 1), null);
+  });
+
+  it("finds a left-offset marker (label/data blank gap)", () => {
+    // 6. marker offset into the row because of a blank gap column.
+    const scan = [["", "", footnoteCell()], [null, null, null]];
+    assert.strictEqual(resolveFootnoteRemovalRow(scan, 60, 2), 60);
+  });
+
+  it("returns null for empty / non-array input", () => {
+    assert.strictEqual(resolveFootnoteRemovalRow([], 70, 1), null);
+    assert.strictEqual(resolveFootnoteRemovalRow(null, 70, 1), null);
   });
 });

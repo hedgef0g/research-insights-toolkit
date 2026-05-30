@@ -237,3 +237,33 @@ export function resolveFootnotePlacement(scanRows, firstRowBelowTable, dataColSt
 
   return { mode: "insert", rowIndex: firstRowBelowTable + insertOffset };
 }
+
+/**
+ * Resolves which row, if any, holds the generated footnote to remove on Clear.
+ *
+ * Mirrors resolveFootnotePlacement's traversal so Clear stays consistent with
+ * the insert/update model: scan the bounded trailing area below the table,
+ * skipping ordinary user note rows, and return the absolute index of the first
+ * generated footnote row (marker-based). Scanning stops at the first blank or
+ * next-table boundary, so a marker beyond a separation (belonging to another
+ * table) is never adopted. Returns null when no generated footnote is found —
+ * Clear then removes nothing and ordinary user notes are preserved.
+ *
+ * @param {Array<Array<*>>} scanRows
+ * @param {number} firstRowBelowTable - absolute index of scanRows[0]
+ * @param {number} dataColStartOffset
+ * @returns {number|null} absolute row index to delete, or null
+ */
+export function resolveFootnoteRemovalRow(scanRows, firstRowBelowTable, dataColStartOffset = 0) {
+  const rows = Array.isArray(scanRows) ? scanRows : [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const kind = classifyFootnoteScanRow(rows[i], dataColStartOffset);
+    if (kind === "marker") return firstRowBelowTable + i;
+    if (kind === "note") continue;
+    // "blank" or "table": stop before any distant marker.
+    break;
+  }
+
+  return null;
+}
