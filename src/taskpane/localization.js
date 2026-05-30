@@ -304,7 +304,7 @@ const STRINGS = {
     "settings.roundCellValues": "Round cell values",
     "settings.addTableFootnote": "Add footnote below table",
     "settings.addTableFootnoteUnavailable":
-      "Table footnote is unavailable when labels are not adjoined.",
+      "Table footnote is unavailable when labels are not adjacent to the data.",
     "settings.fillsGroup": "Fills",
     "settings.significantFillColor": "Regular significance",
     "settings.lowerThanTotalFillColor": "Fill < Total",

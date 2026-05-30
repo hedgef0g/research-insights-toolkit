@@ -368,6 +368,7 @@ function initLanguageSelector() {
       // re-applies the mode-suffix in the new language.
       setLanguage(btn.dataset.lang);
       updateCheckHints();
+      refreshActionWarnings();
     });
   });
 }
@@ -652,6 +653,47 @@ function updateCheckHints() {
   });
 }
 
+function collectActionWarningKeys(action) {
+  if (action !== "run" && action !== "autorun") {
+    return [];
+  }
+
+  const labelsOnLeftSide = getCheckboxValue("labels-on-left-side");
+  const addTableFootnoteRequested = getCheckboxValue("add-table-footnote");
+  const recolorRequested = getCheckboxValue("recolor-banner-and-labels");
+  const warningKeys = [];
+
+  if (labelsOnLeftSide && addTableFootnoteRequested) {
+    warningKeys.push("footnote-labels-left");
+  }
+
+  if (labelsOnLeftSide && recolorRequested) {
+    warningKeys.push("recolor-labels-left");
+  } else if (action === "run" && recolorRequested) {
+    warningKeys.push("manual-run-recolor");
+  }
+
+  return warningKeys;
+}
+
+function refreshActionWarnings() {
+  const warningBlock = document.getElementById("action-settings-warnings");
+  if (!warningBlock) {
+    return;
+  }
+
+  const activeWarnings = new Set(collectActionWarningKeys(_currentAction));
+  let hasWarnings = false;
+
+  warningBlock.querySelectorAll("[data-action-warning]").forEach((line) => {
+    const show = activeWarnings.has(line.dataset.actionWarning);
+    line.style.display = show ? "" : "none";
+    hasWarnings = hasWarnings || show;
+  });
+
+  warningBlock.style.display = hasWarnings ? "" : "none";
+}
+
 function updateActionScopeShell(action, scope) {
   // Update action tab active states
   document.querySelectorAll(".action-tab").forEach((tab) => {
@@ -700,6 +742,7 @@ function updateActionScopeShell(action, scope) {
   }
 
   updateCheckHints();
+  refreshActionWarnings();
 }
 
 function initActionScopeShell() {
@@ -7773,6 +7816,7 @@ function refreshSettingsPanelState() {
   refreshBannerStructureSettingsState();
   refreshTableFootnoteState();
   refreshDesignRecolorState();
+  refreshActionWarnings();
 }
 
 /**
@@ -7789,17 +7833,14 @@ function refreshSettingsPanelState() {
  * is true. The checkbox value itself is preserved (not unchecked) so the user's
  * preference is restored if they turn labels-on-left-side off again.
  *
- * Design recolor is unavailable in Manual Run (a manual selected-range Run may
- * cover only part of a table), so a separate warning is shown in the Manual Run
- * workspace whenever the recolor setting is effectively enabled, pointing the
- * user to the autorun flows that do support it.
+ * Action-area warnings are rendered separately so they can stay contextual to
+ * the current Run/Autorun workspace.
  */
 function refreshDesignRecolorState() {
   const recolorCheckbox = document.getElementById("recolor-banner-and-labels");
   const colorInput = document.getElementById("banner-label-fill-color");
   const labelsOnLeftSideCheckbox = document.getElementById("labels-on-left-side");
   const warningElement = document.getElementById("recolor-banner-and-labels-warning");
-  const manualRunWarningElement = document.getElementById("manual-run-recolor-warning");
 
   if (!recolorCheckbox) {
     return;
@@ -7814,14 +7855,6 @@ function refreshDesignRecolorState() {
 
   if (warningElement) {
     warningElement.style.display = labelsOnLeftSide ? "block" : "none";
-  }
-
-  // Manual Run warning: shown only when recolor is effectively enabled. When
-  // labelsOnLeftSide forces recolor off the feature does nothing, so the Manual
-  // Run warning is hidden to avoid a misleading message.
-  if (manualRunWarningElement) {
-    const recolorEffectivelyEnabled = recolorCheckbox.checked && !labelsOnLeftSide;
-    manualRunWarningElement.style.display = recolorEffectivelyEnabled ? "block" : "none";
   }
 }
 

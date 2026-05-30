@@ -371,6 +371,18 @@ b {
   font-weight: 600;
 }
 
+.action-warning-block {
+  margin: 6px 0 8px 0;
+  color: #c00000;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.action-warning-line + .action-warning-line {
+  margin-top: 3px;
+}
+
 .status-panel {
   width: 100%;
   box-sizing: border-box;

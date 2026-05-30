@@ -81,15 +81,22 @@
           <button class="scope-btn" data-scope="whole_workbook" data-i18n="scope.wholeWorkbook">Вся книга</button>
         </div>
 
+        <div id="action-settings-warnings" class="action-warning-block" role="status" aria-live="polite" style="display: none">
+          <div class="action-warning-line" data-action-warning="footnote-labels-left" style="display: none">
+            <span data-i18n="settings.addTableFootnoteUnavailable">Подпись под таблицей недоступна, когда лейблы не примыкают к данным.</span>
+          </div>
+          <div class="action-warning-line" data-action-warning="recolor-labels-left" style="display: none">
+            <span data-i18n="settings.recolorBannerAndLabelsUnavailable">Перекраска баннера и лейблов недоступна, когда лейблы не примыкают к данным.</span>
+          </div>
+          <div class="action-warning-line" data-action-warning="manual-run-recolor" style="display: none">
+            <span data-i18n="hint.manualRunRecolorUnavailable">Перекраска баннера и лейблов недоступна в ручном расчёте. Используйте автозапуск по текущей таблице, листу или книге.</span>
+          </div>
+        </div>
+
         <!-- Workspaces: one shown at a time based on action + scope -->
 
         <div class="action-workspace" data-workspace="run-current_table">
           <p class="run-scope-fixed" data-i18n="hint.runCurrentTable">Область: выделенный диапазон</p>
-          <div id="manual-run-recolor-warning" class="settings-warning" style="display: none">
-            <span data-i18n="hint.manualRunRecolorUnavailable"
-              >Перекраска баннера и лейблов недоступна в ручном расчёте. Используйте автозапуск по текущей таблице, листу или книге.</span
-            >
-          </div>
           <div class="action-buttons-row">
             <button id="calculate-significance" class="primary-action-button">
               <svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="16" y1="14" x2="16" y2="18"/><line x1="8" y1="10" x2="8" y2="10.01"/><line x1="12" y1="10" x2="12" y2="10.01"/><line x1="16" y1="10" x2="16" y2="10.01"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="8" y1="18" x2="8" y2="18.01"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
