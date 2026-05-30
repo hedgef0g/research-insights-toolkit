@@ -154,6 +154,10 @@ const STRINGS = {
     "settings.lowerThanTotalFillColor": "Заливка < Тотал",
     "settings.fillOnlyTotalComparisons": "Заливка только для Тотала",
     "settings.smallBaseFillColor": "Заливка маленькой базы",
+    "settings.recolorBannerAndLabels": "Перекрашивать баннер и лейблы",
+    "settings.bannerLabelFillColor": "Цвет баннера и лейблов",
+    "settings.recolorBannerAndLabelsUnavailable":
+      "Перекраска баннера и лейблов недоступна, когда лейблы не примыкают к данным.",
 
     "settings.oneTailedTest": "Односторонний тест",
     "settings.preferredBaseAuto": "Авто",
@@ -302,6 +306,10 @@ const STRINGS = {
     "settings.lowerThanTotalFillColor": "Fill < Total",
     "settings.fillOnlyTotalComparisons": "Fill only for Total comparisons",
     "settings.smallBaseFillColor": "Small base fill",
+    "settings.recolorBannerAndLabels": "Recolor banner and labels",
+    "settings.bannerLabelFillColor": "Banner and label color",
+    "settings.recolorBannerAndLabelsUnavailable":
+      "Banner and label recolor is unavailable when labels are not adjacent to the data.",
 
     "settings.oneTailedTest": "One-tailed test",
     "settings.preferredBaseAuto": "Auto",

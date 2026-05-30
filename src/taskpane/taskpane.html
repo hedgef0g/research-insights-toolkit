@@ -423,6 +423,20 @@
             <label for="small-base-fill-color" data-i18n="settings.smallBaseFillColor">Заливка маленькой базы</label>
             <input type="color" id="small-base-fill-color" value="#D0D0D0" />
           </div>
+
+          <div class="settings-group">
+            <label class="inline-checkbox-label" for="recolor-banner-and-labels">
+              <input type="checkbox" id="recolor-banner-and-labels" />
+              <span data-i18n="settings.recolorBannerAndLabels">Перекрашивать баннер и лейблы</span>
+            </label>
+            <label for="banner-label-fill-color" data-i18n="settings.bannerLabelFillColor">Цвет баннера и лейблов</label>
+            <input type="color" id="banner-label-fill-color" value="#FFF2CC" />
+            <div id="recolor-banner-and-labels-warning" class="settings-warning" style="display: none">
+              <span data-i18n="settings.recolorBannerAndLabelsUnavailable"
+                >Перекраска баннера и лейблов недоступна, когда лейблы не примыкают к данным.</span
+              >
+            </div>
+          </div>
         </div>
 
         </div><!-- /settings-panel-body -->

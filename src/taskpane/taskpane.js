@@ -40,6 +40,8 @@ import {
 
 import { detectBannerStructure } from "../core/banner-detector";
 
+import { buildDesignRecolorJob } from "../core/design-recolor";
+
 import { normalizeSelectedRange, hasEmptyDataRowGap, selectionHasMultiTableGap } from "../core/range-normalizer";
 
 import { filterWorkbookCandidates } from "../core/batch-candidate-filter";
@@ -229,6 +231,12 @@ const SETTINGS_TOOLTIPS = {
 
   "small-base-fill-color":
     "Цвет заливки для колонок с маленькой базой. Эта заливка имеет самый высокий приоритет и перекрывает остальные типы заливки.",
+
+  "recolor-banner-and-labels":
+    "Перекрашивать баннер над данными и примыкающие колонки с лейблами строк одним цветом для обработанных таблиц. Не затрагивает заливки значимости, подписи под таблицей и листы отчётов.",
+
+  "banner-label-fill-color":
+    "Общий цвет заливки для баннера и лейблов строк, когда включена перекраска баннера и лейблов.",
 
   "preferred-base":
     "Выберите тип базы для расчёта значимости. «Авто» использует приоритет: Effective → Unweighted → Base → Weighted. Если выбранный тип базы не найден в таблице, используется автоматический приоритет.",
@@ -1026,6 +1034,29 @@ async function runSignificanceFromSelection() {
 
     await context.sync();
 
+    // Design recolor (issue #306): a single processed table, applied right after
+    // the calculation writes. Only fill color changes — no rows inserted — so it
+    // runs before the footnote insertion and never shifts the data body. Reuses
+    // the same context; the queued fills are flushed by the sync below.
+    const recolorJob = buildDesignRecolorJob({
+      sheetName: "",
+      dataStartRowIndex: writeTargetRange.rowIndex,
+      dataStartColIndex: writeTargetRange.columnIndex,
+      dataRowCount: writeTargetRange.rowCount,
+      dataColCount: writeTargetRange.columnCount,
+      adjacentLabelColumnCount: interpretation.adjacentLabelColumnCount,
+      bannerRowCount: resolveBannerRecolorRowCount(interpretation, writeTargetRange.rowIndex),
+      calculationSettings,
+    });
+    if (recolorJob) {
+      try {
+        queueDesignRecolorJob(writeTargetRange.worksheet, recolorJob);
+        await context.sync();
+      } catch (recolorErr) {
+        console.warn("RIT: не удалось перекрасить баннер и лейблы.", recolorErr);
+      }
+    }
+
     // Footnote: a single processed table, so it is applied right after the
     // calculation writes complete. Insertion happens after all calculation
     // reads/writes so it cannot shift the range being calculated.
@@ -1323,12 +1354,27 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
     calculationSettings,
   });
 
+  // Design recolor job (collected, not applied here). Like the footnote job it is
+  // pure geometry computed from the already-known interpretation; the run flow
+  // applies it after calculations (before footnote row insertions).
+  const recolorJob = buildDesignRecolorJob({
+    sheetName,
+    dataStartRowIndex: targetStartRowIndex,
+    dataStartColIndex: targetStartColIndex,
+    dataRowCount: valuesForCalculation.length,
+    dataColCount: valuesForCalculation[0].length,
+    adjacentLabelColumnCount: interpretation.adjacentLabelColumnCount,
+    bannerRowCount: resolveBannerRecolorRowCount(interpretation, targetStartRowIndex),
+    calculationSettings,
+  });
+
   return {
     status: "processed",
     blocksProcessed: calculationBlocks.length,
     message: `обработано блоков: ${calculationBlocks.length}`,
     rangeAddress,
     footnoteJob,
+    recolorJob,
     _phasesMs: _p0 !== 0 ? {
       loadMs: _pLoad - _p0,
       interpMs: _pInterp - _pLoad,
@@ -1738,6 +1784,10 @@ async function runAutoSignificance() {
   // Footnote jobs collected during the run and applied bottom-to-top per sheet
   // AFTER all calculations finish (insertions must not shift pending ranges).
   const footnoteJobs = [];
+  // Design recolor jobs (issue #306) collected during the run and applied after
+  // all calculations finish, before footnote insertions (recolor never shifts
+  // rows, so applying it first keeps both jobs' captured geometry valid).
+  const recolorJobs = [];
 
   // Process all eligible tables in a single Excel.run to amortise per-context
   // overhead. If any table causes an Office.js sync error (corrupting the shared
@@ -1775,6 +1825,7 @@ async function runAutoSignificance() {
           if (result.status === "processed") {
             processed++;
             if (result.footnoteJob) footnoteJobs.push(result.footnoteJob);
+            if (result.recolorJob) recolorJobs.push(result.recolorJob);
           } else if (result.status === "skipped" || result.status === "blocked") {
             skipped++;
             detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`);
@@ -1862,6 +1913,7 @@ async function runAutoSignificance() {
       if (result.status === "processed") {
         processed++;
         if (result.footnoteJob) footnoteJobs.push(result.footnoteJob);
+        if (result.recolorJob) recolorJobs.push(result.recolorJob);
       } else if (result.status === "skipped" || result.status === "blocked") {
         skipped++;
         detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`);
@@ -1934,6 +1986,10 @@ async function runAutoSignificance() {
       });
     }
   }
+
+  // Apply design recolor first (no row shifts) so its rectangles match the
+  // unshifted geometry, then footnotes (which insert rows, bottom-to-top).
+  await applyDesignRecolorJobsInOwnContext(recolorJobs);
 
   // Apply collected footnotes after ALL calculations (bottom-to-top per sheet).
   await applySignificanceFootnoteJobsInOwnContext(footnoteJobs);
@@ -2139,6 +2195,11 @@ async function runAutoCurrentTableSignificance() {
     totalMs: perfElapsed(_t0),
   });
   setStatusMessage(statusMsg);
+
+  // Design recolor applied before the footnote (recolor never shifts rows).
+  if (result.status === "processed" && result.recolorJob) {
+    await applyDesignRecolorJobsInOwnContext([result.recolorJob]);
+  }
 
   // Footnote applied after calculation (separate context). Single table, so
   // bottom-to-top ordering is trivially satisfied.
@@ -3561,6 +3622,10 @@ async function runCurrentSheetSignificance() {
   // Footnote jobs collected during the run and applied bottom-to-top per sheet
   // AFTER all calculations finish (insertions must not shift pending ranges).
   const footnoteJobs = [];
+  // Design recolor jobs (issue #306) collected during the run and applied after
+  // all calculations finish, before footnote insertions (recolor never shifts
+  // rows, so applying it first keeps both jobs' captured geometry valid).
+  const recolorJobs = [];
 
   // Process all eligible tables in a single Excel.run to amortise per-context
   // overhead. Same fallback strategy as runAutoSignificance: on any Office.js
@@ -3598,6 +3663,7 @@ async function runCurrentSheetSignificance() {
           if (result.status === "processed") {
             processed++;
             if (result.footnoteJob) footnoteJobs.push(result.footnoteJob);
+            if (result.recolorJob) recolorJobs.push(result.recolorJob);
           } else if (result.status === "skipped" || result.status === "blocked") {
             skipped++;
             detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`);
@@ -3685,6 +3751,7 @@ async function runCurrentSheetSignificance() {
       if (result.status === "processed") {
         processed++;
         if (result.footnoteJob) footnoteJobs.push(result.footnoteJob);
+        if (result.recolorJob) recolorJobs.push(result.recolorJob);
       } else if (result.status === "skipped" || result.status === "blocked") {
         skipped++;
         detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: пропущено — ${result.message}`);
@@ -3757,6 +3824,10 @@ async function runCurrentSheetSignificance() {
       });
     }
   }
+
+  // Apply design recolor first (no row shifts) so its rectangles match the
+  // unshifted geometry, then footnotes (which insert rows, bottom-to-top).
+  await applyDesignRecolorJobsInOwnContext(recolorJobs);
 
   // Apply collected footnotes after ALL calculations (bottom-to-top per sheet).
   await applySignificanceFootnoteJobsInOwnContext(footnoteJobs);
@@ -6066,6 +6137,101 @@ async function applySignificanceFootnoteJobsInOwnContext(jobs) {
   }
 }
 
+// ─── Design recolor (issue #306) ────────────────────────────────────────────────
+//
+// Optional design feature: after a successful Run, recolor the banner/header rows
+// above the data body and the adjacent row-label columns with one shared color.
+//
+// Geometry comes from the selected-range interpretation (banner band + adjacent
+// label column count), so the writer never re-guesses label width. Each job is a
+// small set of sheet-absolute rectangles; applying a job sets ONE fill per
+// rectangle (never per cell, never per row), keeping the operation range-level.
+//
+// Recolor sets only fill color: it inserts no rows and changes no values, so it
+// never shifts ranges. Recolor jobs are therefore applied BEFORE footnote jobs
+// (which DO insert rows) so the recolor rectangles still match the unshifted
+// sheet geometry captured during calculation.
+
+/**
+ * Queues the fill writes for one design recolor job onto a worksheet proxy.
+ * The caller is responsible for the context.sync() that flushes them, so several
+ * jobs/rectangles can share a single sync.
+ */
+function queueDesignRecolorJob(worksheet, job) {
+  if (!job || !Array.isArray(job.rects)) return;
+  for (const rect of job.rects) {
+    const range = worksheet.getRangeByIndexes(
+      rect.rowIndex,
+      rect.columnIndex,
+      rect.rowCount,
+      rect.columnCount
+    );
+    range.format.fill.color = job.color;
+  }
+}
+
+/**
+ * Applies a list of design recolor jobs grouped per worksheet. All fill writes
+ * for a worksheet are queued and flushed with a single context.sync(), so the
+ * cost is one sync per worksheet regardless of table count.
+ *
+ * Tolerant: a failure on one worksheet is logged and skipped; it never aborts the
+ * Run itself (calculations have already completed and been written at this point).
+ */
+async function applyDesignRecolorJobs(context, jobs) {
+  if (!Array.isArray(jobs) || jobs.length === 0) return;
+
+  const jobsBySheet = new Map();
+  for (const job of jobs) {
+    if (!job || !job.sheetName) continue;
+    if (!jobsBySheet.has(job.sheetName)) jobsBySheet.set(job.sheetName, []);
+    jobsBySheet.get(job.sheetName).push(job);
+  }
+
+  for (const [sheetName, sheetJobs] of jobsBySheet) {
+    try {
+      const worksheet = context.workbook.worksheets.getItem(sheetName);
+      for (const job of sheetJobs) {
+        queueDesignRecolorJob(worksheet, job);
+      }
+      await context.sync();
+    } catch (recolorErr) {
+      console.warn("RIT: не удалось перекрасить баннер и лейблы.", recolorErr);
+    }
+  }
+}
+
+/**
+ * Convenience wrapper that applies design recolor jobs inside their own Excel.run.
+ * Used by run flows whose calculations completed in a different context.
+ */
+async function applyDesignRecolorJobsInOwnContext(jobs) {
+  if (!Array.isArray(jobs) || jobs.length === 0) return;
+  try {
+    await Excel.run(async (context) => {
+      await applyDesignRecolorJobs(context, jobs);
+    });
+  } catch (recolorErr) {
+    console.warn("RIT: не удалось перекрасить баннер и лейблы.", recolorErr);
+  }
+}
+
+/**
+ * Computes the effective banner-row count to recolor above a data body.
+ *
+ * - In a normalized selection the interpreter reports the exact banner band it
+ *   detected inside the selection (excluding title/subtitle rows).
+ * - In a pass-through selection (the user selected only the numeric data body)
+ *   any banner sits in the sheet directly above the selection, so the single
+ *   header row immediately above the data body is recolored when one exists.
+ */
+function resolveBannerRecolorRowCount(interpretation, dataStartRowIndex) {
+  const interpreted = interpretation.bannerRowsAboveData || 0;
+  if (interpreted > 0) return interpreted;
+  if (interpretation.state === "passThrough" && dataStartRowIndex > 0) return 1;
+  return 0;
+}
+
 // ─── Significance footnote removal (Clear) ──────────────────────────────────────
 //
 // Clear Significance silently removes a RIT-generated footnote row directly below
@@ -6638,6 +6804,14 @@ function readCalculationSettingsFromPanel() {
   const labelsOnLeftSide = getCheckboxValue("labels-on-left-side");
   const addTableFootnote = labelsOnLeftSide ? false : getCheckboxValue("add-table-footnote");
 
+  // Design recolor (issue #306) requires label columns adjacent to the data, so
+  // it is incompatible with "labels on left side" mode. Force the feature off
+  // here so a stale saved setting can never recolor while labelsOnLeftSide is
+  // true, independent of the disabled-UI affordance.
+  const recolorBannerAndLabels = labelsOnLeftSide
+    ? false
+    : getCheckboxValue("recolor-banner-and-labels");
+
   return {
     confidenceLevel: confidenceLevelElement ? confidenceLevelElement.value : "95",
     oneTailedTest: oneTailedTestCheckbox ? oneTailedTestCheckbox.checked : false,
@@ -6671,6 +6845,9 @@ function readCalculationSettingsFromPanel() {
     smallBaseThreshold: smallBaseThresholdElement ? Number(smallBaseThresholdElement.value) : 50,
 
     smallBaseFillColor: getInputValue("small-base-fill-color", "#d0d0d0"),
+
+    recolorBannerAndLabels,
+    bannerLabelFillColor: getInputValue("banner-label-fill-color", "#FFF2CC"),
 
     preferredBase: getInputValue("preferred-base", "auto"),
 
@@ -7607,6 +7784,43 @@ function refreshSettingsPanelState() {
   refreshPreviousColumnComparisonState();
   refreshBannerStructureSettingsState();
   refreshTableFootnoteState();
+  refreshDesignRecolorState();
+}
+
+/**
+ * Applies UI rules for the "Перекрашивать баннер и лейблы" (design recolor)
+ * option (issue #306).
+ *
+ * Recolor relies on the row-label columns being adjacent to the data body. When
+ * "labels on left side" is enabled the labels are read from the far-left of the
+ * sheet and are NOT adjacent to the data, so the recolor span could cross
+ * unrelated columns. In that mode the recolor checkbox and color input are
+ * disabled and a warning is shown. This is a UI affordance only —
+ * readCalculationSettingsFromPanel and buildDesignRecolorJob also force the
+ * feature off so a stale saved setting can never recolor while labelsOnLeftSide
+ * is true. The checkbox value itself is preserved (not unchecked) so the user's
+ * preference is restored if they turn labels-on-left-side off again.
+ */
+function refreshDesignRecolorState() {
+  const recolorCheckbox = document.getElementById("recolor-banner-and-labels");
+  const colorInput = document.getElementById("banner-label-fill-color");
+  const labelsOnLeftSideCheckbox = document.getElementById("labels-on-left-side");
+  const warningElement = document.getElementById("recolor-banner-and-labels-warning");
+
+  if (!recolorCheckbox) {
+    return;
+  }
+
+  const labelsOnLeftSide = labelsOnLeftSideCheckbox ? labelsOnLeftSideCheckbox.checked : false;
+
+  recolorCheckbox.disabled = labelsOnLeftSide;
+  if (colorInput) {
+    colorInput.disabled = labelsOnLeftSide;
+  }
+
+  if (warningElement) {
+    warningElement.style.display = labelsOnLeftSide ? "block" : "none";
+  }
 }
 
 /**
