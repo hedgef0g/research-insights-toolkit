@@ -36,6 +36,8 @@ import {
   isGeneratedSignificanceFootnoteRow,
   collectStatisticTypeLabels,
   buildSignificanceFootnoteCellValue,
+  buildProcessedRangeFootnoteSuffix,
+  buildProcessedBannerGroupsFootnoteSuffix,
 } from "../core/significance-footnote";
 
 import { detectBannerStructure } from "../core/banner-detector";
@@ -861,7 +863,10 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    writeTargetRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    // "address" is loaded here (Manual Run only) so the footnote can report the
+    // actual processed/write-target range — which may differ from the original
+    // selection after selected-range normalization.
+    writeTargetRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount", "address"]);
 
     await context.sync();
 
@@ -1045,6 +1050,16 @@ async function runSignificanceFromSelection() {
     // Footnote: a single processed table, so it is applied right after the
     // calculation writes complete. Insertion happens after all calculation
     // reads/writes so it cannot shift the range being calculated.
+    //
+    // Manual Run only (issue #308): append a concise processed-scope detail so
+    // the user can see what was actually processed. Prefer meaningful banner
+    // group labels; otherwise fall back to the actual processed range (which may
+    // be narrower than the original selection after normalization).
+    const processedBannerGroupLabels = extractProcessedBannerGroupLabels(bannerStructure);
+    const processedScopeSuffix =
+      buildProcessedBannerGroupsFootnoteSuffix(processedBannerGroupLabels) ||
+      buildProcessedRangeFootnoteSuffix(writeTargetRange.address);
+
     const footnoteJob = buildSignificanceFootnoteJob({
       sheetName: "",
       dataStartRowIndex: writeTargetRange.rowIndex,
@@ -1054,6 +1069,7 @@ async function runSignificanceFromSelection() {
       leftLabelValues,
       calculationBlocks,
       calculationSettings,
+      processedScopeSuffix,
     });
     if (footnoteJob) {
       try {
@@ -5967,6 +5983,25 @@ async function ensureBacklinkRows(context, sheetResults, contentRowMap) {
 // job's row index.
 
 /**
+ * Extracts a per-column list of processed banner group labels from a detected
+ * banner structure (Manual Run, issue #308). Prefers the column display label
+ * (which includes the banner path, e.g. "Пол / Мужской") and falls back to the
+ * plain lower label. Returns [] when no usable banner structure is present, in
+ * which case the caller falls back to the processed range.
+ *
+ * Cleaning, de-duplication and the "is this meaningful?" decision live in the
+ * pure buildProcessedBannerGroupsFootnoteSuffix helper.
+ */
+function extractProcessedBannerGroupLabels(bannerStructure) {
+  if (!bannerStructure || !bannerStructure.isDetected) return [];
+  const descriptors = bannerStructure.columnDescriptors;
+  if (!Array.isArray(descriptors)) return [];
+  return descriptors.map((descriptor) =>
+    descriptor ? descriptor.displayLabel || descriptor.lowerLabel || "" : ""
+  );
+}
+
+/**
  * Builds a footnote job for a single processed table, or null when the footnote
  * setting is off / geometry is unusable.
  *
@@ -5982,6 +6017,11 @@ async function ensureBacklinkRows(context, sheetResults, contentRowMap) {
  * data, so a footnote cannot span the table correctly): readCalculationSettings-
  * FromPanel already forces addTableFootnote=false in that mode, and this extra
  * guard makes the rule independent of the caller.
+ *
+ * processedScopeSuffix (issue #308) is an optional, already-formatted detail
+ * (e.g. " Обработано: B12:F34.") appended to the visible footnote text. It is
+ * supplied only by Manual Run; auto-run callers omit it so their footnote text
+ * is unchanged.
  */
 function buildSignificanceFootnoteJob({
   sheetName,
@@ -5992,6 +6032,7 @@ function buildSignificanceFootnoteJob({
   leftLabelValues,
   calculationBlocks,
   calculationSettings,
+  processedScopeSuffix,
 }) {
   if (!calculationSettings.addTableFootnote) return null;
   if (calculationSettings.labelsOnLeftSide) return null;
@@ -6011,6 +6052,7 @@ function buildSignificanceFootnoteJob({
     confidenceLevel: calculationSettings.confidenceLevel,
     oneTailedTest: calculationSettings.oneTailedTest,
     statisticLabels: collectStatisticTypeLabels(calculationBlocks),
+    scopeDetail: processedScopeSuffix,
   });
 
   return {

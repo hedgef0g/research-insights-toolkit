@@ -64,18 +64,126 @@ export function collectStatisticTypeLabels(calculationBlocks) {
  *
  * Example: "Уровень значимости: 95%; тест: двусторонний; статистика: Z-критерий для долей."
  *
+ * When a processed-scope detail is supplied (Manual Run only), it is appended
+ * after the base text, e.g. "... Z-критерий для долей. Обработано: B12:F34."
+ *
  * @param {object} options
  * @param {string|number} options.confidenceLevel - e.g. "95"
  * @param {boolean} options.oneTailedTest         - true → one-sided, false → two-sided
  * @param {string[]} options.statisticLabels      - labels from collectStatisticTypeLabels
+ * @param {string} [options.scopeDetail]          - optional processed-scope suffix
+ *                                                  (already including a leading space),
+ *                                                  e.g. " Обработано: B12:F34."
  * @returns {string}
  */
-export function buildSignificanceFootnoteVisibleText({ confidenceLevel, oneTailedTest, statisticLabels }) {
+export function buildSignificanceFootnoteVisibleText({
+  confidenceLevel,
+  oneTailedTest,
+  statisticLabels,
+  scopeDetail,
+}) {
   const level = String(confidenceLevel ?? "").trim() || "95";
   const testLabel = oneTailedTest ? "односторонний" : "двусторонний";
   const labels = Array.isArray(statisticLabels) ? statisticLabels.filter(Boolean) : [];
   const statText = labels.length > 0 ? labels.join(", ") : "не определена";
-  return `Уровень значимости: ${level}%; тест: ${testLabel}; статистика: ${statText}.`;
+  const base = `Уровень значимости: ${level}%; тест: ${testLabel}; статистика: ${statText}.`;
+  return appendFootnoteScopeDetail(base, scopeDetail);
+}
+
+// Upper bounds that keep the processed-groups detail concise. Beyond these the
+// list is considered too noisy to be useful and the caller should fall back to
+// the processed range instead.
+const MAX_FOOTNOTE_GROUP_LABELS = 8;
+const MAX_FOOTNOTE_GROUPS_TEXT_LENGTH = 160;
+
+/**
+ * Strips a leading sheet prefix (e.g. "Sheet1!" or "'My Sheet'!") from an A1
+ * address so the footnote shows a concise local range. Returns "" for empty
+ * or non-string input.
+ *
+ * @param {string} rangeAddress
+ * @returns {string}
+ */
+function toLocalA1Range(rangeAddress) {
+  if (typeof rangeAddress !== "string") return "";
+  const trimmed = rangeAddress.trim();
+  if (!trimmed) return "";
+  const sep = trimmed.lastIndexOf("!");
+  return sep >= 0 ? trimmed.slice(sep + 1) : trimmed;
+}
+
+/**
+ * Appends a processed-scope detail suffix to existing footnote visible text.
+ * A falsy/blank suffix leaves the base text unchanged, so auto-run footnotes
+ * and any caller that passes no scope detail are byte-for-byte identical.
+ *
+ * @param {string} visibleText - base footnote text
+ * @param {string} [scopeDetail] - suffix including its own leading separator
+ * @returns {string}
+ */
+export function appendFootnoteScopeDetail(visibleText, scopeDetail) {
+  const base = String(visibleText ?? "");
+  if (!scopeDetail || !String(scopeDetail).trim()) return base;
+  return base + scopeDetail;
+}
+
+/**
+ * Builds the processed-range footnote suffix from an Excel range address.
+ * The sheet prefix is dropped so the detail stays concise. Returns "" when no
+ * usable range is available (caller then appends nothing).
+ *
+ * Example: "B12:F34" → " Обработано: B12:F34."
+ *
+ * @param {string} rangeAddress - actual processed/write-target range address
+ * @returns {string}
+ */
+export function buildProcessedRangeFootnoteSuffix(rangeAddress) {
+  const local = toLocalA1Range(rangeAddress);
+  if (!local) return "";
+  return ` Обработано: ${local}.`;
+}
+
+/**
+ * Builds the processed-banner-groups footnote suffix from a list of raw group
+ * labels (one per processed column, in column order). Labels are trimmed,
+ * de-duplicated (preserving first-seen order) and validated:
+ *
+ * - empty / whitespace-only labels are dropped;
+ * - at least two distinct meaningful labels are required (a single label is not
+ *   informative enough to replace the raw range);
+ * - if the de-duplicated list is too long or too noisy, "" is returned so the
+ *   caller falls back to the processed range.
+ *
+ * Hierarchical labels containing " / " (a banner path) switch the wording to
+ * "Обработаны группы баннера: ... ; ..." to match the nested presentation.
+ *
+ * Example: ["Мужской", "Женский", "Total"] → " Обработаны группы: Мужской, Женский, Total."
+ *
+ * @param {string[]} groupLabels
+ * @returns {string} suffix with a leading space, or "" to signal fallback
+ */
+export function buildProcessedBannerGroupsFootnoteSuffix(groupLabels) {
+  if (!Array.isArray(groupLabels)) return "";
+
+  const seen = new Set();
+  const labels = [];
+  for (const raw of groupLabels) {
+    const label = String(raw ?? "").trim();
+    if (!label) continue;
+    if (seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+  }
+
+  if (labels.length < 2) return "";
+  if (labels.length > MAX_FOOTNOTE_GROUP_LABELS) return "";
+
+  const hierarchical = labels.some((label) => label.includes(" / "));
+  const joined = labels.join(hierarchical ? "; " : ", ");
+  if (joined.length > MAX_FOOTNOTE_GROUPS_TEXT_LENGTH) return "";
+
+  const lead = hierarchical ? "Обработаны группы баннера" : "Обработаны группы";
+  return ` ${lead}: ${joined}.`;
 }
 
 /**
