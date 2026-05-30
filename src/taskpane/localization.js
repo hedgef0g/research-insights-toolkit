@@ -34,6 +34,8 @@ const STRINGS = {
     "btn.createContents": "Создать оглавление",
 
     "hint.runCurrentTable": "Область: выделенный диапазон",
+    "hint.manualRunRecolorUnavailable":
+      "Перекраска баннера и лейблов недоступна в ручном расчёте. Используйте автозапуск по текущей таблице, листу или книге.",
     "hint.autorunCurrentTable": "Область: активная ячейка → таблица",
     "hint.checkCurrentTable": "Проверяет таблицу вокруг активной ячейки.",
     "hint.checkCurrentSheet": "Проверяет таблицы на текущем листе.",
@@ -186,6 +188,8 @@ const STRINGS = {
     "btn.createContents": "Create contents",
 
     "hint.runCurrentTable": "Scope: selected range",
+    "hint.manualRunRecolorUnavailable":
+      "Banner and label recolor is unavailable in Manual Run. Use current-table, current-sheet, or workbook autorun.",
     "hint.autorunCurrentTable": "Scope: active cell → table",
     "hint.checkCurrentTable": "Checks the table around the active cell.",
     "hint.checkCurrentSheet": "Checks tables on the current sheet.",

@@ -1034,28 +1034,13 @@ async function runSignificanceFromSelection() {
 
     await context.sync();
 
-    // Design recolor (issue #306): a single processed table, applied right after
-    // the calculation writes. Only fill color changes — no rows inserted — so it
-    // runs before the footnote insertion and never shifts the data body. Reuses
-    // the same context; the queued fills are flushed by the sync below.
-    const recolorJob = buildDesignRecolorJob({
-      sheetName: "",
-      dataStartRowIndex: writeTargetRange.rowIndex,
-      dataStartColIndex: writeTargetRange.columnIndex,
-      dataRowCount: writeTargetRange.rowCount,
-      dataColCount: writeTargetRange.columnCount,
-      adjacentLabelColumnCount: interpretation.adjacentLabelColumnCount,
-      bannerRowCount: resolveBannerRecolorRowCount(interpretation, writeTargetRange.rowIndex),
-      calculationSettings,
-    });
-    if (recolorJob) {
-      try {
-        queueDesignRecolorJob(writeTargetRange.worksheet, recolorJob);
-        await context.sync();
-      } catch (recolorErr) {
-        console.warn("RIT: не удалось перекрасить баннер и лейблы.", recolorErr);
-      }
-    }
+    // Design recolor (issue #306) is intentionally NOT applied in Manual Run.
+    // A manual selected-range Run may cover only part of a table, so its
+    // geometry need not include the full banner/label structure; recoloring it
+    // could produce a misleading partial design result. Design recolor is
+    // therefore limited to the detected-table autorun flows (current-table,
+    // current-sheet, workbook), and a Manual Run workspace warning tells the
+    // user to use those when the setting is enabled.
 
     // Footnote: a single processed table, so it is applied right after the
     // calculation writes complete. Insertion happens after all calculation
@@ -7800,12 +7785,18 @@ function refreshSettingsPanelState() {
  * feature off so a stale saved setting can never recolor while labelsOnLeftSide
  * is true. The checkbox value itself is preserved (not unchecked) so the user's
  * preference is restored if they turn labels-on-left-side off again.
+ *
+ * Design recolor is unavailable in Manual Run (a manual selected-range Run may
+ * cover only part of a table), so a separate warning is shown in the Manual Run
+ * workspace whenever the recolor setting is effectively enabled, pointing the
+ * user to the autorun flows that do support it.
  */
 function refreshDesignRecolorState() {
   const recolorCheckbox = document.getElementById("recolor-banner-and-labels");
   const colorInput = document.getElementById("banner-label-fill-color");
   const labelsOnLeftSideCheckbox = document.getElementById("labels-on-left-side");
   const warningElement = document.getElementById("recolor-banner-and-labels-warning");
+  const manualRunWarningElement = document.getElementById("manual-run-recolor-warning");
 
   if (!recolorCheckbox) {
     return;
@@ -7820,6 +7811,14 @@ function refreshDesignRecolorState() {
 
   if (warningElement) {
     warningElement.style.display = labelsOnLeftSide ? "block" : "none";
+  }
+
+  // Manual Run warning: shown only when recolor is effectively enabled. When
+  // labelsOnLeftSide forces recolor off the feature does nothing, so the Manual
+  // Run warning is hidden to avoid a misleading message.
+  if (manualRunWarningElement) {
+    const recolorEffectivelyEnabled = recolorCheckbox.checked && !labelsOnLeftSide;
+    manualRunWarningElement.style.display = recolorEffectivelyEnabled ? "block" : "none";
   }
 }
 
