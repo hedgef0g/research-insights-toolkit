@@ -7,7 +7,6 @@ import {
   buildSignificanceFootnoteVisibleText,
   buildSignificanceFootnoteCellValue,
   buildProcessedRangeFootnoteSuffix,
-  buildProcessedBannerGroupsFootnoteSuffix,
   appendFootnoteScopeDetail,
 } from "../../src/core/significance-footnote.js";
 
@@ -149,41 +148,6 @@ describe("processed-scope footnote suffixes", () => {
     assert.strictEqual(buildProcessedRangeFootnoteSuffix(null), "");
     assert.strictEqual(buildProcessedRangeFootnoteSuffix(undefined), "");
     assert.strictEqual(buildProcessedRangeFootnoteSuffix(42), "");
-  });
-
-  it("appends a processed groups suffix, de-duplicated and ordered", () => {
-    // Test 2 (issue #308): append processed groups.
-    assert.strictEqual(
-      buildProcessedBannerGroupsFootnoteSuffix(["Мужской", "Женский", "Total"]),
-      " Обработаны группы: Мужской, Женский, Total."
-    );
-    assert.strictEqual(
-      buildProcessedBannerGroupsFootnoteSuffix(["Мужской", " Мужской ", "Женский", ""]),
-      " Обработаны группы: Мужской, Женский."
-    );
-  });
-
-  it("uses the banner-path wording for hierarchical labels", () => {
-    assert.strictEqual(
-      buildProcessedBannerGroupsFootnoteSuffix(["Пол / Мужской", "Пол / Женский"]),
-      " Обработаны группы баннера: Пол / Мужской; Пол / Женский."
-    );
-  });
-
-  it("falls back (returns '') when groups are empty or unhelpful", () => {
-    // Test 3 (issue #308): fallback when groups are empty/unhelpful.
-    assert.strictEqual(buildProcessedBannerGroupsFootnoteSuffix([]), "");
-    assert.strictEqual(buildProcessedBannerGroupsFootnoteSuffix(null), "");
-    assert.strictEqual(buildProcessedBannerGroupsFootnoteSuffix(["", "  ", null]), "");
-    // A single distinct label is not informative enough.
-    assert.strictEqual(buildProcessedBannerGroupsFootnoteSuffix(["Total"]), "");
-    assert.strictEqual(buildProcessedBannerGroupsFootnoteSuffix(["Total", "Total"]), "");
-    // Too many distinct labels → too noisy.
-    const many = Array.from({ length: 9 }, (_, i) => `Группа ${i + 1}`);
-    assert.strictEqual(buildProcessedBannerGroupsFootnoteSuffix(many), "");
-    // Too long even within the count limit → too noisy.
-    const long = ["А".repeat(120), "Б".repeat(120)];
-    assert.strictEqual(buildProcessedBannerGroupsFootnoteSuffix(long), "");
   });
 
   it("appendFootnoteScopeDetail leaves base text unchanged for blank suffixes", () => {

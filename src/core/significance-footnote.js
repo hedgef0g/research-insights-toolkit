@@ -90,12 +90,6 @@ export function buildSignificanceFootnoteVisibleText({
   return appendFootnoteScopeDetail(base, scopeDetail);
 }
 
-// Upper bounds that keep the processed-groups detail concise. Beyond these the
-// list is considered too noisy to be useful and the caller should fall back to
-// the processed range instead.
-const MAX_FOOTNOTE_GROUP_LABELS = 8;
-const MAX_FOOTNOTE_GROUPS_TEXT_LENGTH = 160;
-
 /**
  * Strips a leading sheet prefix (e.g. "Sheet1!" or "'My Sheet'!") from an A1
  * address so the footnote shows a concise local range. Returns "" for empty
@@ -141,49 +135,6 @@ export function buildProcessedRangeFootnoteSuffix(rangeAddress) {
   const local = toLocalA1Range(rangeAddress);
   if (!local) return "";
   return ` Обработано: ${local}.`;
-}
-
-/**
- * Builds the processed-banner-groups footnote suffix from a list of raw group
- * labels (one per processed column, in column order). Labels are trimmed,
- * de-duplicated (preserving first-seen order) and validated:
- *
- * - empty / whitespace-only labels are dropped;
- * - at least two distinct meaningful labels are required (a single label is not
- *   informative enough to replace the raw range);
- * - if the de-duplicated list is too long or too noisy, "" is returned so the
- *   caller falls back to the processed range.
- *
- * Hierarchical labels containing " / " (a banner path) switch the wording to
- * "Обработаны группы баннера: ... ; ..." to match the nested presentation.
- *
- * Example: ["Мужской", "Женский", "Total"] → " Обработаны группы: Мужской, Женский, Total."
- *
- * @param {string[]} groupLabels
- * @returns {string} suffix with a leading space, or "" to signal fallback
- */
-export function buildProcessedBannerGroupsFootnoteSuffix(groupLabels) {
-  if (!Array.isArray(groupLabels)) return "";
-
-  const seen = new Set();
-  const labels = [];
-  for (const raw of groupLabels) {
-    const label = String(raw ?? "").trim();
-    if (!label) continue;
-    if (seen.has(label)) continue;
-    seen.add(label);
-    labels.push(label);
-  }
-
-  if (labels.length < 2) return "";
-  if (labels.length > MAX_FOOTNOTE_GROUP_LABELS) return "";
-
-  const hierarchical = labels.some((label) => label.includes(" / "));
-  const joined = labels.join(hierarchical ? "; " : ", ");
-  if (joined.length > MAX_FOOTNOTE_GROUPS_TEXT_LENGTH) return "";
-
-  const lead = hierarchical ? "Обработаны группы баннера" : "Обработаны группы";
-  return ` ${lead}: ${joined}.`;
 }
 
 /**

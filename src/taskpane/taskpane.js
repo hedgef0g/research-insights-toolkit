@@ -37,7 +37,6 @@ import {
   collectStatisticTypeLabels,
   buildSignificanceFootnoteCellValue,
   buildProcessedRangeFootnoteSuffix,
-  buildProcessedBannerGroupsFootnoteSuffix,
 } from "../core/significance-footnote";
 
 import { detectBannerStructure } from "../core/banner-detector";
@@ -1051,14 +1050,10 @@ async function runSignificanceFromSelection() {
     // calculation writes complete. Insertion happens after all calculation
     // reads/writes so it cannot shift the range being calculated.
     //
-    // Manual Run only (issue #308): append a concise processed-scope detail so
-    // the user can see what was actually processed. Prefer meaningful banner
-    // group labels; otherwise fall back to the actual processed range (which may
-    // be narrower than the original selection after normalization).
-    const processedBannerGroupLabels = extractProcessedBannerGroupLabels(bannerStructure);
-    const processedScopeSuffix =
-      buildProcessedBannerGroupsFootnoteSuffix(processedBannerGroupLabels) ||
-      buildProcessedRangeFootnoteSuffix(writeTargetRange.address);
+    // Manual Run only (issue #308): append the actual processed/write-target
+    // range so the user can see what was actually processed. This may be
+    // narrower than the original selection after selected-range normalization.
+    const processedScopeSuffix = buildProcessedRangeFootnoteSuffix(writeTargetRange.address);
 
     const footnoteJob = buildSignificanceFootnoteJob({
       sheetName: "",
@@ -5981,25 +5976,6 @@ async function ensureBacklinkRows(context, sheetResults, contentRowMap) {
 // from the already-known ranges) and applies them AFTER all calculations finish,
 // bottom-to-top per worksheet so earlier insertions never shift a not-yet-applied
 // job's row index.
-
-/**
- * Extracts a per-column list of processed banner group labels from a detected
- * banner structure (Manual Run, issue #308). Prefers the column display label
- * (which includes the banner path, e.g. "Пол / Мужской") and falls back to the
- * plain lower label. Returns [] when no usable banner structure is present, in
- * which case the caller falls back to the processed range.
- *
- * Cleaning, de-duplication and the "is this meaningful?" decision live in the
- * pure buildProcessedBannerGroupsFootnoteSuffix helper.
- */
-function extractProcessedBannerGroupLabels(bannerStructure) {
-  if (!bannerStructure || !bannerStructure.isDetected) return [];
-  const descriptors = bannerStructure.columnDescriptors;
-  if (!Array.isArray(descriptors)) return [];
-  return descriptors.map((descriptor) =>
-    descriptor ? descriptor.displayLabel || descriptor.lowerLabel || "" : ""
-  );
-}
 
 /**
  * Builds a footnote job for a single processed table, or null when the footnote
