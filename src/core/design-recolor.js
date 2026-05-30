@@ -26,17 +26,29 @@ function isBlankCell(value) {
 }
 
 /**
- * Counts the contiguous non-blank label columns immediately adjacent to the
- * data body, scanning from the rightmost (data-adjacent) column leftward and
- * stopping at the first fully-blank column.
+ * Counts the row-label columns to recolor for a label matrix the interpreter has
+ * already accepted as adjacent to the data body.
  *
  * `leftLabelValues` is a rows × columns matrix whose columns are ordered
- * left-to-right, so the rightmost column is the one touching the data body.
+ * left-to-right, so the rightmost column is the one touching the data body. The
+ * label area spans from the **leftmost column that has any content** through the
+ * rightmost (data-adjacent) column inclusive.
  *
- *   - 1 real label column (further-left column blank) → 1
- *   - 2 real label columns                            → 2
- *   - no label columns / empty input                  → 0
- *   - a blank gap column adjacent to the data body    → 0 (gap not crossed)
+ * A blank data-adjacent (rightmost) column is therefore NOT treated as a gap:
+ * in valid two-column label layouts the text can live only in the left cell or
+ * in a cell merged across both columns, leaving the right cell visually empty.
+ * Recolor should still cover the whole label area that calculation reads.
+ *
+ * Real blank helper gaps between the labels and the data body are filtered
+ * upstream by the selected-range interpreter (leadingEmptyCols /
+ * additionalLeadingEmptyCols / labelsOnLeftSide force the count to 0 before this
+ * is ever called), so this function never has to re-detect them.
+ *
+ * For a two-column matrix (when the interpreter has not forced 0):
+ *   - both columns have content                         → 2
+ *   - only the right/data-adjacent column has content   → 1
+ *   - only the left column has content (right blank)    → 2
+ *   - both columns blank                                → 0
  *
  * @param {Array<Array<*>>} leftLabelValues
  * @returns {number}
@@ -46,8 +58,11 @@ export function countAdjacentLabelColumns(leftLabelValues) {
   const width = Array.isArray(leftLabelValues[0]) ? leftLabelValues[0].length : 0;
   if (width === 0) return 0;
 
-  let count = 0;
-  for (let col = width - 1; col >= 0; col--) {
+  // The leftmost column carrying any content marks the left edge of the label
+  // area; the area always extends rightward to the data body. Leading blank
+  // columns (further from the data) are excluded; a blank rightmost column is
+  // kept (merged / left-stored two-column labels).
+  for (let col = 0; col < width; col++) {
     let hasContent = false;
     for (let row = 0; row < leftLabelValues.length; row++) {
       const rowValues = leftLabelValues[row];
@@ -57,12 +72,11 @@ export function countAdjacentLabelColumns(leftLabelValues) {
       }
     }
     if (hasContent) {
-      count++;
-    } else {
-      break;
+      return width - col;
     }
   }
-  return count;
+
+  return 0;
 }
 
 /**

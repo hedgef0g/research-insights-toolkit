@@ -19,7 +19,7 @@ describe("countAdjacentLabelColumns", () => {
     assert.strictEqual(countAdjacentLabelColumns(labels), 1);
   });
 
-  it("counts two adjacent label columns", () => {
+  it("counts two adjacent label columns when both have content", () => {
     const labels = [
       ["Top 2 box", "Agree"],
       ["", "Disagree"],
@@ -28,8 +28,8 @@ describe("countAdjacentLabelColumns", () => {
     assert.strictEqual(countAdjacentLabelColumns(labels), 2);
   });
 
-  it("stops at a blank gap column adjacent to the data (1 real label, blank further-left)", () => {
-    // Rightmost (data-adjacent) column is real labels; further-left is blank.
+  it("returns 1 when only the right/data-adjacent column has content", () => {
+    // Leftmost column is blank (excluded); data-adjacent column carries labels.
     const labels = [
       ["", "Agree"],
       ["", "Disagree"],
@@ -38,11 +38,30 @@ describe("countAdjacentLabelColumns", () => {
     assert.strictEqual(countAdjacentLabelColumns(labels), 1);
   });
 
-  it("returns 0 when the data-adjacent column is entirely blank (gap)", () => {
+  it("returns 2 when only the left column has content and the right is blank", () => {
+    // Two-column label area with the right (data-adjacent) cell blank — e.g.
+    // labels stored only in the left cell. Not a gap: spans both columns.
     const labels = [
       ["Agree", ""],
       ["Disagree", ""],
       ["Base", ""],
+    ];
+    assert.strictEqual(countAdjacentLabelColumns(labels), 2);
+  });
+
+  it("returns 2 for merged-like labels stored only in the left column", () => {
+    const labels = [
+      ["Mean", ""],
+      ["Standard deviation", ""],
+      ["Base", ""],
+    ];
+    assert.strictEqual(countAdjacentLabelColumns(labels), 2);
+  });
+
+  it("returns 0 when both columns are blank", () => {
+    const labels = [
+      ["", ""],
+      ["", ""],
     ];
     assert.strictEqual(countAdjacentLabelColumns(labels), 0);
   });
@@ -192,5 +211,32 @@ describe("buildDesignRecolorJob", () => {
       calculationSettings: ON,
     });
     assert.strictEqual(job, null);
+  });
+
+  it("regression: Mean + SD + Base with labels only in the left of a 2-column label area recolors 2 columns", () => {
+    // Label text lives only in the left label column; the right (data-adjacent)
+    // label column is blank (merged / left-stored labels). Calculation reads the
+    // labels fine, and recolor should cover the full 2-column label area.
+    const leftLabelValues = [
+      ["Mean", ""],
+      ["Standard deviation", ""],
+      ["Base", ""],
+    ];
+    const adjacentLabelColumnCount = countAdjacentLabelColumns(leftLabelValues);
+    assert.strictEqual(adjacentLabelColumnCount, 2);
+
+    const job = buildDesignRecolorJob({
+      sheetName: "Sheet1",
+      dataStartRowIndex: 5,
+      dataStartColIndex: 3,
+      dataRowCount: 3,
+      dataColCount: 6,
+      adjacentLabelColumnCount,
+      bannerRowCount: 0,
+      calculationSettings: ON,
+    });
+    assert.deepStrictEqual(job.rects, [
+      { rowIndex: 5, columnIndex: 1, rowCount: 3, columnCount: 2 },
+    ]);
   });
 });
