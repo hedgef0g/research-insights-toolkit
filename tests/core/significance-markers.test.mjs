@@ -8,6 +8,7 @@ import {
   getSignificanceMarkerCapacity,
   computeRequiredSignificanceLabelCount,
   detectSignificanceMarkerOverflow,
+  detectBatchMarkerOverflow,
   getSignificanceLabelForColumnIndex,
   buildBannerLocalSignificanceLabelMap,
   applyComparisonResultsToFullCellResultMatrix,
@@ -176,6 +177,38 @@ describe("marker capacity and overflow detection", () => {
       computeRequiredSignificanceLabelCount(7, { respectBannerStructure: true }, bannerStructure),
       4
     );
+  });
+});
+
+describe("detectBatchMarkerOverflow — operation-level preflight", () => {
+  const latinCapacity = getSignificanceMarkerCapacity({ useCyrillicMarkers: false });
+
+  it("returns false when no eligible table overflows", () => {
+    assert.strictEqual(detectBatchMarkerOverflow([3, 10, latinCapacity], {}), false);
+  });
+
+  it("returns true when a single eligible table overflows", () => {
+    assert.strictEqual(detectBatchMarkerOverflow([latinCapacity + 1], {}), true);
+  });
+
+  it("returns true when the first table is normal but a later one overflows", () => {
+    assert.strictEqual(detectBatchMarkerOverflow([5, 8, latinCapacity + 5], {}), true);
+  });
+
+  it("respects the larger Cyrillic capacity", () => {
+    const cyrillicCapacity = getSignificanceMarkerCapacity({ useCyrillicMarkers: true });
+    const between = latinCapacity + 1; // overflows Latin, still fits Cyrillic
+    assert.ok(between <= cyrillicCapacity);
+    assert.strictEqual(detectBatchMarkerOverflow([between], { useCyrillicMarkers: false }), true);
+    assert.strictEqual(detectBatchMarkerOverflow([between], { useCyrillicMarkers: true }), false);
+  });
+
+  it("ignores missing / non-finite column counts", () => {
+    assert.strictEqual(detectBatchMarkerOverflow([undefined, null, NaN, 4], {}), false);
+  });
+
+  it("returns false for a non-array input", () => {
+    assert.strictEqual(detectBatchMarkerOverflow(undefined, {}), false);
   });
 });
 

@@ -20,6 +20,7 @@ import {
   buildBannerLocalSignificanceLabelMap,
   isSignificanceMarkerLabel,
   detectSignificanceMarkerOverflow,
+  detectBatchMarkerOverflow,
 } from "../core/significance";
 
 import {
@@ -829,6 +830,38 @@ function createMarkerOverflowDecider() {
       return decision;
     },
   };
+}
+
+/**
+ * Operation-level marker-overflow preflight for batch runs (current-sheet /
+ * workbook). Inspects the eligible candidates' column counts BEFORE any table
+ * is written, so the overflow decision is made once, up front, and Stop leaves
+ * the whole operation without partial results.
+ *
+ * Returns true when the user chose to stop (caller must abort before writing
+ * any table). On Continue it sets allowMultiCharacterMarkers on the shared
+ * calculationSettings so every table uses multi-character markers.
+ *
+ * The per-table preflight inside runSignificanceForRangeInContext stays as a
+ * safety net; because the shared decider's choice is cached here, it never
+ * re-prompts.
+ */
+function preflightBatchMarkerOverflow(eligible, itemMap, calculationSettings, decider) {
+  const columnCounts = eligible.map((candidate) => {
+    const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
+    return item ? item.columnCount : undefined;
+  });
+
+  if (!detectBatchMarkerOverflow(columnCounts, calculationSettings)) {
+    return false;
+  }
+
+  if (decider.resolve() === "stop") {
+    return true;
+  }
+
+  calculationSettings.allowMultiCharacterMarkers = true;
+  return false;
 }
 
 async function runSignificanceFromSelection() {
@@ -1915,6 +1948,13 @@ async function runAutoSignificance() {
         );
       }
     }
+    return;
+  }
+
+  // Operation-level marker-overflow preflight: decide once, before any table is
+  // written. Stop aborts the whole run with no partial results.
+  if (preflightBatchMarkerOverflow(eligible, itemMap, calculationSettings, markerOverflowDecider)) {
+    setStatusMessage(t("markerOverflow.stopped"));
     return;
   }
 
@@ -3804,6 +3844,13 @@ async function runCurrentSheetSignificance() {
         );
       }
     }
+    return;
+  }
+
+  // Operation-level marker-overflow preflight: decide once, before any table is
+  // written. Stop aborts the whole run with no partial results.
+  if (preflightBatchMarkerOverflow(eligible, itemMap, calculationSettings, markerOverflowDecider)) {
+    setStatusMessage(t("markerOverflow.stopped"));
     return;
   }
 

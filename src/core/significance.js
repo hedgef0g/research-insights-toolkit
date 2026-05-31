@@ -415,6 +415,36 @@ export function detectSignificanceMarkerOverflow(
 }
 
 /**
+ * Operation-level overflow preflight for batch runs (current-sheet / workbook).
+ *
+ * Decides whether ANY candidate table could overflow the marker alphabet,
+ * using each table's raw column count from the inventory. This runs before any
+ * table is written so the overflow decision can be made once, up front, without
+ * partial results.
+ *
+ * The check is deliberately conservative: a table's actual required label count
+ * is always <= its raw column count (label/Total columns are dropped during
+ * interpretation, and banner groups are subsets of the columns), so this never
+ * misses a real overflow. It may over-prompt by a small margin near the
+ * alphabet boundary, which is harmless (continuing keeps single-character
+ * markers when they still fit).
+ *
+ * @param {Array<number>} columnCounts Raw column counts of the eligible tables.
+ * @param {object} [calculationSettings] Used for the Cyrillic capacity.
+ */
+export function detectBatchMarkerOverflow(columnCounts, calculationSettings = {}) {
+  if (!Array.isArray(columnCounts)) {
+    return false;
+  }
+
+  const capacity = getSignificanceMarkerCapacity(calculationSettings);
+
+  return columnCounts.some(
+    (columnCount) => Number.isFinite(columnCount) && columnCount > capacity
+  );
+}
+
+/**
  * Builds column comparison pairs based on current comparison settings.
  *
  * MODES:
