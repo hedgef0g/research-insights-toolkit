@@ -13,7 +13,10 @@
  * Office.js context for loading labels and banner rows from the sheet.
  */
 
-import { removeSignificanceMarkersFromMatrix, generateSignificanceLabels } from "../core/significance";
+import {
+  removeSignificanceMarkersFromMatrix,
+  isSignificanceMarkerLabel,
+} from "../core/significance";
 import { LABEL_SCAN_COLUMNS_LEFT } from "../core/metric-detector";
 import { normalizeSelectedRange } from "../core/range-normalizer";
 import { resolveAdjacentLabelColumnCount } from "../core/design-recolor";
@@ -383,12 +386,11 @@ function buildRunBannerContext(bannerContext) {
  */
 function stripAllTrailingBannerMarkersFromCell(rawText) {
   if (rawText === null || rawText === undefined) return "";
-  const labels = generateSignificanceLabels();
   let result = String(rawText);
   for (;;) {
     const match = result.match(/(^|\s)\(([^()]*)\)\s*$/);
     if (!match) break;
-    if (!labels.includes(match[2])) break;
+    if (!isSignificanceMarkerLabel(match[2])) break;
     result = result.slice(0, match.index).trim();
   }
   return result;

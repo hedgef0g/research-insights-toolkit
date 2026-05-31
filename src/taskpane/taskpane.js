@@ -3,7 +3,7 @@
  * See LICENSE in the project root for license information.
  */
 
-/* global console, document, Excel, Office */
+/* global console, document, window, Excel, Office */
 
 import {
   createEmptyCellResultMatrix,
@@ -18,6 +18,8 @@ import {
   removeSignificanceMarkersFromText,
   generateSignificanceLabels,
   buildBannerLocalSignificanceLabelMap,
+  isSignificanceMarkerLabel,
+  detectSignificanceMarkerOverflow,
 } from "../core/significance";
 
 import {
@@ -794,9 +796,45 @@ function initActionScopeShell() {
  * - NPS + Promoters + Detractors + Base
  * - NPS + SD/Variance + Base
  */
+/**
+ * Shows the marker-overflow dialog. Returns true to continue with
+ * multi-character markers, false to stop the calculation.
+ *
+ * Uses window.confirm, which is supported in the Office add-in webview and is
+ * consistent with keeping the release-time UX minimal: OK continues with
+ * multi-character markers, Cancel stops the calculation.
+ */
+function confirmMarkerOverflowDialog() {
+  return window.confirm(t("markerOverflow.message"));
+}
+
+/**
+ * Per-operation marker-overflow decision.
+ *
+ * The dialog is shown at most once per Run; the user's choice is then reused for
+ * every table processed in the same operation (so batch runs do not re-prompt
+ * for each table). `resolve()` returns "continue" or "stop".
+ */
+function createMarkerOverflowDecider() {
+  let decision = null; // null | "continue" | "stop"
+
+  return {
+    resolve() {
+      if (decision === null) {
+        decision = confirmMarkerOverflowDialog() ? "continue" : "stop";
+      }
+      return decision;
+    },
+    get decision() {
+      return decision;
+    },
+  };
+}
+
 async function runSignificanceFromSelection() {
   const _t0 = perfNow();
   setStatusMessage(runningStatusMessage("run", "table"));
+  const markerOverflowDecider = createMarkerOverflowDecider();
   await Excel.run(async (context) => {
     const calculationSettings = readCalculationSettingsFromPanel();
     if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
@@ -925,6 +963,38 @@ async function runSignificanceFromSelection() {
       return;
     }
 
+    // Detect banner structure before any write so marker-overflow can be
+    // resolved up front. Detection is pure (interpretedBannerContext is already
+    // sanitized by the interpreter, so it is idempotent across repeated Runs).
+    let bannerStructure = null;
+
+    if (calculationSettings.respectBannerStructure) {
+      const bannerContext = interpretedBannerContext;
+
+      bannerStructure = detectBannerStructure(bannerContext, calculationSettings);
+
+      if (bannerContext.messages && bannerContext.messages.length > 0) {
+        bannerStructure.messages = [...bannerContext.messages, ...(bannerStructure.messages || [])];
+      }
+    }
+
+    // Marker-overflow preflight: when there are more comparable columns than
+    // single-character markers, ask the user before writing anything. Stopping
+    // here leaves the selection untouched (no partial results).
+    if (
+      detectSignificanceMarkerOverflow(
+        valuesForCalculation[0].length,
+        calculationSettings,
+        bannerStructure
+      )
+    ) {
+      if (markerOverflowDecider.resolve() === "stop") {
+        setStatusMessage(t("markerOverflow.stopped"));
+        return;
+      }
+      calculationSettings.allowMultiCharacterMarkers = true;
+    }
+
     writeTargetRange.values = valuesForCalculation;
 
     writeTargetRange.format.font.bold = false;
@@ -949,21 +1019,6 @@ async function runSignificanceFromSelection() {
         )
       );
       return;
-    }
-
-    let bannerStructure = null;
-
-    if (calculationSettings.respectBannerStructure) {
-      // interpretedBannerContext is already sanitized by selected-range-interpreter
-      // (all RIT markers stripped from banner rows) so detection is idempotent
-      // across repeated Runs and Checks.
-      const bannerContext = interpretedBannerContext;
-
-      bannerStructure = detectBannerStructure(bannerContext, calculationSettings);
-
-      if (bannerContext.messages && bannerContext.messages.length > 0) {
-        bannerStructure.messages = [...bannerContext.messages, ...(bannerStructure.messages || [])];
-      }
     }
 
     const fullCellResultMatrix = createEmptyCellResultMatrix(
@@ -1166,7 +1221,13 @@ async function runSignificanceFromSelection() {
  * Returns { status, blocksProcessed, message, rangeAddress }.
  * status: "processed" | "skipped" | "blocked" | "error"
  */
-async function runSignificanceForRangeInContext(context, sheetName, rangeAddress, calculationSettings) {
+async function runSignificanceForRangeInContext(
+  context,
+  sheetName,
+  rangeAddress,
+  calculationSettings,
+  markerOverflowDecider = null
+) {
   const _p0 = perfNow();
   const worksheet = context.workbook.worksheets.getItem(sheetName);
   const sourceRange = worksheet.getRange(rangeAddress);
@@ -1239,6 +1300,37 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
     };
   }
 
+  // Detect banner structure before any write so marker-overflow can be resolved
+  // up front (the dialog must appear before results are written).
+  let bannerStructure = null;
+
+  if (calculationSettings.respectBannerStructure) {
+    const bannerContext = interpretedBannerContext;
+    bannerStructure = detectBannerStructure(bannerContext, calculationSettings);
+    if (bannerContext && bannerContext.messages && bannerContext.messages.length > 0) {
+      bannerStructure.messages = [...bannerContext.messages, ...(bannerStructure.messages || [])];
+    }
+  }
+
+  // Marker-overflow preflight. When more comparable columns exist than
+  // single-character markers, ask once per operation. Stopping returns before
+  // any write so no partial results are written for this table.
+  if (
+    detectSignificanceMarkerOverflow(
+      valuesForCalculation[0].length,
+      calculationSettings,
+      bannerStructure
+    )
+  ) {
+    const activeDecider = markerOverflowDecider || createMarkerOverflowDecider();
+    if (activeDecider.resolve() === "stop") {
+      return { status: "stopped", message: "расчёт остановлен — превышен лимит маркеров", rangeAddress };
+    }
+    // Mutate the (per-operation) settings so every table in the batch uses
+    // multi-character markers consistently after the user opts to continue.
+    calculationSettings.allowMultiCharacterMarkers = true;
+  }
+
   writeTargetRange.values = valuesForCalculation;
   writeTargetRange.format.font.bold = false;
   writeTargetRange.format.fill.clear();
@@ -1254,16 +1346,6 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
 
   if (!calculationBlocks || calculationBlocks.length === 0) {
     return { status: "skipped", message: "нет блоков расчёта", rangeAddress };
-  }
-
-  let bannerStructure = null;
-
-  if (calculationSettings.respectBannerStructure) {
-    const bannerContext = interpretedBannerContext;
-    bannerStructure = detectBannerStructure(bannerContext, calculationSettings);
-    if (bannerContext && bannerContext.messages && bannerContext.messages.length > 0) {
-      bannerStructure.messages = [...bannerContext.messages, ...(bannerStructure.messages || [])];
-    }
   }
 
   const fullCellResultMatrix = createEmptyCellResultMatrix(
@@ -1449,9 +1531,20 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
  * Returns { status, blocksProcessed, message, rangeAddress }.
  * status: "processed" | "skipped" | "blocked" | "error"
  */
-async function runSignificanceForRange(sheetName, rangeAddress, calculationSettings) {
+async function runSignificanceForRange(
+  sheetName,
+  rangeAddress,
+  calculationSettings,
+  markerOverflowDecider = null
+) {
   const result = await Excel.run((context) =>
-    runSignificanceForRangeInContext(context, sheetName, rangeAddress, calculationSettings)
+    runSignificanceForRangeInContext(
+      context,
+      sheetName,
+      rangeAddress,
+      calculationSettings,
+      markerOverflowDecider
+    )
   );
   if (result._phasesMs) {
     perfLog("runSignificanceForRange", { ...result._phasesMs, rangeAddress });
@@ -1711,6 +1804,8 @@ async function writeRunReportSheet(context, reportRows, runLabel) {
 async function runAutoSignificance() {
   const _t0 = perfNow();
   const calculationSettings = readCalculationSettingsFromPanel();
+  // One overflow decision shared across every table processed in this run.
+  const markerOverflowDecider = createMarkerOverflowDecider();
 
   if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
     setStatusMessage(
@@ -1825,6 +1920,9 @@ async function runAutoSignificance() {
 
   let processed = 0;
   let errors = 0;
+  // Set when the user chooses Stop at the marker-overflow dialog: halts further
+  // table processing for the rest of this operation.
+  let markerOverflowStopped = false;
   // Footnote jobs collected during the run and applied bottom-to-top per sheet
   // AFTER all calculations finish (insertions must not shift pending ranges).
   const footnoteJobs = [];
@@ -1864,8 +1962,17 @@ async function runAutoSignificance() {
             context,
             candidate.sheetName,
             candidate.rangeAddress,
-            calculationSettings
+            calculationSettings,
+            markerOverflowDecider
           );
+          if (result.status === "stopped") {
+            // User chose to stop at the marker-overflow dialog. Stop processing
+            // further tables; tables already processed keep their results.
+            skipped++;
+            detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ${result.message}`);
+            markerOverflowStopped = true;
+            break;
+          }
           if (result.status === "processed") {
             processed++;
             if (result.footnoteJob) footnoteJobs.push(result.footnoteJob);
@@ -1953,7 +2060,18 @@ async function runAutoSignificance() {
     const candidate = eligible[_fi];
     const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
     try {
-      const result = await runSignificanceForRange(candidate.sheetName, candidate.rangeAddress, calculationSettings);
+      const result = await runSignificanceForRange(
+        candidate.sheetName,
+        candidate.rangeAddress,
+        calculationSettings,
+        markerOverflowDecider
+      );
+      if (result.status === "stopped") {
+        skipped++;
+        detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ${result.message}`);
+        markerOverflowStopped = true;
+        break;
+      }
       if (result.status === "processed") {
         processed++;
         if (result.footnoteJob) footnoteJobs.push(result.footnoteJob);
@@ -2045,6 +2163,10 @@ async function runAutoSignificance() {
     `Пропущено: ${skipped}.`,
     `Ошибок: ${errors}.`,
   ];
+
+  if (markerOverflowStopped) {
+    summaryLines.push("", t("markerOverflow.stopped"));
+  }
 
   if (detailLines.length > 0) {
     summaryLines.push("", ...detailLines);
@@ -2231,7 +2353,9 @@ async function runAutoCurrentTableSignificance() {
   const statusMsg =
     result.status === "processed"
       ? t("status.autorunProcessed", { sheet: sheetName, range: rangeAddress, count: result.blocksProcessed })
-      : t("status.autorunSkipped", { msg: result.message || t("status.resolverFallback") });
+      : result.status === "stopped"
+        ? t("markerOverflow.stopped")
+        : t("status.autorunSkipped", { msg: result.message || t("status.resolverFallback") });
 
   perfLog("runAutoCurrentTableSignificance", {
     resolveMs: _tRun - _t0,
@@ -3574,6 +3698,8 @@ async function clearAutoSignificance() {
 async function runCurrentSheetSignificance() {
   const _t0 = perfNow();
   const calculationSettings = readCalculationSettingsFromPanel();
+  // One overflow decision shared across every table processed in this run.
+  const markerOverflowDecider = createMarkerOverflowDecider();
 
   if (calculationSettings.compareWithPreviousColumn && calculationSettings.compareOnlyWithTotal) {
     setStatusMessage(
@@ -3683,6 +3809,9 @@ async function runCurrentSheetSignificance() {
 
   let processed = 0;
   let errors = 0;
+  // Set when the user chooses Stop at the marker-overflow dialog: halts further
+  // table processing for the rest of this operation.
+  let markerOverflowStopped = false;
   // Footnote jobs collected during the run and applied bottom-to-top per sheet
   // AFTER all calculations finish (insertions must not shift pending ranges).
   const footnoteJobs = [];
@@ -3722,8 +3851,17 @@ async function runCurrentSheetSignificance() {
             context,
             candidate.sheetName,
             candidate.rangeAddress,
-            calculationSettings
+            calculationSettings,
+            markerOverflowDecider
           );
+          if (result.status === "stopped") {
+            // User chose to stop at the marker-overflow dialog. Stop processing
+            // further tables; tables already processed keep their results.
+            skipped++;
+            detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ${result.message}`);
+            markerOverflowStopped = true;
+            break;
+          }
           if (result.status === "processed") {
             processed++;
             if (result.footnoteJob) footnoteJobs.push(result.footnoteJob);
@@ -3811,7 +3949,18 @@ async function runCurrentSheetSignificance() {
     const candidate = eligible[_fi];
     const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
     try {
-      const result = await runSignificanceForRange(candidate.sheetName, candidate.rangeAddress, calculationSettings);
+      const result = await runSignificanceForRange(
+        candidate.sheetName,
+        candidate.rangeAddress,
+        calculationSettings,
+        markerOverflowDecider
+      );
+      if (result.status === "stopped") {
+        skipped++;
+        detailLines.push(`- ${candidate.sheetName} ${candidate.rangeAddress}: ${result.message}`);
+        markerOverflowStopped = true;
+        break;
+      }
       if (result.status === "processed") {
         processed++;
         if (result.footnoteJob) footnoteJobs.push(result.footnoteJob);
@@ -3903,6 +4052,10 @@ async function runCurrentSheetSignificance() {
     `Пропущено: ${skipped}.`,
     `Ошибок: ${errors}.`,
   ];
+
+  if (markerOverflowStopped) {
+    summaryLines.push("", t("markerOverflow.stopped"));
+  }
 
   if (detailLines.length > 0) {
     summaryLines.push("", ...detailLines);
@@ -6950,6 +7103,15 @@ function readCalculationSettingsFromPanel() {
     autoDetectWaveBanners: getCheckboxValue("auto-detect-wave-banners"),
     labelsOnLeftSide,
 
+    // Whether allowed Cyrillic letters may be used as significance markers.
+    // Default-off for global release safety (issue #312). Independent of the
+    // task pane UI language.
+    useCyrillicMarkers: getCheckboxValue("use-cyrillic-markers"),
+
+    // Runtime-only decision (not persisted). Set to true after the user opts to
+    // continue with multi-character overflow markers in the overflow dialog.
+    allowMultiCharacterMarkers: false,
+
     compareOnlyWithTotal: getCheckboxValue("compare-only-with-total"),
     excludeTotalFromComparisons: getCheckboxValue("exclude-total-from-comparisons"),
 
@@ -7249,7 +7411,11 @@ async function applyBannerMarkerUpdatesForRange(
   if (useStructure) {
     labelMap = buildBannerLocalSignificanceLabelMap(bannerStructure, calculationSettings);
   } else {
-    const significanceLabels = generateSignificanceLabels();
+    const significanceLabels = generateSignificanceLabels({
+      useCyrillicMarkers: Boolean(calculationSettings.useCyrillicMarkers),
+      allowMultiCharacterMarkers: Boolean(calculationSettings.allowMultiCharacterMarkers),
+      minimumCount: targetColumnCount,
+    });
     labelMap = new Map();
     for (let dataCol = 0; dataCol < targetColumnCount; dataCol++) {
       if (calculationSettings.firstColumnIsTotal && dataCol === 0) {
@@ -7542,7 +7708,11 @@ async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calc
     return;
   }
 
-  const significanceLabels = generateSignificanceLabels();
+  const significanceLabels = generateSignificanceLabels({
+    useCyrillicMarkers: Boolean(calculationSettings.useCyrillicMarkers),
+    allowMultiCharacterMarkers: Boolean(calculationSettings.allowMultiCharacterMarkers),
+    minimumCount: selectedColumnCount,
+  });
 
   const bannerRange = selectedRange.worksheet.getRangeByIndexes(
     selectedStartRowIndex - 1,
@@ -8280,7 +8450,11 @@ function getTrailingBannerMarker(rawText) {
 
   const markerLabel = markerMatch[2]; // group 2: label inside parens
 
-  if (!generateSignificanceLabels().includes(markerLabel)) {
+  // Recognise any token RIT may have written as a marker — single characters
+  // from any historical alphabet, or multi-character overflow markers — so
+  // banner markers are cleaned up on re-runs regardless of the current
+  // Cyrillic/overflow settings.
+  if (!isSignificanceMarkerLabel(markerLabel)) {
     return null;
   }
 

@@ -165,34 +165,253 @@ export function compareAllProportionsInRow(
   return rowComparisons;
 }
 
+// Latin marker letters, excluding t / T (which are reserved for Total markers).
+const LATIN_LOWERCASE_MARKERS = "abcdefghijklmnopqrsuvwxyz"; // a-z without t.
+const LATIN_UPPERCASE_MARKERS = "ABCDEFGHIJKLMNOPQRSUVWXYZ"; // A-Z without T.
+
+// Allowed Cyrillic marker letters.
+//
+// Starting from the full Cyrillic alphabet we remove:
+// - т / Т — reserved for Total markers (pre-existing exclusion);
+// - visually confusable look-alikes of Latin markers (issue #312):
+//     а, А, В, с, С, е, Е, К, М, Н, о, О, р, Р, у, х, Х
+//
+// Note: lowercase Cyrillic `у` is excluded because it reads like Latin `y`,
+// but uppercase Cyrillic `У` is kept because it is visually distinct from
+// Latin `Y`.
+const CYRILLIC_LOWERCASE_MARKERS = "бвгджзийклмнпфцчшщъыьэюя";
+const CYRILLIC_UPPERCASE_MARKERS = "БГДЖЗИЙЛПУФЦЧШЩЪЫЬЭЮЯ";
+
+// Base alphabet used to build multi-character overflow markers (aa, ab, ac...).
+// Always lowercase Latin (without t) regardless of the Cyrillic setting so the
+// extended markers stay predictable and easy to recognise/clean up.
+const MULTI_CHARACTER_MARKER_BASE = LATIN_LOWERCASE_MARKERS.split("");
+
+// Every single-character token RIT may have written as a marker across any
+// historical alphabet (the pre-#312 Latin + full-Cyrillic set, minus t/Т).
+// Used for recognising/removing banner markers so legacy markers — including
+// now-excluded Cyrillic look-alikes — are still cleaned up on re-runs.
+const RECOGNIZED_SINGLE_CHARACTER_MARKERS = new Set(
+  (
+    "abcdefghijklmnopqrsuvwxyz" +
+    "ABCDEFGHIJKLMNOPQRSUVWXYZ" +
+    "абвгдежзийклмнопрсуфхцчшщъыьэюя" +
+    "АБВГДЕЖЗИЙКЛМНОПРСУФХЦЧШЩЪЫЬЭЮЯ"
+  ).split("")
+);
+
+/**
+ * Returns the ordered single-character significance marker alphabet.
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.useCyrillicMarkers] When true, allowed Cyrillic
+ *   markers are appended after the Latin markers. Defaults to false so that,
+ *   for global release safety, generated markers are Latin-only unless the
+ *   user explicitly opts in.
+ */
+export function getSignificanceMarkerAlphabet(options = {}) {
+  const { useCyrillicMarkers = false } =
+    options && typeof options === "object" ? options : {};
+
+  const latinLabels = (LATIN_LOWERCASE_MARKERS + LATIN_UPPERCASE_MARKERS).split("");
+
+  if (!useCyrillicMarkers) {
+    return latinLabels;
+  }
+
+  const cyrillicLabels = (CYRILLIC_LOWERCASE_MARKERS + CYRILLIC_UPPERCASE_MARKERS).split("");
+
+  return [...latinLabels, ...cyrillicLabels];
+}
+
+/**
+ * Builds `count` multi-character overflow marker labels (aa, ab, ac, ...).
+ *
+ * Labels are produced as an odometer over MULTI_CHARACTER_MARKER_BASE, shortest
+ * length first: all 2-letter combinations, then 3-letter, and so on.
+ */
+function buildMultiCharacterMarkerLabels(count) {
+  const labels = [];
+  const base = MULTI_CHARACTER_MARKER_BASE;
+
+  for (let length = 2; labels.length < count; length++) {
+    const combinationCount = Math.pow(base.length, length);
+
+    for (let n = 0; n < combinationCount && labels.length < count; n++) {
+      let remainder = n;
+      let label = "";
+
+      for (let position = 0; position < length; position++) {
+        label = base[remainder % base.length] + label;
+        remainder = Math.floor(remainder / base.length);
+      }
+
+      labels.push(label);
+    }
+  }
+
+  return labels;
+}
+
 /**
  * Generates column significance labels.
  *
  * PURPOSE:
- * Create readable column labels for significance notation:
- * a-z, A-Z, а-я, А-Я.
+ * Create readable column labels for significance notation.
  *
  * IMPORTANT:
- * Excludes:
- * - Latin t / T
- * - Cyrillic т / Т
+ * - Latin t / T and Cyrillic т / Т are excluded (reserved for Total markers).
+ * - Cyrillic markers appear only when `useCyrillicMarkers` is enabled, and then
+ *   exclude the visually confusable Latin look-alikes (issue #312).
+ * - When the single-character alphabet is exhausted and
+ *   `allowMultiCharacterMarkers` is enabled, the sequence is extended with
+ *   multi-character markers (aa, ab, ac, ...).
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.useCyrillicMarkers]
+ * @param {boolean} [options.allowMultiCharacterMarkers]
+ * @param {number} [options.minimumCount] Ensure the returned array has at least
+ *   this many labels (only extends past the single-character alphabet when
+ *   `allowMultiCharacterMarkers` is true).
  *
  * OUTPUT:
  * Array of labels.
  */
-export function generateSignificanceLabels() {
-  const latinLowercaseLabels = "abcdefghijklmnopqrsuvwxyz".split(""); // Latin a-z without t.
-  const latinUppercaseLabels = "ABCDEFGHIJKLMNOPQRSUVWXYZ".split(""); // Latin A-Z without T.
+export function generateSignificanceLabels(options = {}) {
+  const {
+    useCyrillicMarkers = false,
+    allowMultiCharacterMarkers = false,
+    minimumCount = 0,
+  } = options && typeof options === "object" ? options : {};
 
-  const cyrillicLowercaseLabels = "абвгдежзийклмнопрсуфхцчшщъыьэюя".split(""); // Cyrillic а-я without т.
-  const cyrillicUppercaseLabels = "АБВГДЕЖЗИЙКЛМНОПРСУФХЦЧШЩЪЫЬЭЮЯ".split(""); // Cyrillic А-Я without Т.
+  const singleCharacterLabels = getSignificanceMarkerAlphabet({ useCyrillicMarkers });
 
-  return [
-    ...latinLowercaseLabels,
-    ...latinUppercaseLabels,
-    ...cyrillicLowercaseLabels,
-    ...cyrillicUppercaseLabels,
-  ];
+  if (!allowMultiCharacterMarkers || minimumCount <= singleCharacterLabels.length) {
+    return singleCharacterLabels;
+  }
+
+  const extraLabels = buildMultiCharacterMarkerLabels(
+    minimumCount - singleCharacterLabels.length
+  );
+
+  return [...singleCharacterLabels, ...extraLabels];
+}
+
+/**
+ * Builds generation options for {@link generateSignificanceLabels} from the
+ * current calculation settings, ensuring at least `minimumCount` labels.
+ */
+function significanceLabelOptionsFromSettings(calculationSettings = {}, minimumCount = 0) {
+  return {
+    useCyrillicMarkers: Boolean(calculationSettings.useCyrillicMarkers),
+    allowMultiCharacterMarkers: Boolean(calculationSettings.allowMultiCharacterMarkers),
+    minimumCount,
+  };
+}
+
+/**
+ * Returns true when `label` is a token RIT could have written as a significance
+ * marker (one of the recognised single characters, or a multi-character
+ * overflow marker built from the lowercase Latin base).
+ *
+ * Used by banner marker recognition/removal so significance markers are
+ * detected without misreading ordinary parenthesised banner text such as
+ * "Wave (quarter)" or "Region (NE)".
+ */
+export function isSignificanceMarkerLabel(label) {
+  if (typeof label !== "string" || label.length === 0) {
+    return false;
+  }
+
+  if (label.length === 1) {
+    return RECOGNIZED_SINGLE_CHARACTER_MARKERS.has(label);
+  }
+
+  for (const character of label) {
+    if (!MULTI_CHARACTER_MARKER_BASE.includes(character)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Number of single-character markers available for the current settings.
+ */
+export function getSignificanceMarkerCapacity(calculationSettings = {}) {
+  return getSignificanceMarkerAlphabet({
+    useCyrillicMarkers: Boolean(calculationSettings.useCyrillicMarkers),
+  }).length;
+}
+
+/**
+ * Computes how many distinct single-character significance labels the given
+ * table would need to assign, so marker overflow can be detected before any
+ * results are written.
+ *
+ * - Banner mode: the largest per-group count of non-Total segment columns.
+ * - firstColumnIsTotal: every column except the Total column.
+ * - Otherwise: every column.
+ */
+export function computeRequiredSignificanceLabelCount(
+  columnCount,
+  calculationSettings = {},
+  bannerStructure = null
+) {
+  if (!Number.isFinite(columnCount) || columnCount < 1) {
+    return 0;
+  }
+
+  if (
+    calculationSettings.respectBannerStructure &&
+    bannerStructure &&
+    bannerStructure.groups &&
+    bannerStructure.groups.length > 0
+  ) {
+    const totalColumnIndexes = new Set(bannerStructure.totalColumnIndexes || []);
+    const globalTotalColumnIndex =
+      bannerStructure.globalTotalColumnIndex === undefined
+        ? null
+        : bannerStructure.globalTotalColumnIndex;
+
+    let maxSegmentCount = 0;
+
+    for (const group of bannerStructure.groups) {
+      let segmentCount = 0;
+
+      for (const columnIndex of group.columnIndexes || []) {
+        if (columnIndex === globalTotalColumnIndex || totalColumnIndexes.has(columnIndex)) {
+          continue;
+        }
+        segmentCount++;
+      }
+
+      maxSegmentCount = Math.max(maxSegmentCount, segmentCount);
+    }
+
+    return maxSegmentCount;
+  }
+
+  return calculationSettings.firstColumnIsTotal ? Math.max(0, columnCount - 1) : columnCount;
+}
+
+/**
+ * Returns true when the table needs more single-character significance markers
+ * than the current alphabet provides.
+ */
+export function detectSignificanceMarkerOverflow(
+  columnCount,
+  calculationSettings = {},
+  bannerStructure = null
+) {
+  const requiredCount = computeRequiredSignificanceLabelCount(
+    columnCount,
+    calculationSettings,
+    bannerStructure
+  );
+
+  return requiredCount > getSignificanceMarkerCapacity(calculationSettings);
 }
 
 /**
@@ -544,15 +763,22 @@ function buildBannerStructureComparisonPairs(
  * - etc.
  */
 export function getSignificanceLabelForColumnIndex(columnIndex, calculationSettings = {}) {
-  const labels = generateSignificanceLabels();
-
   if (calculationSettings.firstColumnIsTotal) {
     if (columnIndex === 0) {
       return "";
     }
 
-    return labels[columnIndex - 1] || "";
+    const labelIndex = columnIndex - 1;
+    const labels = generateSignificanceLabels(
+      significanceLabelOptionsFromSettings(calculationSettings, labelIndex + 1)
+    );
+
+    return labels[labelIndex] || "";
   }
+
+  const labels = generateSignificanceLabels(
+    significanceLabelOptionsFromSettings(calculationSettings, columnIndex + 1)
+  );
 
   return labels[columnIndex] || "";
 }
@@ -605,8 +831,6 @@ function getBannerGroupLocalSignificanceLabel(
   groupKey,
   calculationSettings = {}
 ) {
-  const labels = generateSignificanceLabels();
-
   const group = (bannerStructure.groups || []).find((candidate) => candidate.groupKey === groupKey);
 
   if (!group || !group.columnIndexes) {
@@ -636,6 +860,10 @@ function getBannerGroupLocalSignificanceLabel(
   if (localIndex < 0) {
     return "";
   }
+
+  const labels = generateSignificanceLabels(
+    significanceLabelOptionsFromSettings(calculationSettings, groupSegmentColumnIndexes.length)
+  );
 
   return labels[localIndex] || "";
 }
@@ -726,13 +954,22 @@ function applyFillReasonToCellResult(cellResult, fillReason) {
 
 /**
  * Appends ordinary segment marker and applies normal significance fill.
+ *
+ * When `useSpaceSeparator` is true (multi-character overflow mode), markers are
+ * separated with spaces so adjacent multi-character markers stay distinct, e.g.
+ * "aa ab ac" rather than the ambiguous "aaabac".
  */
-function appendSignificanceMarkerToCellResult(cellResult, marker) {
+function appendSignificanceMarkerToCellResult(cellResult, marker, useSpaceSeparator = false) {
   if (!marker) {
     return;
   }
 
-  cellResult.markers += marker;
+  if (useSpaceSeparator && cellResult.markers) {
+    cellResult.markers += ` ${marker}`;
+  } else {
+    cellResult.markers += marker;
+  }
+
   applyFillReasonToCellResult(cellResult, CELL_FILL_REASONS.SIGNIFICANT);
 }
 
@@ -742,11 +979,14 @@ function appendSignificanceMarkerToCellResult(cellResult, marker) {
  * T = segment is significantly higher than Total.
  * t = segment is significantly lower than Total.
  */
-function prependTotalMarkerToCellResult(cellResult, totalMarker) {
+function prependTotalMarkerToCellResult(cellResult, totalMarker, useSpaceSeparator = false) {
   const markerText = cellResult.markers || "";
-  const markerTextWithoutOldTotalMarker = markerText.replace(/[tT]/g, "");
+  const markerTextWithoutOldTotalMarker = markerText.replace(/[tT]/g, "").trim();
 
-  cellResult.markers = `${totalMarker}${markerTextWithoutOldTotalMarker}`;
+  const separator =
+    useSpaceSeparator && markerTextWithoutOldTotalMarker ? " " : "";
+
+  cellResult.markers = `${totalMarker}${separator}${markerTextWithoutOldTotalMarker}`;
 
   if (totalMarker === "T") {
     cellResult.hasPositiveTotalComparison = true;
@@ -840,7 +1080,12 @@ export function removeSignificanceMarkersFromText(rawText) {
     "абвгдежзийклмнопрсуфхцчшщъыьэюя" +
     "АБВГДЕЖЗИЙКЛМНОПРСУФХЦЧШЩЪЫЬЭЮЯ";
 
-  const markerSuffixPattern = new RegExp(`\\s*[${markerCharacters}↑↓]+$`);
+  // A marker token is a run of marker characters (and previous-column arrows).
+  // Match one trailing token plus any further space-separated tokens so that
+  // multi-character overflow markers ("42% aa ab ac") are removed in full, not
+  // just the last group.
+  const markerToken = `[${markerCharacters}↑↓]+`;
+  const markerSuffixPattern = new RegExp(`\\s*${markerToken}(?:\\s+${markerToken})*$`);
 
   return textValue.replace(markerSuffixPattern, "");
 }
@@ -1390,6 +1635,10 @@ export function applyComparisonResultsToFullCellResultMatrix(
   fullCellResultMatrix,
   calculationSettings = {}
 ) {
+  // In multi-character overflow mode, separate markers with spaces so adjacent
+  // multi-character markers stay distinct ("aa ab ac", not "aaabac").
+  const useSpaceSeparator = Boolean(calculationSettings.allowMultiCharacterMarkers);
+
   for (const comparisonRow of blockResults.comparisonRows) {
     const valueRowIndex = comparisonRow.valueRowIndex;
 
@@ -1419,7 +1668,8 @@ export function applyComparisonResultsToFullCellResultMatrix(
         applyTotalComparisonMarkerToFullCellResultMatrix(
           fullCellResultMatrix,
           valueRowIndex,
-          comparison
+          comparison,
+          useSpaceSeparator
         );
 
         continue;
@@ -1450,14 +1700,16 @@ export function applyComparisonResultsToFullCellResultMatrix(
       if (comparison.result.direction === "first_higher") {
         appendSignificanceMarkerToCellResult(
           fullCellResultMatrix[valueRowIndex][firstColumnIndex],
-          secondLabel
+          secondLabel,
+          useSpaceSeparator
         );
       }
 
       if (comparison.result.direction === "second_higher") {
         appendSignificanceMarkerToCellResult(
           fullCellResultMatrix[valueRowIndex][secondColumnIndex],
-          firstLabel
+          firstLabel,
+          useSpaceSeparator
         );
       }
     }
@@ -1476,7 +1728,8 @@ export function applyComparisonResultsToFullCellResultMatrix(
 function applyTotalComparisonMarkerToFullCellResultMatrix(
   fullCellResultMatrix,
   valueRowIndex,
-  comparison
+  comparison,
+  useSpaceSeparator = false
 ) {
   const totalReferenceColumnIndex = comparison.firstColumnIndex;
   const targetColumnIndex = comparison.secondColumnIndex;
@@ -1497,7 +1750,8 @@ function applyTotalComparisonMarkerToFullCellResultMatrix(
 
   prependTotalMarkerToCellResult(
     fullCellResultMatrix[valueRowIndex][targetColumnIndex],
-    totalMarker
+    totalMarker,
+    useSpaceSeparator
   );
 }
 
@@ -2006,11 +2260,22 @@ function buildBannerGroupKeyByColumnIndex(bannerStructure) {
  */
 export function buildBannerLocalSignificanceLabelMap(bannerStructure, calculationSettings = {}) {
   const labelMap = new Map();
-  const labels = generateSignificanceLabels();
 
   if (!bannerStructure || !bannerStructure.groups) {
     return labelMap;
   }
+
+  // The widest banner group decides how many labels we may need; when overflow
+  // markers are enabled this can extend past the single-character alphabet.
+  const requiredLabelCount = computeRequiredSignificanceLabelCount(
+    1,
+    { ...calculationSettings, respectBannerStructure: true },
+    bannerStructure
+  );
+
+  const labels = generateSignificanceLabels(
+    significanceLabelOptionsFromSettings(calculationSettings, requiredLabelCount)
+  );
 
   const totalColumnIndexes = new Set(bannerStructure.totalColumnIndexes || []);
   const globalTotalColumnIndex =
