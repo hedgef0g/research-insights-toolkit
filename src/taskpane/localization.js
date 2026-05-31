@@ -165,12 +165,13 @@ const STRINGS = {
     "settings.oneTailedTest": "Односторонний тест",
     "settings.preferredBaseAuto": "Авто",
 
+    "markerOverflow.title": "Недостаточно однобуквенных маркеров",
     "markerOverflow.message":
       "Колонок для сравнения больше, чем доступных однобуквенных маркеров значимости.\n\n" +
       "Вы можете продолжить с многосимвольными маркерами (aa, ab, ac и т.д.) " +
-      "или остановить расчёт и изменить настройки.\n\n" +
-      "ОК — продолжить с многосимвольными маркерами.\n" +
-      "Отмена — остановить расчёт.",
+      "или остановить расчёт и изменить настройки.",
+    "markerOverflow.continue": "Продолжить с многосимвольными маркерами",
+    "markerOverflow.stop": "Остановить расчёт",
     "markerOverflow.stopped":
       "Расчёт остановлен: колонок для сравнения больше, чем доступных " +
       "однобуквенных маркеров значимости. Измените настройки или сократите " +
@@ -331,12 +332,13 @@ const STRINGS = {
     "settings.oneTailedTest": "One-tailed test",
     "settings.preferredBaseAuto": "Auto",
 
+    "markerOverflow.title": "Not enough single-letter markers",
     "markerOverflow.message":
       "There are more comparable columns than available single-letter significance markers.\n\n" +
       "You can continue with multi-character markers (aa, ab, ac, etc.) " +
-      "or stop the calculation and change the settings.\n\n" +
-      "OK — continue with multi-character markers.\n" +
-      "Cancel — stop the calculation.",
+      "or stop the calculation and change the settings.",
+    "markerOverflow.continue": "Continue with multi-character markers",
+    "markerOverflow.stop": "Stop calculation",
     "markerOverflow.stopped":
       "Calculation stopped: there are more comparable columns than available " +
       "single-letter significance markers. Change the settings or reduce the " +

@@ -798,15 +798,55 @@ function initActionScopeShell() {
  * - NPS + SD/Variance + Base
  */
 /**
- * Shows the marker-overflow dialog. Returns true to continue with
- * multi-character markers, false to stop the calculation.
+ * Shows the in-taskpane marker-overflow dialog and resolves the user's choice.
  *
- * Uses window.confirm, which is supported in the Office add-in webview and is
- * consistent with keeping the release-time UX minimal: OK continues with
- * multi-character markers, Cancel stops the calculation.
+ * window.confirm is not supported in the Office add-in webview, so this drives a
+ * small custom modal defined in taskpane.html. Returns a Promise:
+ * - true  → continue with multi-character markers;
+ * - false → stop the calculation.
+ *
+ * Esc, clicking the backdrop, or missing markup all resolve to false (stop) so
+ * the safe choice (no writes) is the default.
  */
 function confirmMarkerOverflowDialog() {
-  return window.confirm(t("markerOverflow.message"));
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("marker-overflow-dialog");
+    const continueButton = document.getElementById("marker-overflow-continue");
+    const stopButton = document.getElementById("marker-overflow-stop");
+
+    if (!overlay || !continueButton || !stopButton) {
+      // Fail safe: without the dialog markup, stop rather than write blindly.
+      resolve(false);
+      return;
+    }
+
+    const finish = (shouldContinue) => {
+      overlay.style.display = "none";
+      continueButton.removeEventListener("click", onContinue);
+      stopButton.removeEventListener("click", onStop);
+      overlay.removeEventListener("mousedown", onBackdrop);
+      document.removeEventListener("keydown", onKeydown);
+      resolve(shouldContinue);
+    };
+
+    const onContinue = () => finish(true);
+    const onStop = () => finish(false);
+    const onBackdrop = (event) => {
+      // Clicking outside the dialog body counts as Stop.
+      if (event.target === overlay) finish(false);
+    };
+    const onKeydown = (event) => {
+      if (event.key === "Escape") finish(false);
+    };
+
+    continueButton.addEventListener("click", onContinue);
+    stopButton.addEventListener("click", onStop);
+    overlay.addEventListener("mousedown", onBackdrop);
+    document.addEventListener("keydown", onKeydown);
+
+    overlay.style.display = "flex";
+    continueButton.focus();
+  });
 }
 
 /**
@@ -814,17 +854,28 @@ function confirmMarkerOverflowDialog() {
  *
  * The dialog is shown at most once per Run; the user's choice is then reused for
  * every table processed in the same operation (so batch runs do not re-prompt
- * for each table). `resolve()` returns "continue" or "stop".
+ * for each table). `resolve()` is async and returns "continue" or "stop". A
+ * shared in-flight promise guards against showing two dialogs if `resolve()` is
+ * awaited from more than one place before the first choice is made.
  */
 function createMarkerOverflowDecider() {
   let decision = null; // null | "continue" | "stop"
+  let pending = null;
 
   return {
-    resolve() {
-      if (decision === null) {
-        decision = confirmMarkerOverflowDialog() ? "continue" : "stop";
+    async resolve() {
+      if (decision !== null) {
+        return decision;
       }
-      return decision;
+
+      if (!pending) {
+        pending = confirmMarkerOverflowDialog().then((shouldContinue) => {
+          decision = shouldContinue ? "continue" : "stop";
+          return decision;
+        });
+      }
+
+      return pending;
     },
     get decision() {
       return decision;
@@ -846,7 +897,7 @@ function createMarkerOverflowDecider() {
  * safety net; because the shared decider's choice is cached here, it never
  * re-prompts.
  */
-function preflightBatchMarkerOverflow(eligible, itemMap, calculationSettings, decider) {
+async function preflightBatchMarkerOverflow(eligible, itemMap, calculationSettings, decider) {
   const columnCounts = eligible.map((candidate) => {
     const item = itemMap.get(`${candidate.sheetName}!${candidate.rangeAddress}`);
     return item ? item.columnCount : undefined;
@@ -856,7 +907,7 @@ function preflightBatchMarkerOverflow(eligible, itemMap, calculationSettings, de
     return false;
   }
 
-  if (decider.resolve() === "stop") {
+  if ((await decider.resolve()) === "stop") {
     return true;
   }
 
@@ -1021,7 +1072,7 @@ async function runSignificanceFromSelection() {
         bannerStructure
       )
     ) {
-      if (markerOverflowDecider.resolve() === "stop") {
+      if ((await markerOverflowDecider.resolve()) === "stop") {
         setStatusMessage(t("markerOverflow.stopped"));
         return;
       }
@@ -1356,7 +1407,7 @@ async function runSignificanceForRangeInContext(
     )
   ) {
     const activeDecider = markerOverflowDecider || createMarkerOverflowDecider();
-    if (activeDecider.resolve() === "stop") {
+    if ((await activeDecider.resolve()) === "stop") {
       return { status: "stopped", message: "расчёт остановлен — превышен лимит маркеров", rangeAddress };
     }
     // Mutate the (per-operation) settings so every table in the batch uses
@@ -1953,7 +2004,7 @@ async function runAutoSignificance() {
 
   // Operation-level marker-overflow preflight: decide once, before any table is
   // written. Stop aborts the whole run with no partial results.
-  if (preflightBatchMarkerOverflow(eligible, itemMap, calculationSettings, markerOverflowDecider)) {
+  if (await preflightBatchMarkerOverflow(eligible, itemMap, calculationSettings, markerOverflowDecider)) {
     setStatusMessage(t("markerOverflow.stopped"));
     return;
   }
@@ -3849,7 +3900,7 @@ async function runCurrentSheetSignificance() {
 
   // Operation-level marker-overflow preflight: decide once, before any table is
   // written. Stop aborts the whole run with no partial results.
-  if (preflightBatchMarkerOverflow(eligible, itemMap, calculationSettings, markerOverflowDecider)) {
+  if (await preflightBatchMarkerOverflow(eligible, itemMap, calculationSettings, markerOverflowDecider)) {
     setStatusMessage(t("markerOverflow.stopped"));
     return;
   }
