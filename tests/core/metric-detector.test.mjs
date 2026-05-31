@@ -7,6 +7,7 @@ import {
   extractRowLabelFromLeftCells,
 } from "../../src/core/metric-detector.js";
 import { SIGNIFICANCE_FOOTNOTE_MARKER } from "../../src/core/significance-footnote.js";
+import { BACKLINK_MARKER } from "../../src/core/generated-rows.js";
 
 function detectBlocks(values, labels) {
   const leftLabelValues = labels.map((label) => [label]);
@@ -403,6 +404,56 @@ describe("buildCalculationBlocks — silent above-block Base fallback", () => {
       ["BASE", footnoteLabel, "Agree", "Disagree"]
     );
     assert.deepStrictEqual(blocks, []);
+  });
+
+  it("10. generated backlink row between block and above Base: Base not crossed", () => {
+    const blocks = detectBlocks(
+      [[100, 200], [0, 0], [0.4, 0.6], [0.6, 0.4]],
+      ["BASE", BACKLINK_MARKER, "Agree", "Disagree"]
+    );
+    assert.deepStrictEqual(blocks, []);
+  });
+
+  // ── Shared above-Base reuse within one continuous table segment ────────────
+
+  it("shared Base above several proportion rows: one block uses the above Base", () => {
+    const blocks = detectBlocks(
+      [[100, 200], [0.4, 0.6], [0.6, 0.4], [0.2, 0.3]],
+      ["BASE", "Agree", "Disagree", "Other %"]
+    );
+    assert.deepStrictEqual(blocks, [
+      { metricType: "proportion", valueRowIndexes: [1, 2, 3], baseRowIndex: 0 },
+    ]);
+  });
+
+  it("shared Base above proportions + mean block: both blocks use the same above Base", () => {
+    const blocks = detectBlocks(
+      [[100, 200], [0.4, 0.6], [0.6, 0.4], [29.4, 31.5], [5.1, 6.2]],
+      ["BASE", "Agree", "Disagree", "Mean", "SD"]
+    );
+    const proportionBlock = blocks.find((b) => b.metricType === "proportion");
+    const meanBlock = blocks.find((b) => b.metricType === "mean");
+    assert.ok(proportionBlock, "expected a proportion block");
+    assert.ok(meanBlock, "expected a mean block");
+    assert.deepStrictEqual(proportionBlock.valueRowIndexes, [1, 2]);
+    assert.strictEqual(proportionBlock.baseRowIndex, 0);
+    assert.strictEqual(meanBlock.valueRowIndex, 3);
+    assert.strictEqual(meanBlock.spreadRowIndex, 4);
+    assert.strictEqual(meanBlock.spreadType, "standardDeviation");
+    assert.strictEqual(meanBlock.baseRowIndex, 0);
+  });
+
+  it("shared Base above two mean + SD blocks: both mean blocks use the same above Base", () => {
+    const blocks = detectBlocks(
+      [[100, 200], [29.4, 31.5], [5.1, 6.2], [42.0, 40.1], [7.3, 6.9]],
+      ["BASE", "Mean A", "SD", "Mean B", "SD"]
+    );
+    const meanBlocks = blocks.filter((b) => b.metricType === "mean");
+    assert.strictEqual(meanBlocks.length, 2);
+    assert.strictEqual(meanBlocks[0].valueRowIndex, 1);
+    assert.strictEqual(meanBlocks[0].baseRowIndex, 0);
+    assert.strictEqual(meanBlocks[1].valueRowIndex, 3);
+    assert.strictEqual(meanBlocks[1].baseRowIndex, 0);
   });
 
   it("uses nearest above Base run with priority when several Bases sit above", () => {

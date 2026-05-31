@@ -6,15 +6,11 @@
  * plain data structures.
  */
 
-export const BACKLINK_MARKER = "← Оглавление";
-
-/**
- * Returns true if the cell value is a generated backlink marker.
- */
-export function isGeneratedBacklinkRow(cellValue) {
-  if (cellValue === null || cellValue === undefined) return false;
-  return String(cellValue).trim() === BACKLINK_MARKER;
-}
+// The backlink marker and its detector live in core (generated-rows.js) so
+// core detection logic can treat generated backlink rows as table boundaries
+// without depending on the taskpane layer. Re-exported here to keep existing
+// taskpane imports working from a single source of truth.
+export { BACKLINK_MARKER, isGeneratedBacklinkRow } from "../core/generated-rows.js";
 
 export function getInventoryCandidateStatusLabel(candidateStatus) {
   if (candidateStatus === "available") {
