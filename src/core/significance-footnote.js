@@ -147,6 +147,47 @@ export function buildSignificanceFootnoteCellValue(options) {
   return SIGNIFICANCE_FOOTNOTE_MARKER + buildSignificanceFootnoteVisibleText(options);
 }
 
+/**
+ * Resolves the merged footnote span (sheet-absolute, 0-based column indexes) for
+ * one table.
+ *
+ * The footnote must span the full VISUAL table width — from the real row-label
+ * column through the data columns — even when a structural blank gap column sits
+ * between the labels and the data. Two label-area signals are combined and the
+ * WIDER one wins, so the span never starts at a stripped gap column:
+ *
+ *  - `labelColumns`: width of the loaded left-label matrix. Handles external /
+ *    embedded labels, including a gap column loaded alongside them.
+ *  - `adjacentLabelColumnCount`: the interpreter's visual label-area width. In a
+ *    normalized table this equals the full data-column offset (labels PLUS any
+ *    stripped structural gap columns) — exactly the column the plain label width
+ *    misses, which is why autorun otherwise started the footnote at the gap.
+ *
+ * For pass-through selections `adjacentLabelColumnCount` is never wider than
+ * `labelColumns` (it is `countAdjacentLabelColumns(leftLabelValues)` or 0), so
+ * the wider-wins rule leaves Manual Run geometry unchanged. The span is clamped
+ * so it never extends past the sheet's left edge.
+ *
+ * @param {object} args
+ * @param {number} args.dataStartColIndex        - sheet-absolute left edge of the data body
+ * @param {number} args.dataColCount             - data body column count
+ * @param {number} [args.labelColumns]           - width of the left-label matrix
+ * @param {number} [args.adjacentLabelColumnCount] - interpreter visual label-area width
+ * @returns {{ tableLeftColIndex: number, tableRightColIndex: number }}
+ */
+export function resolveFootnoteSpan({
+  dataStartColIndex,
+  dataColCount,
+  labelColumns = 0,
+  adjacentLabelColumnCount = 0,
+}) {
+  const widestLabelArea = Math.max(labelColumns || 0, adjacentLabelColumnCount || 0);
+  const labelSpan = Math.min(Math.max(0, widestLabelArea), dataStartColIndex);
+  const tableLeftColIndex = Math.max(0, dataStartColIndex - labelSpan);
+  const tableRightColIndex = dataStartColIndex + dataColCount - 1;
+  return { tableLeftColIndex, tableRightColIndex };
+}
+
 // ─── Footnote placement (pure) ──────────────────────────────────────────────
 //
 // A generated footnote must be idempotent: re-running (Manual or Auto) over a

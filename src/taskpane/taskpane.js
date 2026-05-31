@@ -36,6 +36,7 @@ import {
   collectStatisticTypeLabels,
   buildSignificanceFootnoteCellValue,
   buildProcessedRangeFootnoteSuffix,
+  resolveFootnoteSpan,
   resolveFootnotePlacement,
   resolveFootnoteRemovalRow,
   FOOTNOTE_SCAN_WINDOW_ROWS,
@@ -1064,6 +1065,7 @@ async function runSignificanceFromSelection() {
       dataRowCount: writeTargetRange.rowCount,
       dataColCount: writeTargetRange.columnCount,
       leftLabelValues,
+      adjacentLabelColumnCount: interpretation.adjacentLabelColumnCount,
       calculationBlocks,
       calculationSettings,
       processedScopeSuffix,
@@ -1348,6 +1350,7 @@ async function runSignificanceForRangeInContext(context, sheetName, rangeAddress
     dataRowCount: valuesForCalculation.length,
     dataColCount: valuesForCalculation[0].length,
     leftLabelValues,
+    adjacentLabelColumnCount: interpretation.adjacentLabelColumnCount,
     calculationBlocks,
     calculationSettings,
   });
@@ -6034,6 +6037,7 @@ function buildSignificanceFootnoteJob({
   dataRowCount,
   dataColCount,
   leftLabelValues,
+  adjacentLabelColumnCount,
   calculationBlocks,
   calculationSettings,
   processedScopeSuffix,
@@ -6043,13 +6047,19 @@ function buildSignificanceFootnoteJob({
   if (!Number.isFinite(dataStartRowIndex) || !Number.isFinite(dataStartColIndex)) return null;
   if (!(dataRowCount > 0) || !(dataColCount > 0)) return null;
 
-  const labelColCount = Math.min(
-    Array.isArray(leftLabelValues) && Array.isArray(leftLabelValues[0]) ? leftLabelValues[0].length : 0,
-    dataStartColIndex
-  );
+  // Visual table left edge: the wider of the loaded label width and the
+  // interpreter's adjacent label-area width, so a stripped structural gap column
+  // between labels and data (normalized autorun) is still spanned. See
+  // resolveFootnoteSpan.
+  const labelColumns =
+    Array.isArray(leftLabelValues) && Array.isArray(leftLabelValues[0]) ? leftLabelValues[0].length : 0;
 
-  const tableLeftColIndex = Math.max(0, dataStartColIndex - labelColCount);
-  const tableRightColIndex = dataStartColIndex + dataColCount - 1;
+  const { tableLeftColIndex, tableRightColIndex } = resolveFootnoteSpan({
+    dataStartColIndex,
+    dataColCount,
+    labelColumns,
+    adjacentLabelColumnCount,
+  });
   const tableBottomRowIndex = dataStartRowIndex + dataRowCount - 1;
 
   const footnoteCellValue = buildSignificanceFootnoteCellValue({

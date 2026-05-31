@@ -8,6 +8,7 @@ import {
   buildSignificanceFootnoteCellValue,
   buildProcessedRangeFootnoteSuffix,
   appendFootnoteScopeDetail,
+  resolveFootnoteSpan,
   classifyFootnoteScanRow,
   resolveFootnotePlacement,
   resolveFootnoteRemovalRow,
@@ -163,6 +164,85 @@ describe("processed-scope footnote suffixes", () => {
     assert.strictEqual(appendFootnoteScopeDetail("base.", ""), "base.");
     assert.strictEqual(appendFootnoteScopeDetail("base.", "   "), "base.");
     assert.strictEqual(appendFootnoteScopeDetail("base.", " X."), "base. X.");
+  });
+});
+
+describe("footnote span (visual table left edge)", () => {
+  it("1 label column + 1 blank gap column + data: span starts at the real label column", () => {
+    // Normalized autorun geometry: data body at col 4 (E); label at col 2 (C),
+    // gap at col 3 (D). leftLabelValues holds only the label column (width 1),
+    // but the interpreter's adjacent label area covers label + gap (offset 2).
+    assert.deepStrictEqual(
+      resolveFootnoteSpan({
+        dataStartColIndex: 4,
+        dataColCount: 3,
+        labelColumns: 1,
+        adjacentLabelColumnCount: 2,
+      }),
+      { tableLeftColIndex: 2, tableRightColIndex: 6 }
+    );
+  });
+
+  it("normal 1-column adjacent labels: span unchanged", () => {
+    assert.deepStrictEqual(
+      resolveFootnoteSpan({
+        dataStartColIndex: 3,
+        dataColCount: 4,
+        labelColumns: 1,
+        adjacentLabelColumnCount: 1,
+      }),
+      { tableLeftColIndex: 2, tableRightColIndex: 6 }
+    );
+  });
+
+  it("2-column labels: span includes both label columns", () => {
+    assert.deepStrictEqual(
+      resolveFootnoteSpan({
+        dataStartColIndex: 3,
+        dataColCount: 4,
+        labelColumns: 2,
+        adjacentLabelColumnCount: 2,
+      }),
+      { tableLeftColIndex: 1, tableRightColIndex: 6 }
+    );
+  });
+
+  it("no labels: span starts at the data columns", () => {
+    assert.deepStrictEqual(
+      resolveFootnoteSpan({
+        dataStartColIndex: 5,
+        dataColCount: 3,
+        labelColumns: 0,
+        adjacentLabelColumnCount: 0,
+      }),
+      { tableLeftColIndex: 5, tableRightColIndex: 7 }
+    );
+  });
+
+  it("the wider label-area signal wins (manual width never shrinks)", () => {
+    // Pass-through Manual Run loads label+gap into leftLabelValues (width 2) even
+    // when the interpreter forces adjacentLabelColumnCount to 0 on a real gap.
+    assert.deepStrictEqual(
+      resolveFootnoteSpan({
+        dataStartColIndex: 4,
+        dataColCount: 2,
+        labelColumns: 2,
+        adjacentLabelColumnCount: 0,
+      }),
+      { tableLeftColIndex: 2, tableRightColIndex: 5 }
+    );
+  });
+
+  it("clamps the left edge to the sheet start", () => {
+    assert.deepStrictEqual(
+      resolveFootnoteSpan({
+        dataStartColIndex: 1,
+        dataColCount: 3,
+        labelColumns: 2,
+        adjacentLabelColumnCount: 2,
+      }),
+      { tableLeftColIndex: 0, tableRightColIndex: 3 }
+    );
   });
 });
 
