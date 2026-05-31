@@ -407,6 +407,10 @@
               <input type="checkbox" id="round-cell-values" />
               <span data-i18n="settings.roundCellValues">Округлять значения в ячейках</span>
             </label>
+            <label class="inline-checkbox-label" for="use-cyrillic-markers">
+              <input type="checkbox" id="use-cyrillic-markers" />
+              <span data-i18n="settings.useCyrillicMarkers">Использовать кириллические маркеры</span>
+            </label>
           </div>
 
           <div class="settings-group">
@@ -475,5 +479,44 @@
         >
       </footer>
     </main>
+
+    <!-- Marker-overflow confirmation dialog (issue #312). In-taskpane modal:
+         window.confirm is not supported in the Office add-in webview. -->
+    <div
+      id="marker-overflow-dialog"
+      class="rs-modal-overlay"
+      style="display: none"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="marker-overflow-title"
+      aria-describedby="marker-overflow-body"
+    >
+      <div class="rs-modal" role="document">
+        <h2 id="marker-overflow-title" class="rs-modal-title" data-i18n="markerOverflow.title">
+          Недостаточно однобуквенных маркеров
+        </h2>
+        <p id="marker-overflow-body" class="rs-modal-body" data-i18n="markerOverflow.message">
+          Колонок для сравнения больше, чем доступных однобуквенных маркеров значимости.
+        </p>
+        <div class="rs-modal-actions">
+          <button
+            type="button"
+            id="marker-overflow-stop"
+            class="rs-modal-button rs-modal-button-secondary"
+            data-i18n="markerOverflow.stop"
+          >
+            Остановить расчёт
+          </button>
+          <button
+            type="button"
+            id="marker-overflow-continue"
+            class="rs-modal-button rs-modal-button-primary"
+            data-i18n="markerOverflow.continue"
+          >
+            Продолжить с многосимвольными маркерами
+          </button>
+        </div>
+      </div>
+    </div>
   </body>
 </html>

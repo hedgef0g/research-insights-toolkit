@@ -29,6 +29,7 @@ export const SETTINGS_CONTROL_CONFIG = [
 
   { id: "write-banner-letters", type: "checked", settingName: "writeBannerLetters" },
   { id: "respect-banner-structure", type: "checked", settingName: "respectBannerStructure" },
+  { id: "use-cyrillic-markers", type: "checked", settingName: "useCyrillicMarkers" },
   {
     id: "auto-detect-wave-banners",
     type: "checked",
@@ -94,6 +95,9 @@ export const DEFAULT_CALCULATION_SETTINGS = {
   respectBannerStructure: false,
   autoDetectWaveBanners: false,
   labelsOnLeftSide: false,
+
+  // Default-off for global release safety (issue #312).
+  useCyrillicMarkers: false,
 
   compareOnlyWithTotal: false,
   excludeTotalFromComparisons: false,

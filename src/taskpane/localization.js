@@ -148,6 +148,7 @@ const STRINGS = {
     "settings.smallBaseThreshold": "База <",
 
     "settings.roundCellValues": "Округлять значения в ячейках",
+    "settings.useCyrillicMarkers": "Использовать кириллические маркеры",
     "settings.addTableFootnote": "Добавлять подпись под таблицей",
     "settings.addTableFootnoteUnavailable":
       "Подпись под таблицей недоступна, когда лейблы не примыкают к данным.",
@@ -163,6 +164,18 @@ const STRINGS = {
 
     "settings.oneTailedTest": "Односторонний тест",
     "settings.preferredBaseAuto": "Авто",
+
+    "markerOverflow.title": "Недостаточно однобуквенных маркеров",
+    "markerOverflow.message":
+      "Колонок для сравнения больше, чем доступных однобуквенных маркеров значимости.\n\n" +
+      "Вы можете продолжить с многосимвольными маркерами (aa, ab, ac и т.д.) " +
+      "или остановить расчёт и изменить настройки.",
+    "markerOverflow.continue": "Продолжить с многосимвольными маркерами",
+    "markerOverflow.stop": "Остановить расчёт",
+    "markerOverflow.stopped":
+      "Расчёт остановлен: колонок для сравнения больше, чем доступных " +
+      "однобуквенных маркеров значимости. Измените настройки или сократите " +
+      "число сравниваемых колонок.",
 
     "help.link": "Справка об использовании",
   },
@@ -302,6 +315,7 @@ const STRINGS = {
     "settings.smallBaseThreshold": "Base <",
 
     "settings.roundCellValues": "Round cell values",
+    "settings.useCyrillicMarkers": "Use Cyrillic significance markers",
     "settings.addTableFootnote": "Add footnote below table",
     "settings.addTableFootnoteUnavailable":
       "Table footnote is unavailable when labels are not adjacent to the data.",
@@ -317,6 +331,18 @@ const STRINGS = {
 
     "settings.oneTailedTest": "One-tailed test",
     "settings.preferredBaseAuto": "Auto",
+
+    "markerOverflow.title": "Not enough single-letter markers",
+    "markerOverflow.message":
+      "There are more comparable columns than available single-letter significance markers.\n\n" +
+      "You can continue with multi-character markers (aa, ab, ac, etc.) " +
+      "or stop the calculation and change the settings.",
+    "markerOverflow.continue": "Continue with multi-character markers",
+    "markerOverflow.stop": "Stop calculation",
+    "markerOverflow.stopped":
+      "Calculation stopped: there are more comparable columns than available " +
+      "single-letter significance markers. Change the settings or reduce the " +
+      "number of compared columns.",
 
     "help.link": "User guide",
   },
