@@ -6,6 +6,7 @@ import {
   detectMetricRowsFromLeftLabels,
   extractRowLabelFromLeftCells,
 } from "../../src/core/metric-detector.js";
+import { SIGNIFICANCE_FOOTNOTE_MARKER } from "../../src/core/significance-footnote.js";
 
 function detectBlocks(values, labels) {
   const leftLabelValues = labels.map((label) => [label]);
@@ -299,5 +300,122 @@ describe("buildCalculationBlocks — preferredBase option", () => {
     const blocks = detectBlocksWithPreference(values, labels, "weighted");
     assert.strictEqual(blocks.length, 1);
     assert.strictEqual(blocks[0].baseSubtype, undefined);
+  });
+});
+
+// ─── Silent above-block Base fallback (issue #310) ───────────────────────────
+
+describe("buildCalculationBlocks — silent above-block Base fallback", () => {
+  it("1. proportion block with Base below: behavior unchanged", () => {
+    const blocks = detectBlocks(
+      [[0.4, 0.6], [0.6, 0.4], [100, 200]],
+      ["Agree", "Disagree", "BASE"]
+    );
+    assert.deepStrictEqual(blocks, [
+      { metricType: "proportion", valueRowIndexes: [0, 1], baseRowIndex: 2 },
+    ]);
+  });
+
+  it("2. proportion block with Base above and none below: uses the above Base", () => {
+    const blocks = detectBlocks(
+      [[100, 200], [0.4, 0.6], [0.6, 0.4]],
+      ["BASE", "Agree", "Disagree"]
+    );
+    assert.deepStrictEqual(blocks, [
+      { metricType: "proportion", valueRowIndexes: [1, 2], baseRowIndex: 0 },
+    ]);
+  });
+
+  it("3. mean + SD block with Base above and none below: uses the above Base", () => {
+    const blocks = detectBlocks(
+      [[100, 200], [29.4, 31.5], [5.1, 6.2]],
+      ["BASE", "Mean", "SD"]
+    );
+    assert.deepStrictEqual(blocks, [
+      {
+        metricType: "mean",
+        valueRowIndex: 1,
+        spreadRowIndex: 2,
+        spreadType: "standardDeviation",
+        baseRowIndex: 0,
+      },
+    ]);
+  });
+
+  it("4. mean + Variance block with Base above and none below: uses the above Base", () => {
+    const blocks = detectBlocks(
+      [[100, 200], [29.4, 31.5], [103.6, 132.6]],
+      ["BASE", "Mean", "Variance"]
+    );
+    assert.deepStrictEqual(blocks, [
+      {
+        metricType: "mean",
+        valueRowIndex: 1,
+        spreadRowIndex: 2,
+        spreadType: "variance",
+        baseRowIndex: 0,
+      },
+    ]);
+  });
+
+  it("5. Base both above and below: the below Base wins", () => {
+    const blocks = detectBlocks(
+      [[100, 200], [0.4, 0.6], [0.6, 0.4], [110, 210]],
+      ["BASE", "Agree", "Disagree", "BASE"]
+    );
+    assert.deepStrictEqual(blocks, [
+      { metricType: "proportion", valueRowIndexes: [1, 2], baseRowIndex: 3 },
+    ]);
+  });
+
+  it("6. no Base below or above: existing skip behavior remains", () => {
+    const blocks = detectBlocks(
+      [[0.4, 0.6], [0.6, 0.4]],
+      ["Agree", "Disagree"]
+    );
+    assert.deepStrictEqual(blocks, []);
+  });
+
+  it("7. above Base separated by a blank row: not used", () => {
+    const blocks = detectBlocks(
+      [[100, 200], [null, null], [0.4, 0.6], [0.6, 0.4]],
+      ["BASE", "", "Agree", "Disagree"]
+    );
+    assert.deepStrictEqual(blocks, []);
+  });
+
+  it("8. two adjacent tables: lower table does not steal the upper table's Base", () => {
+    const blocks = detectBlocks(
+      [[0.4, 0.6], [0.6, 0.4], [100, 200], [0.3, 0.7], [0.7, 0.3]],
+      ["Agree", "Disagree", "BASE", "Agree", "Disagree"]
+    );
+    // Only the upper table forms a block (Base below it, consumed). The lower
+    // table finds no Base below and must not steal the upper table's Base above.
+    assert.deepStrictEqual(blocks, [
+      { metricType: "proportion", valueRowIndexes: [0, 1], baseRowIndex: 2 },
+    ]);
+  });
+
+  it("9. generated footnote row between block and above Base: Base not crossed", () => {
+    const footnoteLabel = `${SIGNIFICANCE_FOOTNOTE_MARKER}Уровень значимости: 95%.`;
+    const blocks = detectBlocks(
+      [[100, 200], [0, 0], [0.4, 0.6], [0.6, 0.4]],
+      ["BASE", footnoteLabel, "Agree", "Disagree"]
+    );
+    assert.deepStrictEqual(blocks, []);
+  });
+
+  it("uses nearest above Base run with priority when several Bases sit above", () => {
+    const blocks = detectBlocks(
+      [[200, 300], [160, 250], [0.4, 0.6], [0.6, 0.4]],
+      ["Base weighted", "Base effective", "Agree", "Disagree"]
+    );
+    // Both Bases form a consecutive run above the block; auto priority prefers
+    // the effective Base over the weighted one.
+    assert.strictEqual(blocks.length, 1);
+    assert.strictEqual(blocks[0].metricType, "proportion");
+    assert.deepStrictEqual(blocks[0].valueRowIndexes, [2, 3]);
+    assert.strictEqual(blocks[0].baseRowIndex, 1);
+    assert.strictEqual(blocks[0].baseSubtype, "effective");
   });
 });

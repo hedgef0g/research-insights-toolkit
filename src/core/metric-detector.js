@@ -1,5 +1,6 @@
 import { METRIC_DICTIONARY } from "./config/dictionary.config"; // Импортируем наш конфиг
 import { normalizeLookupText } from "./string-utils";
+import { isGeneratedSignificanceFootnoteRow } from "./significance-footnote";
 
 export const LABEL_SCAN_COLUMNS_LEFT = 2;
 
@@ -386,6 +387,84 @@ function findBestBaseRowIndex(rowDiagnostics, startRowIndex, options) {
 }
 
 /**
+ * Returns true when a row is a generated RIT row (e.g. a significance-settings
+ * footnote) rather than real table content. Such rows act as hard table
+ * boundaries and must never be crossed by the upward Base fallback.
+ */
+function isGeneratedBoundaryRow(rowDiagnostic) {
+  return isGeneratedSignificanceFootnoteRow(rowDiagnostic?.rawLabel);
+}
+
+/**
+ * Silent upward fallback: finds a usable Base row ABOVE a metric block when no
+ * Base was found below it.
+ *
+ * PURPOSE:
+ * Some valid layouts place the Base row above the metric rows, e.g.
+ *   Base
+ *   Agree / Disagree        (proportions)
+ * or
+ *   Base
+ *   Mean / SD               (mean + spread)
+ * The primary below-block detection misses these, so the block would be skipped.
+ *
+ * BOUNDARIES (the search stops without a result when it would cross any of):
+ * - a blank separator row;
+ * - a generated RIT row (significance footnote / backlink);
+ * - any other value/metric row — these belong to the current or a previous
+ *   block, so we never tunnel past them looking for a distant Base;
+ * - a Base row already consumed by a previous below-block (would steal a Base
+ *   from a previous table).
+ *
+ * Only a Base row sitting directly above the block (optionally as part of a
+ * consecutive run of Base rows) is accepted. When a run is found, the same
+ * priority rules as below-detection pick the best Base in the run.
+ *
+ * @param {Array} rowDiagnostics
+ * @param {number} blockTopRowIndex - index of the block's first (topmost) row
+ * @param {Set<number>} consumedBaseRows - base indexes already used by a below-block
+ * @param {object} options - { preferredBase }
+ * @returns {number|null} best above-Base index, or null when none is usable
+ */
+function findBaseAboveBlockFallback(rowDiagnostics, blockTopRowIndex, consumedBaseRows, options) {
+  let scanIndex = blockTopRowIndex - 1;
+
+  while (scanIndex >= 0) {
+    const rowDiagnostic = rowDiagnostics[scanIndex];
+
+    // Generated rows and blank separators are hard table boundaries.
+    if (isGeneratedBoundaryRow(rowDiagnostic) || rowDiagnostic.rowType === "empty") {
+      return null;
+    }
+
+    if (rowDiagnostic.rowType === "base") {
+      // A Base already used by a previous block belongs to that table.
+      if (consumedBaseRows.has(scanIndex)) {
+        return null;
+      }
+
+      // Walk up to the top of this consecutive run of (unconsumed) Base rows so
+      // the existing priority rules can choose the best one in the run.
+      let runTopIndex = scanIndex;
+      while (
+        runTopIndex - 1 >= 0 &&
+        rowDiagnostics[runTopIndex - 1].rowType === "base" &&
+        !consumedBaseRows.has(runTopIndex - 1)
+      ) {
+        runTopIndex--;
+      }
+
+      return selectBestFromConsecutiveBases(rowDiagnostics, runTopIndex, options);
+    }
+
+    // Any other row type is a value/metric row; do not cross it.
+    return null;
+  }
+
+  return null;
+}
+
+/**
  * Builds calculation blocks from detected row labels.
  *
  * PURPOSE:
@@ -397,6 +476,7 @@ export function buildCalculationBlocks(detectionResult, { preferredBase = "auto"
   const calculationBlocks = []; // Final list of calculation blocks.
   const pendingProportionRows = []; // Proportion rows waiting for the next available base.
   const baseOptions = { preferredBase };
+  const consumedBaseRows = new Set(); // Base rows already claimed by a below-block.
 
   let rowIndex = 0; // Current row scanner position.
 
@@ -414,6 +494,7 @@ export function buildCalculationBlocks(detectionResult, { preferredBase = "auto"
     if (currentRowType === "base") {
       if (pendingProportionRows.length > 0) {
         const bestBaseIndex = selectBestFromConsecutiveBases(rowDiagnostics, rowIndex, baseOptions);
+        consumedBaseRows.add(bestBaseIndex);
         calculationBlocks.push(
           attachBaseSubtype(
             { metricType: "proportion", valueRowIndexes: [...pendingProportionRows], baseRowIndex: bestBaseIndex },
@@ -437,6 +518,7 @@ export function buildCalculationBlocks(detectionResult, { preferredBase = "auto"
       const baseRowIndex = findBestBaseRowIndex(rowDiagnostics, spreadRowIndex, baseOptions);
 
       if (baseRowIndex !== null) {
+        consumedBaseRows.add(baseRowIndex);
         calculationBlocks.push(
           attachBaseSubtype(
             { metricType: "mean", valueRowIndex: rowIndex, spreadRowIndex, spreadType: rowDiagnostics[spreadRowIndex].rowType, baseRowIndex },
@@ -458,6 +540,29 @@ export function buildCalculationBlocks(detectionResult, { preferredBase = "auto"
         rowIndex = spreadRowIndex + 1;
         continue;
       }
+
+      // Silent fallback: no Base below the mean block — try a Base directly above
+      // it within the same table context (issue #310). Statistical handling is
+      // unchanged; only the Base row source differs.
+      const aboveBaseRowIndex = findBaseAboveBlockFallback(
+        rowDiagnostics,
+        rowIndex,
+        consumedBaseRows,
+        baseOptions
+      );
+
+      if (aboveBaseRowIndex !== null) {
+        consumedBaseRows.add(aboveBaseRowIndex);
+        calculationBlocks.push(
+          attachBaseSubtype(
+            { metricType: "mean", valueRowIndex: rowIndex, spreadRowIndex, spreadType: rowDiagnostics[spreadRowIndex].rowType, baseRowIndex: aboveBaseRowIndex },
+            rowDiagnostics, aboveBaseRowIndex
+          )
+        );
+
+        rowIndex = spreadRowIndex + 1;
+        continue;
+      }
     }
 
 
@@ -465,6 +570,7 @@ export function buildCalculationBlocks(detectionResult, { preferredBase = "auto"
     const npsFirstBlock = tryParseNpsFirstBlock(rowDiagnostics, rowIndex);
     if (npsFirstBlock !== null) {
       const baseRowIndex = selectBestFromConsecutiveBases(rowDiagnostics, npsFirstBlock.baseRowIndex, baseOptions);
+      consumedBaseRows.add(baseRowIndex);
 
       if (pendingProportionRows.length > 0) {
         calculationBlocks.push(
@@ -509,6 +615,7 @@ export function buildCalculationBlocks(detectionResult, { preferredBase = "auto"
       const baseRowIndex = findBestBaseRowIndex(rowDiagnostics, spreadRowIndex, baseOptions);
 
       if (baseRowIndex !== null) {
+        consumedBaseRows.add(baseRowIndex);
         calculationBlocks.push(
           attachBaseSubtype(
             { metricType: "npsSpread", valueRowIndex: rowIndex, spreadRowIndex, spreadType: rowDiagnostics[spreadRowIndex].rowType, baseRowIndex },
@@ -546,6 +653,7 @@ export function buildCalculationBlocks(detectionResult, { preferredBase = "auto"
         const baseRowIndex = findBestBaseRowIndex(rowDiagnostics, rowIndex, baseOptions);
 
         if (baseRowIndex !== null) {
+          consumedBaseRows.add(baseRowIndex);
           // All buffered rows, including Detractors and Promoters, receive proportion markers.
           calculationBlocks.push(
             attachBaseSubtype(
@@ -570,6 +678,36 @@ export function buildCalculationBlocks(detectionResult, { preferredBase = "auto"
     }
 
     rowIndex++;
+  }
+
+  // Silent fallback for a proportion block whose Base sits ABOVE its rows
+  // (issue #310). Proportions are normally closed by a Base row below them; if
+  // any remain buffered at the end, no Base was found below. Try a Base directly
+  // above the block within the same table context before skipping it.
+  if (pendingProportionRows.length > 0) {
+    // Blank and generated rows are buffered with proportions, so anchor the
+    // upward search on the first real value row. A blank or generated row
+    // between that row and the Base above is then correctly treated as a table
+    // boundary.
+    const blockTopRowIndex = pendingProportionRows.find(
+      (idx) =>
+        rowDiagnostics[idx].rowType !== "empty" && !isGeneratedBoundaryRow(rowDiagnostics[idx])
+    );
+    const aboveBaseRowIndex =
+      blockTopRowIndex === undefined
+        ? null
+        : findBaseAboveBlockFallback(rowDiagnostics, blockTopRowIndex, consumedBaseRows, baseOptions);
+
+    if (aboveBaseRowIndex !== null) {
+      consumedBaseRows.add(aboveBaseRowIndex);
+      calculationBlocks.push(
+        attachBaseSubtype(
+          { metricType: "proportion", valueRowIndexes: [...pendingProportionRows], baseRowIndex: aboveBaseRowIndex },
+          rowDiagnostics, aboveBaseRowIndex
+        )
+      );
+      pendingProportionRows.length = 0;
+    }
   }
 
   return calculationBlocks;
