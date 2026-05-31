@@ -350,6 +350,8 @@ export function getSignificanceMarkerCapacity(calculationSettings = {}) {
  * table would need to assign, so marker overflow can be detected before any
  * results are written.
  *
+ * - compareWithPreviousColumn: 0 — previous-column mode marks significance with
+ *   arrows, not letter labels, so the alphabet capacity is irrelevant.
  * - Banner mode: the largest per-group count of non-Total segment columns.
  * - firstColumnIsTotal: every column except the Total column.
  * - Otherwise: every column.
@@ -359,6 +361,12 @@ export function computeRequiredSignificanceLabelCount(
   calculationSettings = {},
   bannerStructure = null
 ) {
+  // Previous-column comparison uses arrow markers, never letter labels, so it
+  // can never overflow the marker alphabet regardless of table width.
+  if (calculationSettings.compareWithPreviousColumn) {
+    return 0;
+  }
+
   if (!Number.isFinite(columnCount) || columnCount < 1) {
     return 0;
   }
@@ -415,25 +423,29 @@ export function detectSignificanceMarkerOverflow(
 }
 
 /**
- * Operation-level overflow preflight for batch runs (current-sheet / workbook).
+ * Cheap operation-level overflow gate for batch runs (current-sheet / workbook),
+ * using each table's raw column count from the inventory.
  *
- * Decides whether ANY candidate table could overflow the marker alphabet,
- * using each table's raw column count from the inventory. This runs before any
- * table is written so the overflow decision can be made once, up front, without
- * partial results.
+ * This is a conservative upper bound: a table's actual required label count is
+ * always <= its raw column count (label/Total columns are dropped during
+ * interpretation, and banner groups are subsets of the columns). So:
+ * - if this returns false, NO eligible table can overflow — skip the dialog and
+ *   any exact preflight entirely;
+ * - if it returns true, a table is at least wide enough that overflow is
+ *   possible; the caller must confirm with the exact, mode-aware check before
+ *   prompting (raw width alone over-counts banner-group and Total columns).
  *
- * The check is deliberately conservative: a table's actual required label count
- * is always <= its raw column count (label/Total columns are dropped during
- * interpretation, and banner groups are subsets of the columns), so this never
- * misses a real overflow. It may over-prompt by a small margin near the
- * alphabet boundary, which is harmless (continuing keeps single-character
- * markers when they still fit).
+ * Previous-column mode never uses letter labels, so it always returns false.
  *
  * @param {Array<number>} columnCounts Raw column counts of the eligible tables.
  * @param {object} [calculationSettings] Used for the Cyrillic capacity.
  */
 export function detectBatchMarkerOverflow(columnCounts, calculationSettings = {}) {
   if (!Array.isArray(columnCounts)) {
+    return false;
+  }
+
+  if (calculationSettings.compareWithPreviousColumn) {
     return false;
   }
 

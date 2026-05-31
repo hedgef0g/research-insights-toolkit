@@ -180,6 +180,96 @@ describe("marker capacity and overflow detection", () => {
   });
 });
 
+describe("marker overflow — comparison-mode awareness (issue #312)", () => {
+  const latinCapacity = getSignificanceMarkerCapacity({ useCyrillicMarkers: false });
+
+  it("required count is 0 in previous-column mode even for very wide tables", () => {
+    assert.strictEqual(
+      computeRequiredSignificanceLabelCount(200, { compareWithPreviousColumn: true }),
+      0
+    );
+  });
+
+  it("no overflow in previous-column mode with 100+ columns", () => {
+    assert.ok(!detectSignificanceMarkerOverflow(150, { compareWithPreviousColumn: true }));
+  });
+
+  it("previous-column mode short-circuits the batch gate too", () => {
+    assert.strictEqual(
+      detectBatchMarkerOverflow([200, 300], { compareWithPreviousColumn: true }),
+      false
+    );
+  });
+
+  it("banner-aware: wide table with many small groups does not overflow", () => {
+    // 100 columns split into 25 groups of 4 non-Total columns each. Capacity is
+    // ~50, so the table is far wider than the alphabet but no group needs more
+    // than 4 labels → no overflow.
+    const groups = [];
+    for (let g = 0; g < 25; g++) {
+      const base = g * 4;
+      groups.push({ groupKey: `g${g}`, columnIndexes: [base, base + 1, base + 2, base + 3] });
+    }
+    const bannerStructure = { groups, totalColumnIndexes: [] };
+
+    assert.ok(latinCapacity < 100); // table is genuinely wider than the alphabet
+    assert.strictEqual(
+      computeRequiredSignificanceLabelCount(100, { respectBannerStructure: true }, bannerStructure),
+      4
+    );
+    assert.ok(
+      !detectSignificanceMarkerOverflow(100, { respectBannerStructure: true }, bannerStructure)
+    );
+  });
+
+  it("banner-aware: overflow when one group exceeds capacity", () => {
+    // One group with capacity + 1 non-Total columns overflows.
+    const wideGroupColumns = [];
+    for (let c = 0; c <= latinCapacity; c++) {
+      wideGroupColumns.push(c);
+    }
+    const bannerStructure = {
+      groups: [
+        { groupKey: "wide", columnIndexes: wideGroupColumns },
+        { groupKey: "small", columnIndexes: [latinCapacity + 1, latinCapacity + 2] },
+      ],
+      totalColumnIndexes: [],
+    };
+
+    assert.strictEqual(
+      computeRequiredSignificanceLabelCount(
+        wideGroupColumns.length + 2,
+        { respectBannerStructure: true },
+        bannerStructure
+      ),
+      latinCapacity + 1
+    );
+    assert.ok(
+      detectSignificanceMarkerOverflow(
+        wideGroupColumns.length + 2,
+        { respectBannerStructure: true },
+        bannerStructure
+      )
+    );
+  });
+
+  it("banner-aware: Total columns inside a group do not consume labels", () => {
+    // Group of [Total, a, b, c]: the Total column must not count toward labels.
+    const bannerStructure = {
+      groups: [{ groupKey: "g1", columnIndexes: [0, 1, 2, 3] }],
+      totalColumnIndexes: [0],
+    };
+    assert.strictEqual(
+      computeRequiredSignificanceLabelCount(4, { respectBannerStructure: true }, bannerStructure),
+      3
+    );
+  });
+
+  it("non-banner wide table still overflows", () => {
+    assert.ok(detectSignificanceMarkerOverflow(latinCapacity + 1, {}));
+  });
+});
+
 describe("detectBatchMarkerOverflow — operation-level preflight", () => {
   const latinCapacity = getSignificanceMarkerCapacity({ useCyrillicMarkers: false });
 
