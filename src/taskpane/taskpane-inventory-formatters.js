@@ -8,9 +8,13 @@
 
 // The backlink marker and its detector live in core (generated-rows.js) so
 // core detection logic can treat generated backlink rows as table boundaries
-// without depending on the taskpane layer. Re-exported here to keep existing
-// taskpane imports working from a single source of truth.
-export { BACKLINK_MARKER, isGeneratedBacklinkRow } from "../core/generated-rows.js";
+// without depending on the taskpane layer. Imported (for local use inside this
+// module) and re-exported to keep existing taskpane imports working from a
+// single source of truth. A bare `export { ... } from` would create no local
+// binding, so calls within this file would throw ReferenceError.
+import { BACKLINK_MARKER, isGeneratedBacklinkRow } from "../core/generated-rows.js";
+
+export { BACKLINK_MARKER, isGeneratedBacklinkRow };
 
 export function getInventoryCandidateStatusLabel(candidateStatus) {
   if (candidateStatus === "available") {
