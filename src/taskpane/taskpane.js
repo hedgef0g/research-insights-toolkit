@@ -90,7 +90,7 @@ import {
   clearSavedLocalSettings,
   applySettingsToPanel,
   loadSavedSettingsIntoPanel,
-  initializeSettingsCollapse,
+  initializeSettingsPanel,
 } from "./taskpane-settings";
 
 import {
@@ -181,80 +181,6 @@ const INVENTORY_FULL_CHECK_COLUMNS = [
 ];
 
 
-const SETTINGS_TOOLTIPS = {
-  "confidence-level":
-    "Выберите уровень значимости для статистических тестов. Чем выше уровень, тем строже проверка и тем меньше отличий будут признаны значимыми.",
-
-  "one-tailed-test":
-    "Использовать односторонний тест вместо двустороннего. При том же уровне значимости такой тест легче находит отличия, но предполагает проверку различия в одном направлении.",
-
-  "round-cell-values":
-    "Округлять отображаемые значения перед добавлением маркеров. Расчёты при этом выполняются по исходным очищенным значениям, а не по округлённым.",
-
-  "compare-with-previous-column":
-    "Сравнивать каждую колонку только с колонкой слева: колонка 2 с колонкой 1, колонка 3 с колонкой 2 и так далее. Вместо букв используются стрелки вверх или вниз.",
-
-  "apply-previous-column-fill":
-    "Применять заливку к ячейкам со значимыми отличиями в режиме сравнения с предыдущей колонкой. Для роста используется обычная заливка значимости, для снижения — цвет “ниже Total”.",
-
-  "write-banner-letters":
-    "Добавлять буквенные индексы колонок в строку над выделенным диапазоном. Например: Segment 1 (a), Segment 2 (b). В режиме учёта структуры баннера буквы ставятся локально внутри групп.",
-
-  "respect-banner-structure":
-    "Анализировать структуру баннера над выделенным диапазоном. Это позволяет сравнивать колонки только внутри групп, определять локальные и глобальные Total, а также распознавать волновые баннеры.",
-
-  "auto-detect-wave-banners":
-    "Автоматически распознавать волновые группы в баннере, например Wave, Period, Волна, Период, и применять к ним сравнение с предыдущей колонкой. Обычные группы при этом продолжают сравниваться внутри группы обычным способом.",
-
-  "labels-on-left-side":
-    "Искать лейблы строк не рядом с выделенным диапазоном, а в самых левых колонках листа. Полезно для широких таблиц, где данные выделены справа, а названия строк находятся далеко слева.",
-
-  "compare-only-with-total":
-    "Сравнивать каждую колонку только с колонкой Total. Обычные попарные сравнения между сегментами выполняться не будут.",
-
-  "exclude-total-from-comparisons":
-    "Исключить Total из расчётов. Total не будет использоваться как база сравнения и не будет сравниваться с другими колонками.",
-
-  "first-column-is-total":
-    "Считать первую колонку выделенного диапазона Total. Она будет использоваться как референс для сравнения с остальными колонками.",
-
-  "total-in-each-banner":
-    "Считать, что Total находится внутри каждой группы баннера. При включённом учёте структуры баннера расположение Total определяется автоматически.",
-
-  "significant-fill-color":
-    "Цвет заливки для ячеек, которые статистически значимо выше другой сравниваемой ячейки или Total.",
-
-  "lower-than-total-fill-color":
-    "Цвет заливки для ячеек, которые статистически значимо ниже Total или ниже предыдущей колонки в режиме сравнения с предыдущей колонкой.",
-
-  "fill-only-total-comparisons":
-    "Применять обычную зелёную заливку только к ячейкам, которые значимо выше Total. Отличия между обычными сегментами будут отмечаться буквами, но без зелёной заливки.",
-
-  "exclude-small-bases":
-    "Исключать из расчётов колонки, где база меньше заданного порога. Такие колонки не участвуют в статистических сравнениях и получают отдельную заливку.",
-
-  "small-base-threshold":
-    "Минимальный допустимый размер базы. Если база колонки меньше этого значения, колонка исключается из расчётов.",
-
-  "small-base-fill-color":
-    "Цвет заливки для колонок с маленькой базой. Эта заливка имеет самый высокий приоритет и перекрывает остальные типы заливки.",
-
-  "recolor-banner-and-labels":
-    "Перекрашивать баннер над данными и примыкающие колонки с лейблами строк одним цветом для обработанных таблиц. Не затрагивает заливки значимости, подписи под таблицей и листы отчётов.",
-
-  "banner-label-fill-color":
-    "Общий цвет заливки для баннера и лейблов строк, когда включена перекраска баннера и лейблов.",
-
-  "preferred-base":
-    "Выберите тип базы для расчёта значимости. «Авто» использует приоритет: Effective → Unweighted → Base → Weighted. Если выбранный тип базы не найден в таблице, используется автоматический приоритет.",
-
-  "settings-storage-mode":
-    "Выберите, сохранять ли настройки панели. Локальное сохранение работает только на этом устройстве и в этом браузере/Excel WebView.",
-
-  "reset-settings":
-    "Сбросить все настройки к значениям по умолчанию и удалить локально сохранённые настройки.",
-};
-
 /**
  * Initializes task pane events after Office is ready.
  *
@@ -285,7 +211,11 @@ Office.onReady((info) => {
   loadSavedLanguage();
   applyI18n();
 
-  initializeSettingsPanel();
+  initializeSettingsPanel({
+    initializePreviousColumnComparisonSettings,
+    initializeSettingsResetButton,
+    initializeBannerStructureSettings,
+  });
   loadSavedSettingsIntoPanel();
   refreshSettingsPanelState();
   initializeSettingsPersistence();
@@ -7371,139 +7301,6 @@ function getCheckboxValue(elementId) {
 function getInputValue(elementId, fallbackValue) {
   const element = document.getElementById(elementId);
   return element ? element.value : fallbackValue;
-}
-
-function initializeSettingsPanel() {
-  initializeSettingsCollapse();
-  initializeSettingsTooltips();
-  initializePreviousColumnTotalWarningPlacement();
-
-  bindMutuallyExclusiveCheckboxes("compare-only-with-total", "exclude-total-from-comparisons");
-
-  bindMutuallyExclusiveCheckboxes("first-column-is-total", "total-in-each-banner");
-
-  initializePreviousColumnComparisonSettings();
-  initializeSettingsResetButton();
-  initializeSettingsTabs();
-  initializeBannerStructureSettings();
-
-  const helpLink = document.getElementById("help-link");
-
-  if (helpLink) {
-    helpLink.addEventListener("click", (event) => {
-      event.preventDefault();
-      window.open(
-        "https://hedgef0g.github.io/research-insights-toolkit/assets/rit-help-ru.html",
-        "_blank"
-      );
-    });
-  }
-}
-
-function initializePreviousColumnTotalWarningPlacement() {
-  const warningElement = document.getElementById("previous-column-total-warning");
-  const totalInEachBannerCheckbox = document.getElementById("total-in-each-banner");
-
-  if (!warningElement || !totalInEachBannerCheckbox || !totalInEachBannerCheckbox.parentElement) {
-    return;
-  }
-
-  totalInEachBannerCheckbox.parentElement.insertAdjacentElement("afterend", warningElement);
-}
-
-/**
- * Adds Russian tooltips to settings controls.
- *
- * PURPOSE:
- * Keep taskpane.html clean and define all setting explanations in one place.
- */
-function initializeSettingsTooltips() {
-  for (const [elementId, tooltipText] of Object.entries(SETTINGS_TOOLTIPS)) {
-    const element = document.getElementById(elementId);
-
-    if (!element) {
-      continue;
-    }
-
-    element.title = tooltipText;
-    element.setAttribute("aria-label", tooltipText);
-
-    const explicitLabel = document.querySelector(`label[for="${elementId}"]`);
-
-    if (explicitLabel) {
-      explicitLabel.title = tooltipText;
-      continue;
-    }
-
-    const wrappingLabel = element.closest("label");
-
-    if (wrappingLabel) {
-      wrappingLabel.title = tooltipText;
-      continue;
-    }
-
-    const parent = element.parentElement;
-
-    if (parent) {
-      const labelLikeText = parent.querySelector("span, .checkbox-text, .label-text");
-
-      if (labelLikeText) {
-        labelLikeText.title = tooltipText;
-      }
-    }
-  }
-}
-
-/**
- * Makes two checkboxes mutually exclusive.
- *
- * PURPOSE:
- * If one checkbox is enabled, the other one is disabled automatically.
- */
-function bindMutuallyExclusiveCheckboxes(firstCheckboxId, secondCheckboxId) {
-  const firstCheckbox = document.getElementById(firstCheckboxId);
-  const secondCheckbox = document.getElementById(secondCheckboxId);
-
-  if (!firstCheckbox || !secondCheckbox) {
-    return;
-  }
-
-  firstCheckbox.addEventListener("change", () => {
-    if (firstCheckbox.checked) {
-      secondCheckbox.checked = false;
-    }
-  });
-
-  secondCheckbox.addEventListener("change", () => {
-    if (secondCheckbox.checked) {
-      firstCheckbox.checked = false;
-    }
-  });
-}
-
-function initializeSettingsTabs() {
-  const navContainer = document.getElementById("settings-tab-nav");
-
-  if (!navContainer) {
-    return;
-  }
-
-  navContainer.addEventListener("click", (e) => {
-    const tab = e.target.closest("[data-settings-tab]");
-    if (!tab) return;
-
-    const targetPanel = tab.dataset.settingsTab;
-
-    navContainer.querySelectorAll(".settings-tab").forEach((t) => {
-      const active = t.dataset.settingsTab === targetPanel;
-      t.classList.toggle("is-active", active);
-      t.setAttribute("aria-selected", active ? "true" : "false");
-    });
-
-    document.querySelectorAll(".settings-tab-panel").forEach((panel) => {
-      panel.style.display = panel.dataset.settingsPanel === targetPanel ? "" : "none";
-    });
-  });
 }
 
 /**
