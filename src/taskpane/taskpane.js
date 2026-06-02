@@ -56,6 +56,8 @@ import { resolveCurrentTableFromActiveCell } from "./active-cell-resolver";
 
 import { t, setLanguage, loadSavedLanguage, applyI18n } from "./localization";
 
+import { createMarkerOverflowDecider } from "./taskpane-dialogs";
+
 import {
   setStatusMessage,
   setCheckMessage,
@@ -471,106 +473,6 @@ function initActionScopeShell() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Reads selected Excel range, detects metric blocks, calculates pairwise significance,
- * and writes significance letters only into actual value rows.
- *
- * PURPOSE:
- * Unified auto mode for complex tables.
- * One selected range may contain proportions, means, and NPS blocks.
- *
- * SUPPORTED BLOCKS:
- * - Proportions + Base
- * - Mean + SD/Variance + Base
- * - NPS + Promoters + Detractors + Base
- * - NPS + SD/Variance + Base
- */
-/**
- * Shows the in-taskpane marker-overflow dialog and resolves the user's choice.
- *
- * window.confirm is not supported in the Office add-in webview, so this drives a
- * small custom modal defined in taskpane.html. Returns a Promise:
- * - true  → continue with multi-character markers;
- * - false → stop the calculation.
- *
- * Esc, clicking the backdrop, or missing markup all resolve to false (stop) so
- * the safe choice (no writes) is the default.
- */
-function confirmMarkerOverflowDialog() {
-  return new Promise((resolve) => {
-    const overlay = document.getElementById("marker-overflow-dialog");
-    const continueButton = document.getElementById("marker-overflow-continue");
-    const stopButton = document.getElementById("marker-overflow-stop");
-
-    if (!overlay || !continueButton || !stopButton) {
-      // Fail safe: without the dialog markup, stop rather than write blindly.
-      resolve(false);
-      return;
-    }
-
-    const finish = (shouldContinue) => {
-      overlay.style.display = "none";
-      continueButton.removeEventListener("click", onContinue);
-      stopButton.removeEventListener("click", onStop);
-      overlay.removeEventListener("mousedown", onBackdrop);
-      document.removeEventListener("keydown", onKeydown);
-      resolve(shouldContinue);
-    };
-
-    const onContinue = () => finish(true);
-    const onStop = () => finish(false);
-    const onBackdrop = (event) => {
-      // Clicking outside the dialog body counts as Stop.
-      if (event.target === overlay) finish(false);
-    };
-    const onKeydown = (event) => {
-      if (event.key === "Escape") finish(false);
-    };
-
-    continueButton.addEventListener("click", onContinue);
-    stopButton.addEventListener("click", onStop);
-    overlay.addEventListener("mousedown", onBackdrop);
-    document.addEventListener("keydown", onKeydown);
-
-    overlay.style.display = "flex";
-    continueButton.focus();
-  });
-}
-
-/**
- * Per-operation marker-overflow decision.
- *
- * The dialog is shown at most once per Run; the user's choice is then reused for
- * every table processed in the same operation (so batch runs do not re-prompt
- * for each table). `resolve()` is async and returns "continue" or "stop". A
- * shared in-flight promise guards against showing two dialogs if `resolve()` is
- * awaited from more than one place before the first choice is made.
- */
-function createMarkerOverflowDecider() {
-  let decision = null; // null | "continue" | "stop"
-  let pending = null;
-
-  return {
-    async resolve() {
-      if (decision !== null) {
-        return decision;
-      }
-
-      if (!pending) {
-        pending = confirmMarkerOverflowDialog().then((shouldContinue) => {
-          decision = shouldContinue ? "continue" : "stop";
-          return decision;
-        });
-      }
-
-      return pending;
-    },
-    get decision() {
-      return decision;
-    },
-  };
-}
-
-/**
  * Read-only marker-overflow check for a single range, mirroring the front half
  * of runSignificanceForRangeInContext (load → interpret → detect banner) but
  * WITHOUT writing anything. Returns true when the table would need more
@@ -722,6 +624,20 @@ async function preflightBatchMarkerOverflow(eligible, itemMap, calculationSettin
   return false;
 }
 
+/**
+ * Reads selected Excel range, detects metric blocks, calculates pairwise significance,
+ * and writes significance letters only into actual value rows.
+ *
+ * PURPOSE:
+ * Unified auto mode for complex tables.
+ * One selected range may contain proportions, means, and NPS blocks.
+ *
+ * SUPPORTED BLOCKS:
+ * - Proportions + Base
+ * - Mean + SD/Variance + Base
+ * - NPS + Promoters + Detractors + Base
+ * - NPS + SD/Variance + Base
+ */
 async function runSignificanceFromSelection() {
   const _t0 = perfNow();
   setStatusMessage(runningStatusMessage("run", "table"));
