@@ -1,13 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { normalizeSelectedRange } from "../../src/core/range-normalizer.js";
-import { removeSignificanceMarkersFromMatrix } from "../../src/core/significance.js";
 import { SIGNIFICANCE_FOOTNOTE_MARKER } from "../../src/core/significance-footnote.js";
-import {
-  detectEmbeddedLabelColumns,
-  detectLeadingEmptyColumns,
-} from "../../src/taskpane/selected-range-interpreter.js";
+import { resolveClearTargetBodyRange } from "../../src/taskpane/selected-range-interpreter.js";
 
 function toDisplayText(values) {
   return values.map((row) =>
@@ -22,76 +17,24 @@ function sliceMatrix(matrix, rowOffset, colOffset, rowCount, colCount) {
 }
 
 function resolveCurrentClearTargetBody(selectedValues, selectedText = toDisplayText(selectedValues)) {
-  const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
-  const normalized = normalizeSelectedRange(cleanedValues, selectedText);
+  const target = resolveClearTargetBodyRange({
+    values: selectedValues,
+    text: selectedText,
+  });
 
-  if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
-    return {
-      state: "blocked",
-      blockingReasons: normalized.blockingReasons,
-    };
+  if (target.state === "blocked") {
+    return target;
   }
-
-  if (normalized.normalizationNeeded && normalized.normalizationApplied) {
-    const bodyRowCount = normalized.valuesForCalculation.length;
-    let bodyColCount = normalized.valuesForCalculation[0].length;
-    let effectiveClearColOffset = normalized.dataColOffset;
-    let textForLeadingEmptyCheck = normalized.textForCalculation;
-
-    if (normalized.dataColOffset === 0) {
-      const additionalLabelCols = detectEmbeddedLabelColumns(normalized.valuesForCalculation);
-      if (additionalLabelCols > 0) {
-        effectiveClearColOffset += additionalLabelCols;
-        bodyColCount -= additionalLabelCols;
-        textForLeadingEmptyCheck = normalized.textForCalculation.map((row) =>
-          row.slice(additionalLabelCols)
-        );
-      }
-    }
-
-    const clearLeadingEmptyCols = detectLeadingEmptyColumns(textForLeadingEmptyCheck);
-    if (clearLeadingEmptyCols > 0) {
-      bodyColCount -= clearLeadingEmptyCols;
-      effectiveClearColOffset += clearLeadingEmptyCols;
-    }
-
-    return {
-      state: "normalized",
-      rowOffset: normalized.dataRowOffset,
-      colOffset: effectiveClearColOffset,
-      rowCount: bodyRowCount,
-      colCount: bodyColCount,
-      targetValues: sliceMatrix(
-        cleanedValues,
-        normalized.dataRowOffset,
-        effectiveClearColOffset,
-        bodyRowCount,
-        bodyColCount
-      ),
-      normalized,
-    };
-  }
-
-  const embeddedLabelColsForClear = detectEmbeddedLabelColumns(cleanedValues);
-  const leadingBlankColsForClear =
-    embeddedLabelColsForClear === 0 ? detectLeadingEmptyColumns(selectedText) : 0;
-  const skipLeftCols =
-    embeddedLabelColsForClear > 0 ? embeddedLabelColsForClear : leadingBlankColsForClear;
 
   return {
-    state: "passThrough",
-    rowOffset: 0,
-    colOffset: skipLeftCols,
-    rowCount: selectedValues.length,
-    colCount: selectedValues[0].length - skipLeftCols,
+    ...target,
     targetValues: sliceMatrix(
-      cleanedValues,
-      0,
-      skipLeftCols,
-      selectedValues.length,
-      selectedValues[0].length - skipLeftCols
+      target.cleanedValues,
+      target.rowOffset,
+      target.colOffset,
+      target.rowCount,
+      target.colCount
     ),
-    normalized,
   };
 }
 

@@ -14,7 +14,6 @@ import {
   compareMeanBlockByRowIndexes,
   compareNpsStructureBlockByRowIndexes,
   compareNpsSpreadBlockByRowIndexes,
-  removeSignificanceMarkersFromMatrix,
   removeSignificanceMarkersFromText,
   generateSignificanceLabels,
   buildBannerLocalSignificanceLabelMap,
@@ -49,14 +48,13 @@ import { detectBannerStructure } from "../core/banner-detector";
 
 import { buildDesignRecolorJob } from "../core/design-recolor";
 
-import { normalizeSelectedRange, hasEmptyDataRowGap, selectionHasMultiTableGap } from "../core/range-normalizer";
+import { hasEmptyDataRowGap, selectionHasMultiTableGap } from "../core/range-normalizer";
 
 import { filterWorkbookCandidates } from "../core/batch-candidate-filter";
 
 import {
   interpretSelectedRange,
-  detectEmbeddedLabelColumns,
-  detectLeadingEmptyColumns,
+  resolveClearTargetBodyRange,
 } from "./selected-range-interpreter";
 
 import { resolveCurrentTableFromActiveCell } from "./active-cell-resolver";
@@ -2374,79 +2372,31 @@ async function clearSignificanceForRangeInContext(context, sheetName, rangeAddre
     return { status: "skipped", message: "нет данных в диапазоне", _clearDetails: null };
   }
 
-  const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
-  const normalized = normalizeSelectedRange(cleanedValues, selectedText);
+  const clearTarget = resolveClearTargetBodyRange({
+    values: selectedValues,
+    text: selectedText,
+  });
 
-  if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+  if (clearTarget.state === "blocked") {
     const codes =
-      normalized.blockingReasons && normalized.blockingReasons.length > 0
-        ? ` [${normalized.blockingReasons.join(", ")}]`
+      clearTarget.blockingReasons && clearTarget.blockingReasons.length > 0
+        ? ` [${clearTarget.blockingReasons.join(", ")}]`
         : "";
-    return { status: "skipped", message: `${normalized.blockingMessage}${codes}`, _clearDetails: null };
+    return { status: "skipped", message: `${clearTarget.blockingMessage}${codes}`, _clearDetails: null };
+  }
+
+  if (clearTarget.state === "empty") {
+    return { status: "skipped", message: "нет данных после нормализации", _clearDetails: null };
   }
 
   let clearTargetRange;
 
-  if (normalized.normalizationNeeded && normalized.normalizationApplied) {
-    const bodyRowCount = normalized.valuesForCalculation.length;
-    let bodyColCount = normalized.valuesForCalculation[0].length;
-    let effectiveClearColOffset = normalized.dataColOffset;
-    let textForLeadingEmptyCheck = normalized.textForCalculation;
-
-    // Secondary embedded-label-column check (mirrors interpretSelectedRange
-    // State 2 / clearSignificanceFromSelection).  Protects auto-clear ranges
-    // whose label column has mixed text + numeric-looking values from being
-    // overwritten when normalizeSelectedRange leaves col[0] inside the body.
-    if (normalized.dataColOffset === 0) {
-      const additionalLabelCols = detectEmbeddedLabelColumns(
-        normalized.valuesForCalculation
-      );
-      if (additionalLabelCols > 0) {
-        effectiveClearColOffset += additionalLabelCols;
-        bodyColCount -= additionalLabelCols;
-        textForLeadingEmptyCheck = normalized.textForCalculation.map(
-          (row) => row.slice(additionalLabelCols)
-        );
-      }
-    }
-
-    const clearLeadingEmptyCols = detectLeadingEmptyColumns(textForLeadingEmptyCheck);
-    if (clearLeadingEmptyCols > 0) {
-      bodyColCount -= clearLeadingEmptyCols;
-      effectiveClearColOffset += clearLeadingEmptyCols;
-    }
-
-    if (bodyRowCount < 1 || bodyColCount < 1) {
-      return { status: "skipped", message: "нет данных после нормализации", _clearDetails: null };
-    }
-
-    clearTargetRange = sourceRange
-      .getCell(normalized.dataRowOffset, effectiveClearColOffset)
-      .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
+  if (clearTarget.usesFullSelection) {
+    clearTargetRange = sourceRange;
   } else {
-    // Pass-through mirrors interpretSelectedRange / clearSignificanceFromSelection:
-    // prefer detectEmbeddedLabelColumns to keep row labels out of the clear
-    // target on wide tables; fall back to detectLeadingEmptyColumns otherwise.
-    const embeddedLabelColsForClear = detectEmbeddedLabelColumns(cleanedValues);
-    const leadingBlankColsForClear =
-      embeddedLabelColsForClear === 0
-        ? detectLeadingEmptyColumns(selectedText)
-        : 0;
-    const skipLeftCols =
-      embeddedLabelColsForClear > 0
-        ? embeddedLabelColsForClear
-        : leadingBlankColsForClear;
-
-    if (skipLeftCols > 0) {
-      clearTargetRange = sourceRange
-        .getCell(0, skipLeftCols)
-        .getResizedRange(
-          selectedValues.length - 1,
-          selectedValues[0].length - skipLeftCols - 1
-        );
-    } else {
-      clearTargetRange = sourceRange;
-    }
+    clearTargetRange = sourceRange
+      .getCell(clearTarget.rowOffset, clearTarget.colOffset)
+      .getResizedRange(clearTarget.rowCount - 1, clearTarget.colCount - 1);
   }
 
   clearTargetRange.load(["values", "numberFormat", "rowIndex", "columnIndex", "columnCount"]);
@@ -2686,69 +2636,35 @@ async function clearSignificanceForSheetBatched(context, worksheetRef, candidate
       continue;
     }
 
-    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
-    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
+    const clearTarget = resolveClearTargetBodyRange({
+      values: selectedValues,
+      text: selectedText,
+    });
 
-    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+    if (clearTarget.state === "blocked") {
       const codes =
-        normalized.blockingReasons && normalized.blockingReasons.length > 0
-          ? ` [${normalized.blockingReasons.join(", ")}]`
+        clearTarget.blockingReasons && clearTarget.blockingReasons.length > 0
+          ? ` [${clearTarget.blockingReasons.join(", ")}]`
           : "";
       rec.status = "skipped";
-      rec.message = `${normalized.blockingMessage}${codes}`;
+      rec.message = `${clearTarget.blockingMessage}${codes}`;
+      continue;
+    }
+
+    if (clearTarget.state === "empty") {
+      rec.status = "skipped";
+      rec.message = "нет данных после нормализации";
       continue;
     }
 
     let clearTargetRange;
 
-    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
-      const bodyRowCount = normalized.valuesForCalculation.length;
-      let bodyColCount = normalized.valuesForCalculation[0].length;
-      let effectiveClearColOffset = normalized.dataColOffset;
-      let textForLeadingEmptyCheck = normalized.textForCalculation;
-
-      if (normalized.dataColOffset === 0) {
-        const additionalLabelCols = detectEmbeddedLabelColumns(normalized.valuesForCalculation);
-        if (additionalLabelCols > 0) {
-          effectiveClearColOffset += additionalLabelCols;
-          bodyColCount -= additionalLabelCols;
-          textForLeadingEmptyCheck = normalized.textForCalculation.map((row) =>
-            row.slice(additionalLabelCols)
-          );
-        }
-      }
-
-      const clearLeadingEmptyCols = detectLeadingEmptyColumns(textForLeadingEmptyCheck);
-      if (clearLeadingEmptyCols > 0) {
-        bodyColCount -= clearLeadingEmptyCols;
-        effectiveClearColOffset += clearLeadingEmptyCols;
-      }
-
-      if (bodyRowCount < 1 || bodyColCount < 1) {
-        rec.status = "skipped";
-        rec.message = "нет данных после нормализации";
-        continue;
-      }
-
-      clearTargetRange = rec.sourceRange
-        .getCell(normalized.dataRowOffset, effectiveClearColOffset)
-        .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
+    if (clearTarget.usesFullSelection) {
+      clearTargetRange = rec.sourceRange;
     } else {
-      // Pass-through: use JS dimensions — avoids loading sourceRange.rowCount/columnCount.
-      const rowCount = selectedValues.length;
-      const colCount = selectedValues[0].length;
-      const embeddedLabelCols = detectEmbeddedLabelColumns(cleanedValues);
-      const leadingBlankCols =
-        embeddedLabelCols === 0 ? detectLeadingEmptyColumns(selectedText) : 0;
-      const skipLeftCols = embeddedLabelCols > 0 ? embeddedLabelCols : leadingBlankCols;
-
-      if (skipLeftCols > 0) {
-        clearTargetRange = rec.sourceRange
-          .getCell(0, skipLeftCols)
-          .getResizedRange(rowCount - 1, colCount - skipLeftCols - 1);
-      } else {
-        clearTargetRange = rec.sourceRange;
-      }
+      clearTargetRange = rec.sourceRange
+        .getCell(clearTarget.rowOffset, clearTarget.colOffset)
+        .getResizedRange(clearTarget.rowCount - 1, clearTarget.colCount - 1);
     }
 
     rec.clearTargetRange = clearTargetRange;
@@ -3057,69 +2973,35 @@ async function clearSignificanceForWorkbookBatched(context, eligible) {
       continue;
     }
 
-    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
-    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
+    const clearTarget = resolveClearTargetBodyRange({
+      values: selectedValues,
+      text: selectedText,
+    });
 
-    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+    if (clearTarget.state === "blocked") {
       const codes =
-        normalized.blockingReasons && normalized.blockingReasons.length > 0
-          ? ` [${normalized.blockingReasons.join(", ")}]`
+        clearTarget.blockingReasons && clearTarget.blockingReasons.length > 0
+          ? ` [${clearTarget.blockingReasons.join(", ")}]`
           : "";
       rec.status = "skipped";
-      rec.message = `${normalized.blockingMessage}${codes}`;
+      rec.message = `${clearTarget.blockingMessage}${codes}`;
+      continue;
+    }
+
+    if (clearTarget.state === "empty") {
+      rec.status = "skipped";
+      rec.message = "нет данных после нормализации";
       continue;
     }
 
     let clearTargetRange;
 
-    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
-      const bodyRowCount = normalized.valuesForCalculation.length;
-      let bodyColCount = normalized.valuesForCalculation[0].length;
-      let effectiveClearColOffset = normalized.dataColOffset;
-      let textForLeadingEmptyCheck = normalized.textForCalculation;
-
-      if (normalized.dataColOffset === 0) {
-        const additionalLabelCols = detectEmbeddedLabelColumns(normalized.valuesForCalculation);
-        if (additionalLabelCols > 0) {
-          effectiveClearColOffset += additionalLabelCols;
-          bodyColCount -= additionalLabelCols;
-          textForLeadingEmptyCheck = normalized.textForCalculation.map((row) =>
-            row.slice(additionalLabelCols)
-          );
-        }
-      }
-
-      const clearLeadingEmptyCols = detectLeadingEmptyColumns(textForLeadingEmptyCheck);
-      if (clearLeadingEmptyCols > 0) {
-        bodyColCount -= clearLeadingEmptyCols;
-        effectiveClearColOffset += clearLeadingEmptyCols;
-      }
-
-      if (bodyRowCount < 1 || bodyColCount < 1) {
-        rec.status = "skipped";
-        rec.message = "нет данных после нормализации";
-        continue;
-      }
-
-      clearTargetRange = rec.sourceRange
-        .getCell(normalized.dataRowOffset, effectiveClearColOffset)
-        .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
+    if (clearTarget.usesFullSelection) {
+      clearTargetRange = rec.sourceRange;
     } else {
-      // Pass-through: use JS dimensions — avoids loading unneeded sourceRange properties.
-      const rowCount = selectedValues.length;
-      const colCount = selectedValues[0].length;
-      const embeddedLabelCols = detectEmbeddedLabelColumns(cleanedValues);
-      const leadingBlankCols =
-        embeddedLabelCols === 0 ? detectLeadingEmptyColumns(selectedText) : 0;
-      const skipLeftCols = embeddedLabelCols > 0 ? embeddedLabelCols : leadingBlankCols;
-
-      if (skipLeftCols > 0) {
-        clearTargetRange = rec.sourceRange
-          .getCell(0, skipLeftCols)
-          .getResizedRange(rowCount - 1, colCount - skipLeftCols - 1);
-      } else {
-        clearTargetRange = rec.sourceRange;
-      }
+      clearTargetRange = rec.sourceRange
+        .getCell(clearTarget.rowOffset, clearTarget.colOffset)
+        .getResizedRange(clearTarget.rowCount - 1, clearTarget.colCount - 1);
     }
 
     rec.clearTargetRange = clearTargetRange;
@@ -4588,102 +4470,35 @@ async function clearSignificanceFromSelection() {
       return;
     }
 
-    const cleanedValues = removeSignificanceMarkersFromMatrix(selectedValues);
-    const normalized = normalizeSelectedRange(cleanedValues, selectedText);
+    const clearTarget = resolveClearTargetBodyRange({
+      values: selectedValues,
+      text: selectedText,
+    });
 
     // State 3: broad/full-table-like selection but decomposition failed.
     // Block and return without mutating anything.
-    if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+    if (clearTarget.state === "blocked") {
       const codes =
-        normalized.blockingReasons && normalized.blockingReasons.length > 0
-          ? ` [${normalized.blockingReasons.join(", ")}]`
+        clearTarget.blockingReasons && clearTarget.blockingReasons.length > 0
+          ? ` [${clearTarget.blockingReasons.join(", ")}]`
           : "";
-      setStatusMessage(`${normalized.blockingMessage}${codes}`);
+      setStatusMessage(`${clearTarget.blockingMessage}${codes}`);
       return;
     }
 
-    // Resolve the clear target:
-    //   - State 1 (pass-through): the original selection is numeric-only.
-    //   - State 2 (normalized):   only the detected data body subrange.
+    if (clearTarget.state === "empty") {
+      setStatusMessage("Нет данных в выделенном диапазоне.");
+      return;
+    }
+
     let clearTargetRange;
 
-    if (normalized.normalizationNeeded && normalized.normalizationApplied) {
-      const bodyRowCount = normalized.valuesForCalculation.length;
-      let bodyColCount = normalized.valuesForCalculation[0].length;
-      let effectiveClearColOffset = normalized.dataColOffset;
-      let textForLeadingEmptyCheck = normalized.textForCalculation;
-
-      // Secondary embedded-label-column check (mirrors interpretSelectedRange
-      // State 2).  The normalizer leaves the label column inside
-      // valuesForCalculation when col[0] text fraction is uncertain (mix of
-      // text and numeric-looking labels, e.g. "Нет", "1", "2", "BASE").
-      // detectEmbeddedLabelColumns recognises that shape by looking for at
-      // least one genuine text cell in col[0]; without it, Clear's target
-      // would still include the row-label column and overwrite label text.
-      if (normalized.dataColOffset === 0) {
-        const additionalLabelCols = detectEmbeddedLabelColumns(
-          normalized.valuesForCalculation
-        );
-        if (additionalLabelCols > 0) {
-          effectiveClearColOffset += additionalLabelCols;
-          bodyColCount -= additionalLabelCols;
-          textForLeadingEmptyCheck = normalized.textForCalculation.map(
-            (row) => row.slice(additionalLabelCols)
-          );
-        }
-      }
-
-      // Tertiary strip mirrors interpretSelectedRange State 2: the normalizer
-      // may leave leading all-blank helper columns (e.g. column B in a
-      // mean-only table) inside the normalized body.  Clear must exclude
-      // those same columns so it does not widen the clear target beyond the
-      // real data body.
-      const clearLeadingEmptyCols = detectLeadingEmptyColumns(
-        textForLeadingEmptyCheck
-      );
-      if (clearLeadingEmptyCols > 0) {
-        bodyColCount -= clearLeadingEmptyCols;
-        effectiveClearColOffset += clearLeadingEmptyCols;
-      }
-
-      if (bodyRowCount < 1 || bodyColCount < 1) {
-        setStatusMessage("Нет данных в выделенном диапазоне.");
-        return;
-      }
-
-      clearTargetRange = selectedRange
-        .getCell(normalized.dataRowOffset, effectiveClearColOffset)
-        .getResizedRange(bodyRowCount - 1, bodyColCount - 1);
+    if (clearTarget.usesFullSelection) {
+      clearTargetRange = selectedRange;
     } else {
-      // Pass-through.  Mirror interpretSelectedRange pass-through path
-      // (selected-range-interpreter.js): first try detectEmbeddedLabelColumns
-      // (recognises a leftmost column with at least one genuine text cell,
-      // optionally followed by uniform unit columns), and only fall back to
-      // detectLeadingEmptyColumns when no embedded label column was found.
-      // This excludes row labels from the clear target on wide tables whose
-      // col[0] text fraction sits just below the normalizer pass-through gate
-      // (e.g. labels "Нет"/"1"/"2"/"BASE") so the original strict workflow
-      // for pure numeric selections is preserved.
-      const embeddedLabelColsForClear = detectEmbeddedLabelColumns(cleanedValues);
-      const leadingBlankColsForClear =
-        embeddedLabelColsForClear === 0
-          ? detectLeadingEmptyColumns(selectedText)
-          : 0;
-      const skipLeftCols =
-        embeddedLabelColsForClear > 0
-          ? embeddedLabelColsForClear
-          : leadingBlankColsForClear;
-
-      if (skipLeftCols > 0) {
-        clearTargetRange = selectedRange
-          .getCell(0, skipLeftCols)
-          .getResizedRange(
-            selectedRange.rowCount - 1,
-            selectedRange.columnCount - skipLeftCols - 1
-          );
-      } else {
-        clearTargetRange = selectedRange;
-      }
+      clearTargetRange = selectedRange
+        .getCell(clearTarget.rowOffset, clearTarget.colOffset)
+        .getResizedRange(clearTarget.rowCount - 1, clearTarget.colCount - 1);
     }
 
     clearTargetRange.load(["values", "numberFormat", "rowIndex", "columnIndex", "columnCount"]);
