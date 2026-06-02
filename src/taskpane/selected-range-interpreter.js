@@ -343,6 +343,132 @@ export function detectLeadingEmptyColumns(selectedText) {
   return emptyCols;
 }
 
+/**
+ * Resolves the selected-range sub-rectangle Clear should mutate.
+ *
+ * Pure geometry helper shared by manual Clear and auto Clear. It mirrors the
+ * current Clear behavior:
+ * - marker-strip values before selected-range normalization;
+ * - block unsafe broad selections before any writes;
+ * - for normalized full-table selections, target only the resolved data body;
+ * - apply the secondary embedded-label-column strip when the normalizer leaves
+ *   mixed label/data column 0 inside the body;
+ * - apply the leading-empty structural column strip where Clear already does;
+ * - keep strict numeric selections as pass-through.
+ *
+ * @param {Object} input
+ * @param {Array<Array<*>>} input.values Excel range values.
+ * @param {Array<Array<string>>} input.text Excel range display text.
+ * @returns {Object} Pure target result.
+ *   state: "passThrough" | "normalized" | "blocked" | "empty"
+ *   rowOffset/colOffset: relative start within the original selected range
+ *   rowCount/colCount: target body dimensions
+ *   usesFullSelection: true when callers can reuse the original range object
+ *   cleanedValues: marker-stripped values used for normalization
+ *   normalized: raw normalizeSelectedRange result
+ *   blockingMessage/blockingReasons: populated when state is "blocked"
+ */
+export function resolveClearTargetBodyRange({ values, text }) {
+  const cleanedValues = removeSignificanceMarkersFromMatrix(values);
+  const normalized = normalizeSelectedRange(cleanedValues, text);
+
+  if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+    return {
+      state: "blocked",
+      rowOffset: 0,
+      colOffset: 0,
+      rowCount: 0,
+      colCount: 0,
+      usesFullSelection: false,
+      cleanedValues,
+      normalized,
+      blockingMessage: normalized.blockingMessage,
+      blockingReasons: normalized.blockingReasons,
+    };
+  }
+
+  if (normalized.normalizationNeeded && normalized.normalizationApplied) {
+    const bodyRowCount = normalized.valuesForCalculation.length;
+    let bodyColCount = normalized.valuesForCalculation[0].length;
+    let effectiveClearColOffset = normalized.dataColOffset;
+    let textForLeadingEmptyCheck = normalized.textForCalculation;
+    let embeddedLabelColumnCount = 0;
+    let leadingEmptyColumnCount = 0;
+
+    if (normalized.dataColOffset === 0) {
+      embeddedLabelColumnCount = detectEmbeddedLabelColumns(normalized.valuesForCalculation);
+      if (embeddedLabelColumnCount > 0) {
+        effectiveClearColOffset += embeddedLabelColumnCount;
+        bodyColCount -= embeddedLabelColumnCount;
+        textForLeadingEmptyCheck = normalized.textForCalculation.map((row) =>
+          row.slice(embeddedLabelColumnCount)
+        );
+      }
+    }
+
+    leadingEmptyColumnCount = detectLeadingEmptyColumns(textForLeadingEmptyCheck);
+    if (leadingEmptyColumnCount > 0) {
+      bodyColCount -= leadingEmptyColumnCount;
+      effectiveClearColOffset += leadingEmptyColumnCount;
+    }
+
+    if (bodyRowCount < 1 || bodyColCount < 1) {
+      return {
+        state: "empty",
+        rowOffset: normalized.dataRowOffset,
+        colOffset: effectiveClearColOffset,
+        rowCount: bodyRowCount,
+        colCount: bodyColCount,
+        usesFullSelection: false,
+        cleanedValues,
+        normalized,
+        blockingMessage: "",
+        blockingReasons: [],
+        embeddedLabelColumnCount,
+        leadingEmptyColumnCount,
+      };
+    }
+
+    return {
+      state: "normalized",
+      rowOffset: normalized.dataRowOffset,
+      colOffset: effectiveClearColOffset,
+      rowCount: bodyRowCount,
+      colCount: bodyColCount,
+      usesFullSelection: false,
+      cleanedValues,
+      normalized,
+      blockingMessage: "",
+      blockingReasons: [],
+      embeddedLabelColumnCount,
+      leadingEmptyColumnCount,
+    };
+  }
+
+  const rowCount = Array.isArray(values) ? values.length : 0;
+  const colCount = rowCount > 0 && Array.isArray(values[0]) ? values[0].length : 0;
+  const embeddedLabelColumnCount = detectEmbeddedLabelColumns(cleanedValues);
+  const leadingEmptyColumnCount =
+    embeddedLabelColumnCount === 0 ? detectLeadingEmptyColumns(text) : 0;
+  const skipLeftCols =
+    embeddedLabelColumnCount > 0 ? embeddedLabelColumnCount : leadingEmptyColumnCount;
+
+  return {
+    state: "passThrough",
+    rowOffset: 0,
+    colOffset: skipLeftCols,
+    rowCount,
+    colCount: colCount - skipLeftCols,
+    usesFullSelection: skipLeftCols === 0,
+    cleanedValues,
+    normalized,
+    blockingMessage: "",
+    blockingReasons: [],
+    embeddedLabelColumnCount,
+    leadingEmptyColumnCount,
+  };
+}
+
 // ─── Banner context adapter ────────────────────────────────────────────────────
 
 /**
