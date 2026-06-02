@@ -1011,9 +1011,7 @@ async function runSignificanceFromSelection() {
     if (calculationSettings.writeBannerLetters) {
       // Combined banner clear + write: one read sync (which also flushes the
       // queued data writes above) followed by queued marker writes that are
-      // flushed by the final context.sync() below.  Replaces the legacy
-      // clearBannerMarkersAboveRange + writeBannerMarkers* pair, cutting per-
-      // table banner sync count from 5–6 down to 2.
+      // flushed by the final context.sync() below.
       //
       // sourceStartColIndex widens the scan to cover any columns between the
       // selection start and the write target start, absorbing the stale-left
@@ -3586,123 +3584,6 @@ function calculateBlockResults(cleanedValues, calculationBlock, calculationSetti
 
 
 /**
- * Removes RIT-generated trailing banner significance markers from the visible
- * banner/header cells above the data body that was just cleared.
- *
- * PURPOSE:
- * Mirrors the Run "mark letters in banner" placement so Clear undoes the same
- * cells Run wrote into, including sparse / vertically merged banner layouts
- * where the nearest non-empty cell above receives the marker.
- *
- * RULES:
- * - Scans the row immediately above the data body plus up to
- *   BANNER_UPPER_SCAN_LIMIT additional rows above, matching Run.
- * - Removes only trailing markers recognized by getTrailingBannerMarker,
- *   which restricts matches to single-character significance labels.
- *   Ordinary parenthesized header text such as "Wave (quarter)",
- *   "Brand (new)", or "Волна (квартал)" is preserved.
- * - Never writes to the data body or to the label column.
- */
-async function clearBannerMarkersAboveRange(context, targetRange, knownDimensions, sourceStartColIndex) {
-  const BANNER_UPPER_SCAN_LIMIT = 5;
-
-  let targetStartRowIndex, targetStartColumnIndex, targetColumnCount;
-  if (knownDimensions) {
-    targetStartRowIndex = knownDimensions.rowIndex;
-    targetStartColumnIndex = knownDimensions.columnIndex;
-    targetColumnCount = knownDimensions.columnCount;
-  } else {
-    targetRange.load(["rowIndex", "columnIndex", "columnCount"]);
-    await context.sync();
-    targetStartRowIndex = targetRange.rowIndex;
-    targetStartColumnIndex = targetRange.columnIndex;
-    targetColumnCount = targetRange.columnCount;
-  }
-
-  if (targetStartRowIndex === 0 || targetColumnCount < 1) {
-    return;
-  }
-
-  const totalScanRowCount = Math.min(BANNER_UPPER_SCAN_LIMIT + 1, targetStartRowIndex);
-
-  if (totalScanRowCount < 1) {
-    return;
-  }
-
-  // When sourceStartColIndex is provided and falls left of the write target,
-  // widen the scan to cover columns between the source start and the write
-  // target.  This absorbs the stale-left marker cleanup (previously handled
-  // by clearStaleBannerMarkersLeftOfWriteRange) into a single sync that also
-  // flushes any pending data writes, eliminating a separate round-trip.
-  const scanStartColIndex =
-    sourceStartColIndex !== undefined && sourceStartColIndex < targetStartColumnIndex
-      ? sourceStartColIndex
-      : targetStartColumnIndex;
-  const scanColCount = targetStartColumnIndex + targetColumnCount - scanStartColIndex;
-
-  const bannerScanRange = targetRange.worksheet.getRangeByIndexes(
-    targetStartRowIndex - totalScanRowCount,
-    scanStartColIndex,
-    totalScanRowCount,
-    scanColCount
-  );
-
-  bannerScanRange.load("text");
-
-  await context.sync();
-
-  const bannerTexts = bannerScanRange.text;
-  const cellWriteQueue = [];
-
-  for (let rowOffset = 0; rowOffset < totalScanRowCount; rowOffset++) {
-    const rowTexts = bannerTexts[rowOffset] || [];
-
-    for (let colOffset = 0; colOffset < scanColCount; colOffset++) {
-      const currentText = rowTexts[colOffset];
-
-      if (currentText === null || currentText === undefined || currentText === "") {
-        continue;
-      }
-
-      if (!getTrailingBannerMarker(currentText)) {
-        continue;
-      }
-
-      cellWriteQueue.push({
-        rowIndex: targetStartRowIndex - totalScanRowCount + rowOffset,
-        colIndex: scanStartColIndex + colOffset,
-        text: removeTrailingBannerMarker(currentText),
-      });
-    }
-  }
-
-  if (cellWriteQueue.length === 0) {
-    return;
-  }
-
-  // Batch adjacent same-row writes into range operations.
-  const writesByRow = new Map();
-  for (const item of cellWriteQueue) {
-    if (!writesByRow.has(item.rowIndex)) writesByRow.set(item.rowIndex, []);
-    writesByRow.get(item.rowIndex).push(item);
-  }
-  for (const [rowIndex, items] of writesByRow) {
-    items.sort((a, b) => a.colIndex - b.colIndex);
-    let i = 0;
-    while (i < items.length) {
-      let j = i;
-      while (j + 1 < items.length && items[j + 1].colIndex === items[j].colIndex + 1) j++;
-      const texts = items.slice(i, j + 1).map(x => x.text);
-      targetRange.worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1).values = [texts];
-      i = j + 1;
-    }
-  }
-
-  await context.sync();
-}
-
-
-/**
  * Read-only check pipeline for a named range inside an existing Excel.run context.
  *
  * Loads the range, runs interpretSelectedRange + buildTablePreviewModel, and
@@ -5616,23 +5497,20 @@ function getInputValue(elementId, fallbackValue) {
 /**
  * Combined banner-marker clear + write for a Run pass.
  *
- * Replaces the legacy `clearBannerMarkersAboveRange` + `writeBannerMarkers*`
- * pair with a single read/plan/write phase.  Reads the full banner scan area
+ * Uses a single read/plan/write phase.  Reads the full banner scan area
  * once, strips all RIT trailing markers in-memory (the clear phase), then
- * applies the desired markers using the same placement rules as the two
- * legacy writers (lower banner row when non-empty, otherwise nearest
- * non-empty cell above; uses `bannerStructure` labels when respect-banner-
- * structure is on, otherwise sequential significance labels with the
+ * applies the desired markers (lower banner row when non-empty, otherwise
+ * nearest non-empty cell above; uses `bannerStructure` labels when respect-
+ * banner-structure is on, otherwise sequential significance labels with the
  * first-column-is-total adjustment).  Diffs the desired matrix against the
  * read texts and writes back only cells that actually changed, batched into
  * contiguous same-row runs and split by markered/clear-only flag so the
- * legacy "@" number-format behaviour is preserved on marker writes.
+ * "@" number-format guard is preserved on marker writes.
  *
  * Sync count in normal mode: 1 for the banner-area read (also flushes any
  * pending data writes from the caller) and 0 for the writes — the caller is
  * expected to issue its own final `context.sync()` to flush queued banner
- * writes.  This brings per-table banner sync count down from 5–7 (legacy) to
- * 2 when counting the caller's final sync.
+ * writes.
  *
  * Development-only banner write profiling can split numberFormat and values
  * into separate syncs to measure host flush cost. It is disabled by default.
@@ -5678,8 +5556,7 @@ async function applyBannerMarkerUpdatesForRange(
   }
 
   // Widen the scan left to absorb stale-left marker cleanup when the source
-  // selection extends further left than the actual write target.  Matches the
-  // legacy `clearBannerMarkersAboveRange` widened-scan behaviour (#272).
+  // selection extends further left than the actual write target (#272).
   const scanStartColIndex =
     sourceStartColIndex !== undefined && sourceStartColIndex < targetStartColumnIndex
       ? sourceStartColIndex
@@ -5717,8 +5594,7 @@ async function applyBannerMarkerUpdatesForRange(
   }
 
   // Step 1: strip RIT trailing markers from every cell in the scan area.
-  // Mirrors the legacy `clearBannerMarkersAboveRange` pass — keeps non-RIT
-  // parenthesised text (e.g. "Wave (quarter)") intact because
+  // Keeps non-RIT parenthesised text (e.g. "Wave (quarter)") intact because
   // getTrailingBannerMarker only matches single-character significance labels.
   for (let r = 0; r < totalScanRowCount; r++) {
     const row = desiredTexts[r];
@@ -5744,10 +5620,9 @@ async function applyBannerMarkerUpdatesForRange(
     labelMap = new Map();
     for (let dataCol = 0; dataCol < targetColumnCount; dataCol++) {
       if (calculationSettings.firstColumnIsTotal && dataCol === 0) {
-        // Total column 0: legacy `writeBannerMarkersAboveSelectedRange`
-        // explicitly clears any marker here; step 1 above already stripped
-        // any RIT marker from the lower row and the upper rows, so no
-        // additional label work is required for this column.
+        // Total column 0: step 1 above already stripped any RIT marker from
+        // the lower row and the upper rows, so no additional label work is
+        // required for this column.
         continue;
       }
       const markerIndex = calculationSettings.firstColumnIsTotal ? dataCol - 1 : dataCol;
@@ -6000,357 +5875,6 @@ async function applyBannerMarkerUpdatesForRange(
   });
 
   return details;
-}
-
-/**
- * Writes column significance labels into the banner row above selected range.
- *
- * PURPOSE:
- * If enabled, every selected data column receives its significance marker
- * in the cell directly above the selected range.
- */
-async function writeBannerMarkersAboveSelectedRange(context, selectedRange, calculationSettings, knownDimensions) {
-  if (!calculationSettings.writeBannerLetters) {
-    return;
-  }
-
-  const BANNER_UPPER_SCAN_LIMIT = 5;
-
-  let selectedStartRowIndex, selectedStartColumnIndex, selectedColumnCount;
-  if (knownDimensions) {
-    selectedStartRowIndex = knownDimensions.rowIndex;
-    selectedStartColumnIndex = knownDimensions.columnIndex;
-    selectedColumnCount = knownDimensions.columnCount;
-  } else {
-    selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
-    await context.sync();
-    selectedStartRowIndex = selectedRange.rowIndex;
-    selectedStartColumnIndex = selectedRange.columnIndex;
-    selectedColumnCount = selectedRange.columnCount;
-  }
-
-  if (selectedStartRowIndex === 0) {
-    return;
-  }
-
-  const significanceLabels = generateSignificanceLabels({
-    useCyrillicMarkers: Boolean(calculationSettings.useCyrillicMarkers),
-    allowMultiCharacterMarkers: Boolean(calculationSettings.allowMultiCharacterMarkers),
-    minimumCount: selectedColumnCount,
-  });
-
-  const bannerRange = selectedRange.worksheet.getRangeByIndexes(
-    selectedStartRowIndex - 1,
-    selectedStartColumnIndex,
-    1,
-    selectedColumnCount
-  );
-
-  bannerRange.load("text");
-
-  await context.sync();
-
-  const bannerTexts = bannerRange.text[0] || [];
-  const markerByColumnIndex = new Map();
-  const clearMarkerColumnIndexes = new Set();
-
-  const updatedBannerTexts = bannerTexts.map((currentText, columnIndex) => {
-    if (calculationSettings.firstColumnIsTotal && columnIndex === 0) {
-      clearMarkerColumnIndexes.add(columnIndex);
-      return removeTrailingBannerMarker(currentText);
-    }
-
-    const markerIndex = calculationSettings.firstColumnIsTotal ? columnIndex - 1 : columnIndex;
-
-    const marker = significanceLabels[markerIndex];
-
-    if (!marker) {
-      return currentText;
-    }
-
-    markerByColumnIndex.set(columnIndex, marker);
-
-    return appendOrReplaceTrailingBannerMarker(currentText, marker);
-  });
-
-  const upperScanRowCount = Math.min(BANNER_UPPER_SCAN_LIMIT, selectedStartRowIndex - 1);
-  const needsUpperScan =
-    upperScanRowCount > 0 &&
-    bannerTexts.some(
-      (text, columnIndex) =>
-        (text || "") === "" &&
-        (markerByColumnIndex.has(columnIndex) || clearMarkerColumnIndexes.has(columnIndex))
-    );
-
-  let upperScanTexts = [];
-
-  if (needsUpperScan) {
-    const upperScanRange = selectedRange.worksheet.getRangeByIndexes(
-      selectedStartRowIndex - 1 - upperScanRowCount,
-      selectedStartColumnIndex,
-      upperScanRowCount,
-      selectedColumnCount
-    );
-
-    upperScanRange.load("text");
-
-    await context.sync();
-
-    upperScanTexts = upperScanRange.text.slice().reverse();
-  }
-
-  const cellWriteQueue = [];
-
-  for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
-    const currentText = bannerTexts[columnIndex] || "";
-    const nextText = updatedBannerTexts[columnIndex] || "";
-    const marker = markerByColumnIndex.get(columnIndex);
-    const shouldClearMarker = clearMarkerColumnIndexes.has(columnIndex);
-
-    if (currentText === "" && (marker || shouldClearMarker)) {
-      let queued = false;
-
-      for (let rowOffset = 0; rowOffset < upperScanTexts.length; rowOffset++) {
-        const upperCellText =
-          (upperScanTexts[rowOffset] && upperScanTexts[rowOffset][columnIndex]) || "";
-
-        if (upperCellText !== "") {
-          const updatedUpperCellText = marker
-            ? appendOrReplaceTrailingBannerMarker(upperCellText, marker)
-            : getTrailingBannerMarker(upperCellText)
-              ? removeTrailingBannerMarker(upperCellText)
-              : upperCellText;
-
-          if (updatedUpperCellText === upperCellText) {
-            queued = true;
-            break;
-          }
-
-          cellWriteQueue.push({
-            rowIndex: selectedStartRowIndex - 2 - rowOffset,
-            colIndex: selectedStartColumnIndex + columnIndex,
-            text: updatedUpperCellText,
-          });
-          queued = true;
-          break;
-        }
-      }
-
-      if (queued) {
-        continue;
-      }
-    }
-
-    if (nextText === "" && currentText === "") {
-      continue;
-    }
-
-    if (nextText === currentText) {
-      continue;
-    }
-
-    cellWriteQueue.push({
-      rowIndex: selectedStartRowIndex - 1,
-      colIndex: selectedStartColumnIndex + columnIndex,
-      text: nextText,
-    });
-  }
-
-  // Batch adjacent same-row writes into range operations.
-  const writesByRow = new Map();
-  for (const item of cellWriteQueue) {
-    if (!writesByRow.has(item.rowIndex)) writesByRow.set(item.rowIndex, []);
-    writesByRow.get(item.rowIndex).push(item);
-  }
-  for (const [rowIndex, items] of writesByRow) {
-    items.sort((a, b) => a.colIndex - b.colIndex);
-    let i = 0;
-    while (i < items.length) {
-      let j = i;
-      while (j + 1 < items.length && items[j + 1].colIndex === items[j].colIndex + 1) j++;
-      const texts = items.slice(i, j + 1).map(x => x.text);
-      selectedRange.worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1).values = [texts];
-      i = j + 1;
-    }
-  }
-
-  await context.sync();
-}
-
-/**
- * Writes group-local significance letters into the lowest banner level.
- *
- * The lowest banner level is the row immediately above selected range.
- *
- * RULES:
- * - upper banner levels are not modified;
- * - labels are local to banner groups;
- * - Total columns are skipped if excluded from comparisons;
- * - global Total column is skipped;
- * - existing trailing marker like "(a)" is replaced;
- * - same trailing marker is not duplicated.
- */
-async function writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
-  context,
-  selectedRange,
-  bannerStructure,
-  calculationSettings,
-  knownDimensions
-) {
-  const BANNER_UPPER_SCAN_LIMIT = 5;
-
-  let selectedStartRowIndex, selectedStartColumnIndex, selectedColumnCount;
-  if (knownDimensions) {
-    selectedStartRowIndex = knownDimensions.rowIndex;
-    selectedStartColumnIndex = knownDimensions.columnIndex;
-    selectedColumnCount = knownDimensions.columnCount;
-  } else {
-    selectedRange.load(["rowIndex", "columnIndex", "columnCount"]);
-    await context.sync();
-    selectedStartRowIndex = selectedRange.rowIndex;
-    selectedStartColumnIndex = selectedRange.columnIndex;
-    selectedColumnCount = selectedRange.columnCount;
-  }
-
-  if (selectedStartRowIndex === 0) {
-    setStatusMessage(
-      "Данные расположены в первой строке. Добавьте строку над выделенным массивом для подстановки букв в баннер."
-    );
-
-    return;
-  }
-
-  const labelMap = buildBannerLocalSignificanceLabelMap(bannerStructure, calculationSettings);
-
-  const bannerRange = selectedRange.worksheet.getRangeByIndexes(
-    selectedStartRowIndex - 1,
-    selectedStartColumnIndex,
-    1,
-    selectedColumnCount
-  );
-
-  bannerRange.load("text");
-
-  await context.sync();
-
-  const currentBannerTexts = bannerRange.text[0] || [];
-  const nextBannerTexts = [];
-
-  for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
-    const currentText = currentBannerTexts[columnIndex] || "";
-    const label = labelMap.get(columnIndex);
-
-    if (!label) {
-      nextBannerTexts.push(removeTrailingBannerMarker(currentText));
-      continue;
-    }
-
-    nextBannerTexts.push(appendOrReplaceTrailingBannerMarker(currentText, label));
-  }
-
-  // When a lower banner cell is blank but carries a label, the visible banner
-  // header lives in a row above (multi-row banner layout). Load upper rows so
-  // we can redirect the marker write to the nearest non-empty cell above.
-  const upperScanRowCount = Math.min(BANNER_UPPER_SCAN_LIMIT, selectedStartRowIndex - 1);
-  const needsUpperScan =
-    upperScanRowCount > 0 &&
-    currentBannerTexts.some((text, i) => (text || "") === "" && labelMap.has(i));
-
-  let upperScanTexts = [];
-
-  if (needsUpperScan) {
-    const upperScanRange = selectedRange.worksheet.getRangeByIndexes(
-      selectedStartRowIndex - 1 - upperScanRowCount,
-      selectedStartColumnIndex,
-      upperScanRowCount,
-      selectedColumnCount
-    );
-
-    upperScanRange.load("text");
-
-    await context.sync();
-
-    // Reverse so index 0 = row immediately above the lower banner row.
-    upperScanTexts = upperScanRange.text.slice().reverse();
-  }
-
-  const cellWriteQueue = [];
-
-  for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
-    const nextText = nextBannerTexts[columnIndex] || "";
-    const currentText = currentBannerTexts[columnIndex] || "";
-
-    if (nextText === "" && currentText === "") {
-      continue;
-    }
-
-    // Lower banner cell is blank but this column has a label: find the nearest
-    // non-empty cell above and write the marker there instead.
-    if (currentText === "" && labelMap.get(columnIndex)) {
-      const label = labelMap.get(columnIndex);
-      let queued = false;
-
-      for (let rowOffset = 0; rowOffset < upperScanTexts.length; rowOffset++) {
-        const upperCellText =
-          (upperScanTexts[rowOffset] && upperScanTexts[rowOffset][columnIndex]) || "";
-
-        if (upperCellText !== "") {
-          cellWriteQueue.push({
-            rowIndex: selectedStartRowIndex - 2 - rowOffset,
-            colIndex: selectedStartColumnIndex + columnIndex,
-            text: appendOrReplaceTrailingBannerMarker(upperCellText, label),
-          });
-          queued = true;
-          break;
-        }
-      }
-
-      if (!queued) {
-        // No non-empty cell found above; fall back to the lower banner row.
-        cellWriteQueue.push({
-          rowIndex: selectedStartRowIndex - 1,
-          colIndex: selectedStartColumnIndex + columnIndex,
-          text: nextText,
-        });
-      }
-
-      continue;
-    }
-
-    // Normal case: lower banner cell is non-empty; write in place.
-    if (nextText === currentText) {
-      continue;
-    }
-
-    cellWriteQueue.push({
-      rowIndex: selectedStartRowIndex - 1,
-      colIndex: selectedStartColumnIndex + columnIndex,
-      text: nextText,
-    });
-  }
-
-  // Batch adjacent same-row writes into range operations to reduce Office.js
-  // command count per sync (N columns → 1-2 range writes per banner row).
-  const writesByRow = new Map();
-  for (const item of cellWriteQueue) {
-    if (!writesByRow.has(item.rowIndex)) writesByRow.set(item.rowIndex, []);
-    writesByRow.get(item.rowIndex).push(item);
-  }
-  for (const [rowIndex, items] of writesByRow) {
-    items.sort((a, b) => a.colIndex - b.colIndex);
-    let i = 0;
-    while (i < items.length) {
-      let j = i;
-      while (j + 1 < items.length && items[j + 1].colIndex === items[j].colIndex + 1) j++;
-      const texts = items.slice(i, j + 1).map(x => x.text);
-      const range = selectedRange.worksheet.getRangeByIndexes(rowIndex, items[i].colIndex, 1, j - i + 1);
-      range.numberFormat = [texts.map(() => "@")];
-      range.values = [texts];
-      i = j + 1;
-    }
-  }
-
-  await context.sync();
 }
 
 /**
