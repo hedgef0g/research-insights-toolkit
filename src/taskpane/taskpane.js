@@ -58,6 +58,8 @@ import { t, setLanguage, loadSavedLanguage, applyI18n } from "./localization";
 
 import { createMarkerOverflowDecider } from "./taskpane-dialogs";
 
+import { refreshActionWarnings } from "./taskpane-action-warnings";
+
 import {
   setStatusMessage,
   setCheckMessage,
@@ -328,7 +330,7 @@ function initLanguageSelector() {
       // re-applies the mode-suffix in the new language.
       setLanguage(btn.dataset.lang);
       updateCheckHints();
-      refreshActionWarnings();
+      refreshActionWarningDisplay();
     });
   });
 }
@@ -349,45 +351,20 @@ function updateCheckHints() {
   });
 }
 
-function collectActionWarningKeys(action) {
-  if (action !== "run" && action !== "autorun") {
-    return [];
-  }
-
-  const labelsOnLeftSide = getCheckboxValue("labels-on-left-side");
-  const addTableFootnoteRequested = getCheckboxValue("add-table-footnote");
-  const recolorRequested = getCheckboxValue("recolor-banner-and-labels");
-  const warningKeys = [];
-
-  if (labelsOnLeftSide && addTableFootnoteRequested) {
-    warningKeys.push("footnote-labels-left");
-  }
-
-  if (labelsOnLeftSide && recolorRequested) {
-    warningKeys.push("recolor-labels-left");
-  } else if (action === "run" && recolorRequested) {
-    warningKeys.push("manual-run-recolor");
-  }
-
-  return warningKeys;
+function getActionWarningSettings() {
+  return {
+    labelsOnLeftSide: getCheckboxValue("labels-on-left-side"),
+    addTableFootnoteRequested: getCheckboxValue("add-table-footnote"),
+    recolorRequested: getCheckboxValue("recolor-banner-and-labels"),
+  };
 }
 
-function refreshActionWarnings() {
-  const warningBlock = document.getElementById("action-settings-warnings");
-  if (!warningBlock) {
-    return;
-  }
-
-  const activeWarnings = new Set(collectActionWarningKeys(_currentAction));
-  let hasWarnings = false;
-
-  warningBlock.querySelectorAll("[data-action-warning]").forEach((line) => {
-    const show = activeWarnings.has(line.dataset.actionWarning);
-    line.style.display = show ? "" : "none";
-    hasWarnings = hasWarnings || show;
+function refreshActionWarningDisplay() {
+  refreshActionWarnings({
+    documentRef: document,
+    action: _currentAction,
+    ...getActionWarningSettings(),
   });
-
-  warningBlock.style.display = hasWarnings ? "" : "none";
 }
 
 function updateActionScopeShell(action, scope) {
@@ -438,7 +415,7 @@ function updateActionScopeShell(action, scope) {
   }
 
   updateCheckHints();
-  refreshActionWarnings();
+  refreshActionWarningDisplay();
 }
 
 function initActionScopeShell() {
@@ -5842,7 +5819,7 @@ function refreshSettingsPanelState() {
   refreshBannerStructureSettingsState();
   refreshTableFootnoteState();
   refreshDesignRecolorState();
-  refreshActionWarnings();
+  refreshActionWarningDisplay();
 }
 
 /**
