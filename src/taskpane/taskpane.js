@@ -10,10 +10,6 @@ import {
   applyComparisonResultsToFullCellResultMatrix,
   applySmallBaseRulesForCalculationBlock,
   keepMarkersOnlyInAllowedRows,
-  compareProportionRowsUsingBaseRow,
-  compareMeanBlockByRowIndexes,
-  compareNpsStructureBlockByRowIndexes,
-  compareNpsSpreadBlockByRowIndexes,
   generateSignificanceLabels,
   buildBannerLocalSignificanceLabelMap,
   isSignificanceMarkerLabel,
@@ -57,7 +53,11 @@ import { createMarkerOverflowDecider } from "./taskpane-dialogs";
 
 import { preflightBatchMarkerOverflow } from "./run-preflight";
 
-import { runSignificanceForRangeInContext as runSignificanceForRangeInContextPipeline } from "./run-pipeline";
+import {
+  calculateBlockResults,
+  getFirstBannerStructureError,
+  runSignificanceForRangeInContext as runSignificanceForRangeInContextPipeline,
+} from "./run-pipeline";
 
 import { refreshActionWarnings } from "./taskpane-action-warnings";
 
@@ -844,9 +844,7 @@ function getRunPipelineDependencies() {
   return {
     applyBannerMarkerUpdatesForRange,
     buildSignificanceFootnoteJob,
-    calculateBlockResults,
     createMarkerOverflowDecider,
-    getFirstBannerStructureError,
   };
 }
 
@@ -2986,60 +2984,6 @@ async function runWorkbookCheck() {
     }
   }
 }
-
-/**
- * Calculates one detected metric block.
- *
- * PURPOSE:
- * Keeps dispatcher logic out of runSignificanceFromSelection().
- * Each block type is routed to the correct core calculation function.
- */
-function calculateBlockResults(cleanedValues, calculationBlock, calculationSettings) {
-  if (calculationBlock.metricType === "proportion") {
-    return compareProportionRowsUsingBaseRow(
-      cleanedValues,
-      calculationBlock.valueRowIndexes,
-      calculationBlock.baseRowIndex,
-      calculationSettings
-    );
-  }
-
-  if (calculationBlock.metricType === "mean") {
-    return compareMeanBlockByRowIndexes(
-      cleanedValues,
-      calculationBlock.valueRowIndex,
-      calculationBlock.spreadRowIndex,
-      calculationBlock.baseRowIndex,
-      calculationBlock.spreadType,
-      calculationSettings
-    );
-  }
-
-  if (calculationBlock.metricType === "npsStructure") {
-    return compareNpsStructureBlockByRowIndexes(
-      cleanedValues,
-      calculationBlock.valueRowIndex,
-      calculationBlock.promotersRowIndex,
-      calculationBlock.detractorsRowIndex,
-      calculationBlock.baseRowIndex,
-      calculationSettings
-    );
-  }
-
-  if (calculationBlock.metricType === "npsSpread") {
-    return compareNpsSpreadBlockByRowIndexes(
-      cleanedValues,
-      calculationBlock.valueRowIndex,
-      calculationBlock.spreadRowIndex,
-      calculationBlock.baseRowIndex,
-      calculationBlock.spreadType,
-      calculationSettings
-    );
-  }
-
-  return null;
-}
-
 
 /**
  * Read-only check pipeline for a named range inside an existing Excel.run context.
@@ -5661,14 +5605,6 @@ function initializeBannerStructureSettings() {
   }
 
   refreshSettingsPanelState();
-}
-
-function getFirstBannerStructureError(bannerStructure) {
-  if (!bannerStructure || !bannerStructure.messages) {
-    return null;
-  }
-
-  return bannerStructure.messages.find((message) => message.severity === "error") || null;
 }
 
 /**

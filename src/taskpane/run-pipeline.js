@@ -4,6 +4,10 @@ import {
   applySmallBaseRulesForCalculationBlock,
   keepMarkersOnlyInAllowedRows,
   detectSignificanceMarkerOverflow,
+  compareProportionRowsUsingBaseRow,
+  compareMeanBlockByRowIndexes,
+  compareNpsStructureBlockByRowIndexes,
+  compareNpsSpreadBlockByRowIndexes,
 } from "../core/significance";
 
 import {
@@ -38,6 +42,67 @@ function resolveBannerRecolorRowCount(interpretation, dataStartRowIndex) {
 }
 
 /**
+ * Calculates one detected metric block.
+ *
+ * PURPOSE:
+ * Keeps dispatcher logic close to the per-table Run executor.
+ * Each block type is routed to the correct core calculation function.
+ */
+export function calculateBlockResults(cleanedValues, calculationBlock, calculationSettings) {
+  if (calculationBlock.metricType === "proportion") {
+    return compareProportionRowsUsingBaseRow(
+      cleanedValues,
+      calculationBlock.valueRowIndexes,
+      calculationBlock.baseRowIndex,
+      calculationSettings
+    );
+  }
+
+  if (calculationBlock.metricType === "mean") {
+    return compareMeanBlockByRowIndexes(
+      cleanedValues,
+      calculationBlock.valueRowIndex,
+      calculationBlock.spreadRowIndex,
+      calculationBlock.baseRowIndex,
+      calculationBlock.spreadType,
+      calculationSettings
+    );
+  }
+
+  if (calculationBlock.metricType === "npsStructure") {
+    return compareNpsStructureBlockByRowIndexes(
+      cleanedValues,
+      calculationBlock.valueRowIndex,
+      calculationBlock.promotersRowIndex,
+      calculationBlock.detractorsRowIndex,
+      calculationBlock.baseRowIndex,
+      calculationSettings
+    );
+  }
+
+  if (calculationBlock.metricType === "npsSpread") {
+    return compareNpsSpreadBlockByRowIndexes(
+      cleanedValues,
+      calculationBlock.valueRowIndex,
+      calculationBlock.spreadRowIndex,
+      calculationBlock.baseRowIndex,
+      calculationBlock.spreadType,
+      calculationSettings
+    );
+  }
+
+  return null;
+}
+
+export function getFirstBannerStructureError(bannerStructure) {
+  if (!bannerStructure || !bannerStructure.messages) {
+    return null;
+  }
+
+  return bannerStructure.messages.find((message) => message.severity === "error") || null;
+}
+
+/**
  * Core significance pipeline for a single named range, using a caller-supplied
  * Office.js RequestContext.
  *
@@ -52,7 +117,6 @@ export async function runSignificanceForRangeInContext(
   markerOverflowDecider = null,
   dependencies = {}
 ) {
-  const calculateBlockResults = requireRunPipelineDependency(dependencies, "calculateBlockResults");
   const applyBannerMarkerUpdatesForRange = requireRunPipelineDependency(
     dependencies,
     "applyBannerMarkerUpdatesForRange"
@@ -60,10 +124,6 @@ export async function runSignificanceForRangeInContext(
   const buildSignificanceFootnoteJob = requireRunPipelineDependency(
     dependencies,
     "buildSignificanceFootnoteJob"
-  );
-  const getFirstBannerStructureError = requireRunPipelineDependency(
-    dependencies,
-    "getFirstBannerStructureError"
   );
   const createMarkerOverflowDecider = requireRunPipelineDependency(
     dependencies,
