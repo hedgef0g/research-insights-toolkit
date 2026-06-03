@@ -67,6 +67,9 @@ This sequence prioritizes low-risk extractions before tackling the complex Run/C
 ### PR 4: Extract Run Pipeline (High Risk)
 **Goal:** Consolidate the calculation loop for manual and autorun flows.
 **Target Files:** `src/taskpane/taskpane.js`, `src/taskpane/run-pipeline.js` (new)
+**Contract:** See `docs/RUN_PIPELINE_CONTRACT.md` before moving Run code. That
+document records the current entry points, write barriers, job objects, report
+row expectations, and `context.sync` boundaries that extraction must preserve.
 **Action:**
 1.  Identify the ~100 lines of shared logic between `runSignificanceFromSelection` and `runSignificanceForRangeInContext`.
 2.  Extract into `runPipeline(context, range, values, text, interpretation, settings, decider)` in `run-pipeline.js`.
