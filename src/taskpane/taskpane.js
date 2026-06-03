@@ -84,7 +84,7 @@ function getClearPipelineOptions() {
   return {
     setStatusMessage,
     runningStatusMessage,
-    nonContiguousSelectionMessage,
+    nonContiguousSelectionMessage: () => nonContiguousSelectionMessage(t),
     t,
     perfLog,
   };
@@ -663,7 +663,7 @@ async function runSignificanceFromSelection() {
       selectedRange.load(["address", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
       await context.sync();
     } catch (_selectionErr) {
-      setStatusMessage(nonContiguousSelectionMessage());
+      setStatusMessage(nonContiguousSelectionMessage(t));
       return;
     }
 
@@ -3629,7 +3629,7 @@ async function runCheckTable() {
       await context.sync();
       guardValues = selectionForGuard.values;
     } catch (_selectionErr) {
-      setCheckMessage(nonContiguousSelectionMessage());
+      setCheckMessage(nonContiguousSelectionMessage(t));
       return;
     }
 
@@ -3658,7 +3658,7 @@ async function runCheckTable() {
     const resolverResult = await resolveCurrentTableFromActiveCell(context, calculationSettings);
 
     if (resolverResult.status !== "ok") {
-      const msg = buildCheckResolverMessage(resolverResult);
+      const msg = buildCheckResolverMessage(resolverResult, t);
       setCheckMessage(msg);
       if (isCheckReportEnabled()) {
         await writeRunReportSheet(context, [{
@@ -3820,7 +3820,7 @@ async function runCheckSelectedRange() {
       rangeAddress =
         exclamationIndex >= 0 ? fullAddress.substring(exclamationIndex + 1) : fullAddress;
     } catch (_selectionErr) {
-      setCheckMessage(nonContiguousSelectionMessage());
+      setCheckMessage(nonContiguousSelectionMessage(t));
       return;
     }
 

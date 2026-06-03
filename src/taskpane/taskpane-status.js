@@ -1,7 +1,5 @@
 /* global document */
 
-import { t } from "./localization";
-
 // Banner message codes that should be surfaced to the user.
 // Moved here with the formatBannerUserMessages* helpers that consume it.
 const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
@@ -47,11 +45,15 @@ export function setInventoryMessage(message) {
   if (result) result.textContent = message || "";
 }
 
+function resolveTranslator(translate) {
+  return typeof translate === "function" ? translate : (key) => key;
+}
+
 // Shown when the user has a non-contiguous (multi-area) selection active.
 // context.workbook.getSelectedRange() throws a RichApi.Error for such selections.
-// Resolved via t() at call sites so the message respects the active UI language.
-export function nonContiguousSelectionMessage() {
-  return t("status.nonContiguousSelection");
+// Resolved via the caller-provided translator so the active UI language is used.
+export function nonContiguousSelectionMessage(translate) {
+  return resolveTranslator(translate)("status.nonContiguousSelection");
 }
 
 export function formatBannerUserMessages(bannerStructure) {
@@ -199,7 +201,8 @@ export function buildBatchProgressStatus({ action, scope, currentIndex, total, s
   ].join("\n");
 }
 
-export function buildCheckResolverMessage(resolverResult) {
+export function buildCheckResolverMessage(resolverResult = {}, translate) {
+  const t = resolveTranslator(translate);
   if (resolverResult.message) return resolverResult.message;
   switch (resolverResult.status) {
     case "no-table":
