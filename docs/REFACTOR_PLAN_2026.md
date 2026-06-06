@@ -5,17 +5,21 @@ Significantly lighten `src/taskpane/taskpane.js` by extracting distinct responsi
 
 ## Current State & Diagnostics
 
-`src/taskpane/taskpane.js` is currently acting as a "God Object," inline-implementing the sequence of core logic calls for Run, Check, and Clear, while also managing UI initialization and performance aggregation.
+`src/taskpane/taskpane.js` is still the main taskpane orchestrator, but parts of
+the original inline responsibilities have been extracted. Run per-table executor
+logic now lives in `src/taskpane/run-pipeline.js`, Clear pipeline logic now lives
+in `src/taskpane/clear-pipeline.js`, and settings/performance helpers have moved
+to their dedicated modules.
 
 ### Key Layering Violations to Address
-1.  **Duplicate Pipelines:** `runSignificanceFromSelection` (manual run) and `runSignificanceForRangeInContext` (auto run) contain duplicated logic for interpreting ranges, checking overflow, detecting metrics, and calculating blocks.
+1.  **Remaining Run Split:** `runSignificanceFromSelection` (manual run) still contains its selected-range calculation flow, while the autorun per-table executor lives in `run-pipeline.js`. Further extraction must stay behavior-preserving and must not change selected-range normalization.
 2.  **Duplicate Normalization:** `clearSignificanceFromSelection` and `clearSignificanceForRangeInContext` duplicate `detectEmbeddedLabelColumns` and `detectLeadingEmptyColumns` logic found in `selected-range-interpreter.js` to resolve the clear target.
 3.  **UI in Orchestrator:** Tooltip mapping, checkbox bindings, and performance aggregators reside in `taskpane.js` instead of their respective modules (`taskpane-settings.js` and `taskpane-performance.js`).
 
 ## Proposed Architecture (Taskpane Layer)
 
 -   `src/taskpane/taskpane.js`: Lean UI controller. Wires events (`Office.onReady`), binds button clicks, and orchestrates high-level flows by calling pipelines.
--   `src/taskpane/run-pipeline.js`: Shared executor for manual and auto Run flows. Handles interpretation, significance calculations, and formatting.
+-   `src/taskpane/run-pipeline.js`: Shared per-table Run executor for autorun flows, plus dispatcher helpers used by the manual Run path. Handles interpretation, significance calculations, and formatting for extracted table execution.
 -   `src/taskpane/clear-pipeline.js`: Shared executor for manual and auto Clear flows.
 -   `src/taskpane/batch-controller.js`: Manages workbook/worksheet loops and batch result accumulation.
 -   `src/taskpane/report-controller.js`: Manages the creation and population of `Content` and `Run report` sheets.
@@ -64,16 +68,16 @@ This sequence prioritizes low-risk extractions before tackling the complex Run/C
 1.  Extract `clearSignificanceForRangeInContext` and the core clearing loop from `clearSignificanceFromSelection` into `src/taskpane/clear-pipeline.js`.
 2.  Update `taskpane.js` to call the pipeline.
 
-### PR 4: Extract Run Pipeline (High Risk)
+### PR 4: Extract Run Pipeline (High Risk, partially completed by PR #328/#329)
 **Goal:** Consolidate the calculation loop for manual and autorun flows.
 **Target Files:** `src/taskpane/taskpane.js`, `src/taskpane/run-pipeline.js` (new)
 **Contract:** See `docs/RUN_PIPELINE_CONTRACT.md` before moving Run code. That
 document records the current entry points, write barriers, job objects, report
 row expectations, and `context.sync` boundaries that extraction must preserve.
 **Action:**
-1.  Identify the ~100 lines of shared logic between `runSignificanceFromSelection` and `runSignificanceForRangeInContext`.
-2.  Extract into `runPipeline(context, range, values, text, interpretation, settings, decider)` in `run-pipeline.js`.
-3.  Update `taskpane.js` orchestrators to call this pipeline.
+1.  PR #328 extracted the shared per-table executor to `run-pipeline.js`.
+2.  PR #329 moved `calculateBlockResults` and `getFirstBannerStructureError` to `run-pipeline.js`.
+3.  Remaining Run cleanup should be small, audited, and behavior-preserving before any further helper extraction.
 **Critical Guardrails:** The `markerOverflowDecider` logic must remain capable of pausing Excel execution via UI dialog without breaking batch promises. Do not change `context.sync` placement.
 **Testing:** Exhaustive manual smoke testing of Run and Autorun. Run all existing unit tests.
 

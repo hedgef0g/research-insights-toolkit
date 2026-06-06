@@ -840,14 +840,6 @@ async function runSignificanceFromSelection() {
 }
 
 
-function getRunPipelineDependencies() {
-  return {
-    applyBannerMarkerUpdatesForRange,
-    buildSignificanceFootnoteJob,
-    createMarkerOverflowDecider,
-  };
-}
-
 async function runSignificanceForRangeInContext(
   context,
   sheetName,
@@ -861,17 +853,21 @@ async function runSignificanceForRangeInContext(
     rangeAddress,
     calculationSettings,
     markerOverflowDecider,
-    getRunPipelineDependencies()
+    {
+      applyBannerMarkerUpdatesForRange,
+      buildSignificanceFootnoteJob,
+      createMarkerOverflowDecider,
+    }
   );
 }
 
 /**
  * Runs the full significance pipeline for a single named range on a named sheet.
  *
- * Thin wrapper around runSignificanceForRangeInContext that provides its own
- * Excel.run context. Used by current-table autorun and as a per-table fallback
- * when the shared-context batch in sheet/workbook autorun encounters an
- * Office.js error that corrupts the shared context.
+ * Thin wrapper around the extracted per-table Run executor that provides its
+ * own Excel.run context. Used by current-table autorun and as a per-table
+ * fallback when the shared-context batch in sheet/workbook autorun encounters
+ * an Office.js error that corrupts the shared context.
  *
  * Returns { status, blocksProcessed, message, rangeAddress }.
  * status: "processed" | "skipped" | "blocked" | "error"

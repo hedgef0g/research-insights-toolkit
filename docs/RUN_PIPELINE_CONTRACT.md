@@ -1,12 +1,14 @@
 # Run Pipeline Contract
 
 This document records the current Run behavior that must be preserved before
-extracting a shared Run pipeline from `src/taskpane/taskpane.js`.
+and after extracting shared Run pipeline code from `src/taskpane/taskpane.js`.
 
-PR5B is a contract and regression-coverage step only. It does not move
-`runSignificanceFromSelection`, `runSignificanceForRangeInContext`, the batch Run
-handlers, Excel writer calls, report writing, footnote writes, banner marker
-writes, design recolor execution, or `context.sync` boundaries.
+PR #327 documented the contract, PR #328 extracted the shared per-table Run
+executor to `src/taskpane/run-pipeline.js`, and PR #329 moved the Run dispatcher
+helpers there. The contract remains behavior-preservation first: batch Run
+handlers, report writing, footnote writes, banner marker writes, design recolor
+execution, and `context.sync` boundaries should not move unless a later task
+explicitly scopes that work.
 
 ## Current Entry Points
 
@@ -60,14 +62,14 @@ report output.
 ### Table pipeline
 
 `runSignificanceForRangeInContext` is the current reusable table executor for
-batch flows. It must remain callable inside an existing `Excel.run` context. It
-loads the source range, interprets the selected/table range, detects banners and
-calculation blocks, performs per-table marker-overflow preflight as a safety net,
-queues body and banner writes, and returns pure job objects for deferred design
-recolor and footnotes.
+batch flows and lives in `src/taskpane/run-pipeline.js`. It must remain callable
+inside an existing `Excel.run` context. It loads the source range, interprets the
+selected/table range, detects banners and calculation blocks, performs per-table
+marker-overflow preflight as a safety net, queues body and banner writes, and
+returns pure job objects for deferred design recolor and footnotes.
 
 `runSignificanceForRange` is only a wrapper that provides its own `Excel.run`
-context around `runSignificanceForRangeInContext`.
+context around the extracted per-table executor.
 
 ## Boundary Contracts
 
@@ -284,9 +286,8 @@ Existing pure coverage already protects these Run-adjacent contracts:
 - design recolor label-width and rectangle job helpers;
 - banner local significance label maps.
 
-PR5B strengthens `preflightBatchMarkerOverflow` coverage for mixed candidate
-widths and missing inventory metadata without requiring Office.js stubs or
-production extraction.
+PR #327 strengthened `preflightBatchMarkerOverflow` coverage for mixed candidate
+widths and missing inventory metadata without requiring Office.js stubs.
 
 ## Missing Test Coverage
 
@@ -302,13 +303,14 @@ require moving production Run code or building brittle Office.js doubles:
   writer, and footnote insertion side effects;
 - exact `context.sync` ordering under real Excel.
 
-## Future Extraction Plan
+## Current Extraction Status
 
-Recommended next implementation PR: extract only the shared per-table Run
-executor behind the object shapes above, leaving batch loops and generated sheet
-writers in `taskpane.js`. The PR should preserve all existing entry points and
-return `RunPipelineResult` objects that current callers can adapt to their
-existing status/report/job behavior.
+PR #328 extracted the shared per-table Run executor behind the object shapes
+above, leaving batch loops and generated sheet writers in `taskpane.js`. PR #329
+moved `calculateBlockResults` and `getFirstBannerStructureError` into
+`src/taskpane/run-pipeline.js`. Later extraction should preserve all existing
+entry points and current status/report/job behavior unless explicitly scoped
+otherwise.
 
 Future manual smoke coverage for Run extraction must include:
 
