@@ -29,10 +29,7 @@ import { buildTablePreviewModel } from "../core/table-preview-model";
 import { scanWorksheetForTables } from "../core/table-inventory-scanner";
 
 import {
-  collectStatisticTypeLabels,
-  buildSignificanceFootnoteCellValue,
   buildProcessedRangeFootnoteSuffix,
-  resolveFootnoteSpan,
   resolveFootnotePlacement,
   FOOTNOTE_SCAN_WINDOW_ROWS,
 } from "../core/significance-footnote";
@@ -58,6 +55,8 @@ import {
   getFirstBannerStructureError,
   runSignificanceForRangeInContext as runSignificanceForRangeInContextPipeline,
 } from "./run-pipeline";
+
+import { buildSignificanceFootnoteJob } from "./run-footnotes";
 
 import { refreshActionWarnings } from "./taskpane-action-warnings";
 
@@ -855,7 +854,6 @@ async function runSignificanceForRangeInContext(
     markerOverflowDecider,
     {
       applyBannerMarkerUpdatesForRange,
-      buildSignificanceFootnoteJob,
       createMarkerOverflowDecider,
     }
   );
@@ -4031,77 +4029,6 @@ async function ensureBacklinkRows(context, sheetResults, contentRowMap) {
 // from the already-known ranges) and applies them AFTER all calculations finish,
 // bottom-to-top per worksheet so earlier insertions never shift a not-yet-applied
 // job's row index.
-
-/**
- * Builds a footnote job for a single processed table, or null when the footnote
- * setting is off / geometry is unusable.
- *
- * Geometry is sheet-absolute and 0-based:
- *   - dataStartRowIndex / dataStartColIndex: top-left of the data body.
- *   - dataRowCount / dataColCount: data body dimensions.
- *   - leftLabelValues: label columns immediately left of the data body. Their
- *     width sets how far left the merged footnote extends (the "full table width
- *     including label columns").
- *
- * Returns null when the footnote setting is off. The feature is explicitly
- * incompatible with "labels on left side" mode (labels are not adjacent to the
- * data, so a footnote cannot span the table correctly): readCalculationSettings-
- * FromPanel already forces addTableFootnote=false in that mode, and this extra
- * guard makes the rule independent of the caller.
- *
- * processedScopeSuffix (issue #308) is an optional, already-formatted detail
- * (e.g. " Обработано: B12:F34.") appended to the visible footnote text. It is
- * supplied only by Manual Run; auto-run callers omit it so their footnote text
- * is unchanged.
- */
-function buildSignificanceFootnoteJob({
-  sheetName,
-  dataStartRowIndex,
-  dataStartColIndex,
-  dataRowCount,
-  dataColCount,
-  leftLabelValues,
-  adjacentLabelColumnCount,
-  calculationBlocks,
-  calculationSettings,
-  processedScopeSuffix,
-}) {
-  if (!calculationSettings.addTableFootnote) return null;
-  if (calculationSettings.labelsOnLeftSide) return null;
-  if (!Number.isFinite(dataStartRowIndex) || !Number.isFinite(dataStartColIndex)) return null;
-  if (!(dataRowCount > 0) || !(dataColCount > 0)) return null;
-
-  // Visual table left edge: the wider of the loaded label width and the
-  // interpreter's adjacent label-area width, so a stripped structural gap column
-  // between labels and data (normalized autorun) is still spanned. See
-  // resolveFootnoteSpan.
-  const labelColumns =
-    Array.isArray(leftLabelValues) && Array.isArray(leftLabelValues[0]) ? leftLabelValues[0].length : 0;
-
-  const { tableLeftColIndex, tableRightColIndex } = resolveFootnoteSpan({
-    dataStartColIndex,
-    dataColCount,
-    labelColumns,
-    adjacentLabelColumnCount,
-  });
-  const tableBottomRowIndex = dataStartRowIndex + dataRowCount - 1;
-
-  const footnoteCellValue = buildSignificanceFootnoteCellValue({
-    confidenceLevel: calculationSettings.confidenceLevel,
-    oneTailedTest: calculationSettings.oneTailedTest,
-    statisticLabels: collectStatisticTypeLabels(calculationBlocks),
-    scopeDetail: processedScopeSuffix,
-  });
-
-  return {
-    sheetName,
-    tableBottomRowIndex,
-    tableLeftColIndex,
-    tableRightColIndex,
-    dataStartColIndex,
-    footnoteCellValue,
-  };
-}
 
 /**
  * Inserts or updates a single footnote row for one table.
