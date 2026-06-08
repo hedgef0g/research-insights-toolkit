@@ -28,6 +28,8 @@ import { perfNow, perfEnabled } from "./taskpane-performance";
 
 import { buildSignificanceFootnoteJob } from "./run-footnotes";
 
+import { createMarkerOverflowDecider } from "./taskpane-dialogs";
+
 function requireRunPipelineDependency(dependencies, name) {
   const dependency = dependencies[name];
   if (typeof dependency !== "function") {
@@ -122,10 +124,6 @@ export async function runSignificanceForRangeInContext(
   const applyBannerMarkerUpdatesForRange = requireRunPipelineDependency(
     dependencies,
     "applyBannerMarkerUpdatesForRange"
-  );
-  const createMarkerOverflowDecider = requireRunPipelineDependency(
-    dependencies,
-    "createMarkerOverflowDecider"
   );
 
   const _p0 = perfNow();
