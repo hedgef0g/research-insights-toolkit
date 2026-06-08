@@ -30,13 +30,7 @@ import { buildSignificanceFootnoteJob } from "./run-footnotes";
 
 import { createMarkerOverflowDecider } from "./taskpane-dialogs";
 
-function requireRunPipelineDependency(dependencies, name) {
-  const dependency = dependencies[name];
-  if (typeof dependency !== "function") {
-    throw new Error(`run-pipeline dependency missing: ${name}`);
-  }
-  return dependency;
-}
+import { applyBannerMarkerUpdatesForRange } from "./run-banner-markers";
 
 function resolveBannerRecolorRowCount(interpretation, dataStartRowIndex) {
   const interpreted = interpretation.bannerRowsAboveData || 0;
@@ -118,14 +112,8 @@ export async function runSignificanceForRangeInContext(
   sheetName,
   rangeAddress,
   calculationSettings,
-  markerOverflowDecider = null,
-  dependencies = {}
+  markerOverflowDecider = null
 ) {
-  const applyBannerMarkerUpdatesForRange = requireRunPipelineDependency(
-    dependencies,
-    "applyBannerMarkerUpdatesForRange"
-  );
-
   const _p0 = perfNow();
   const worksheet = context.workbook.worksheets.getItem(sheetName);
   const sourceRange = worksheet.getRange(rangeAddress);
