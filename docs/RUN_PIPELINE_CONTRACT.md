@@ -4,11 +4,31 @@ This document records the current Run behavior that must be preserved before
 and after extracting shared Run pipeline code from `src/taskpane/taskpane.js`.
 
 PR #327 documented the contract, PR #328 extracted the shared per-table Run
-executor to `src/taskpane/run-pipeline.js`, and PR #329 moved the Run dispatcher
-helpers there. The contract remains behavior-preservation first: batch Run
-handlers, report writing, footnote writes, banner marker writes, design recolor
-execution, and `context.sync` boundaries should not move unless a later task
-explicitly scopes that work.
+executor to `src/taskpane/run-pipeline.js`, PR #329 moved Run dispatcher helpers,
+PR #331/#332 moved footnote job/application helpers, and PR #333 moved Run
+banner marker writing. The contract remains behavior-preservation first: batch
+Run handlers, report writing, design recolor execution, and `context.sync`
+boundaries should not move unless a later task explicitly scopes that work.
+
+For the broader post-refactor taskpane map, see
+`docs/TASKPANE_MODULE_MAP.md`.
+
+## Current Module Ownership
+
+- `src/taskpane/taskpane.js`: high-level UI and Office.js orchestration. It owns
+  Run entry points, selected-range reads, batch/report coordination, generated
+  sheet writes, status timing, and workflow-level error handling.
+- `src/taskpane/run-pipeline.js`: shared per-table Run executor and Run
+  calculation helpers. It does not own taskpane startup, button wiring, or
+  generated report sheet decisions.
+- `src/taskpane/run-preflight.js`: manual and batch marker-overflow preflight
+  helpers used as write barriers before table writes.
+- `src/taskpane/run-banner-markers.js`: Run banner marker writer, separate from
+  data-cell marker writes.
+- `src/taskpane/run-footnotes.js`: footnote job construction and application
+  helpers used after data body writes.
+- `src/taskpane/taskpane-dialogs.js`: marker-overflow dialog and shared decider
+  helpers.
 
 ## Current Entry Points
 
@@ -65,8 +85,9 @@ report output.
 batch flows and lives in `src/taskpane/run-pipeline.js`. It must remain callable
 inside an existing `Excel.run` context. It loads the source range, interprets the
 selected/table range, detects banners and calculation blocks, performs per-table
-marker-overflow preflight as a safety net, queues body and banner writes, and
-returns pure job objects for deferred design recolor and footnotes.
+marker-overflow preflight as a safety net, queues body writes, delegates banner
+marker updates to `src/taskpane/run-banner-markers.js`, and returns pure job
+objects for deferred design recolor and footnotes.
 
 `runSignificanceForRange` is only a wrapper that provides its own `Excel.run`
 context around the extracted per-table executor.
@@ -97,6 +118,8 @@ Marker-overflow preflight is a write barrier.
 - Continue mutates only the operation settings object by setting
   `allowMultiCharacterMarkers = true`.
 - Previous-column mode must not prompt because it does not use letter labels.
+- Preflight helpers live in `src/taskpane/run-preflight.js`; dialog/decision
+  helpers live in `src/taskpane/taskpane-dialogs.js`.
 
 ### Calculation block detection
 
@@ -115,20 +138,22 @@ all preflight/blocking decisions for that table.
 
 ### Banner marker updates
 
-Banner marker writing is separate from data-cell marker writing. Run computes or
-uses a banner label map, clears stale banner markers for the relevant header
-area, and queues replacement banner markers. Extraction must preserve the
-current banner-aware mode gates, label-map behavior, and final flush timing.
+Banner marker writing is separate from data-cell marker writing and lives in
+`src/taskpane/run-banner-markers.js`. Run computes or uses a banner label map,
+clears stale banner markers for the relevant header area, and queues replacement
+banner markers. Extraction must preserve the current banner-aware mode gates,
+label-map behavior, and final flush timing.
 
 ### Footnote placement/update
 
-Run builds `FootnoteJob` objects from pure geometry and text. It must not insert
-footnote rows while there are pending table writes in the same sheet/workbook
-batch because row insertion can shift later candidate ranges. Batch flows collect
-jobs and apply them bottom-to-top per sheet after all calculations complete.
-Current-table Run applies its single footnote job after the table pipeline
-returns. Manual Run appends the processed local range suffix; auto-run callers do
-not.
+Run footnote job construction and application live in
+`src/taskpane/run-footnotes.js`. Run builds `FootnoteJob` objects from pure
+geometry and text. It must not insert footnote rows while there are pending table
+writes in the same sheet/workbook batch because row insertion can shift later
+candidate ranges. Batch flows collect jobs and apply them bottom-to-top per sheet
+after all calculations complete. Current-table Run applies its single footnote
+job after the table pipeline returns. Manual Run appends the processed local
+range suffix; auto-run callers do not.
 
 ### Design recolor jobs
 
@@ -172,10 +197,11 @@ The current Run flow depends on explicit Office.js flush points:
 Future extraction must treat sync placement as part of the behavior contract, not
 an implementation detail to optimize casually.
 
-## Future Object Shapes
+## Pipeline Object Shapes
 
-The future extraction should use JSDoc/object-shape contracts in plain
-JavaScript. These names are proposed contracts, not current exported types.
+Run pipeline extraction uses plain JavaScript objects rather than exported
+classes. These JSDoc-style names describe the contract shape future extraction
+work should preserve.
 
 ```js
 /**
@@ -305,12 +331,18 @@ require moving production Run code or building brittle Office.js doubles:
 
 ## Current Extraction Status
 
-PR #328 extracted the shared per-table Run executor behind the object shapes
-above, leaving batch loops and generated sheet writers in `taskpane.js`. PR #329
-moved `calculateBlockResults` and `getFirstBannerStructureError` into
-`src/taskpane/run-pipeline.js`. Later extraction should preserve all existing
-entry points and current status/report/job behavior unless explicitly scoped
-otherwise.
+The Run extraction wave is complete enough that future work should treat these
+module boundaries as current architecture. The shared per-table executor and Run
+calculation helpers live in `src/taskpane/run-pipeline.js`; preflight lives in
+`src/taskpane/run-preflight.js`; banner marker writing lives in
+`src/taskpane/run-banner-markers.js`; footnote helpers live in
+`src/taskpane/run-footnotes.js`; marker-overflow dialog helpers live in
+`src/taskpane/taskpane-dialogs.js`.
+
+Batch loops, generated report sheet writing, and high-level UI/status
+orchestration still live in `src/taskpane/taskpane.js`. Later extraction should
+preserve all existing entry points and current status/report/job behavior unless
+explicitly scoped otherwise.
 
 Future manual smoke coverage for Run extraction must include:
 
