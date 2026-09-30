@@ -2,6 +2,13 @@
 
 Рабочий roadmap проекта. Это не публичное обещание сроков, а список направлений развития от текущего MVP к более стабильному продукту.
 
+Продукт платформонезависимый: текущий host — Excel, Google Sheets запланирован. Ближайшая цель — пилот; платная версия исключена, срок не установлен. Облачное хранение настроек с шифрованием и синхронизацией по e-mail относится к ближайшим продуктовым задачам; в этом release его реализация не входит.
+
+## Pilot distribution
+- [x] Подготовить страницу установки Excel и Windows helper.
+- [x] Подготовить страницу поддержки с тикет-формой и disclosure об обработке Web3Forms.
+- [ ] После публикации подтвердить browser-side отправку тикета и доступность страниц на GitHub Pages.
+
 ## Completed/stabilized
 - [x] read-only table preview model exists as a core model but is not yet wired into UI
 - [x] shared text normalization utilities exist

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#102a43" />
+    <title>Установка ResearchSignal Table</title>
+    <style>
+      :root { color-scheme: light; font-family: "Segoe UI", Arial, sans-serif; color: #172b4d; background: #f3f6fa; }
+      body { margin: 0; }
+      main { max-width: 760px; margin: 48px auto; padding: 0 20px; }
+      .card { background: white; border: 1px solid #d9e2ec; border-radius: 16px; padding: 32px; box-shadow: 0 10px 30px #102a4310; }
+      h1 { margin: 0 0 12px; font-size: clamp(28px, 5vw, 40px); }
+      h2 { margin: 28px 0 10px; font-size: 20px; }
+      p, li { line-height: 1.6; }
+      .button { display: inline-block; margin: 10px 0 4px; padding: 13px 20px; border-radius: 8px; color: white; background: #1264a3; text-decoration: none; font-weight: 650; }
+      .button:hover { background: #0b4f84; }
+      .muted { color: #52667a; }
+      .note { padding: 12px 16px; border-left: 4px solid #1264a3; background: #f0f7fc; }
+      footer { margin: 18px 4px; color: #627d98; font-size: 14px; }
+      a { color: #1264a3; }
+      @media (max-width: 540px) { main { margin: 20px auto; } .card { padding: 22px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <article class="card">
+        <h1>ResearchSignal Table для Excel</h1>
+        <p class="muted">Добавьте надстройку в Excel один раз. После этого вкладка ResearchSignal будет доступна в Excel под вашей учётной записью.</p>
+
+        <h2>1. Скачайте установочный файл</h2>
+        <p>Для настольного Excel на Windows установщик скачает и проверит манифест, скопирует путь к нему и откроет Excel. В Excel останется выбрать «Загрузить мою надстройку» и подтвердить файл.</p>
+        <a class="button" href="install-windows.cmd" download="Install-ResearchSignal-Table.cmd">Скачать установщик для Windows</a>
+        <p class="muted">Скачайте также <a href="install-windows.ps1" download>вторую часть установщика</a> в ту же папку, затем дважды щёлкните CMD-файл. Окно останется открытым; журнал появится на рабочем столе. Установщик не меняет настройки безопасности Windows или Office.</p>
+        <details>
+          <summary>Excel в браузере или установка вручную</summary>
+          <p><a href="manifest.xml" download="ResearchSignal-Table.xml">Скачать манифест вручную</a>, затем в Excel выберите <strong>Главная → Надстройки → Дополнительные надстройки → Мои надстройки → Загрузить мою надстройку</strong> и укажите скачанный XML.</p>
+        </details>
+
+        <h2>2. Завершите добавление в Excel</h2>
+        <ol>
+          <li>Откройте Excel и любую книгу.</li>
+          <li>Выберите <strong>Главная → Надстройки → Дополнительные надстройки</strong>. В некоторых версиях этот пункт находится в меню <strong>Вставка → Надстройки</strong>.</li>
+          <li>Откройте <strong>Мои надстройки</strong> или <strong>Дополнительно</strong>, затем нажмите <strong>Загрузить мою надстройку</strong>.</li>
+          <li>Выберите скачанный <strong>ResearchSignal-Table.xml</strong> и подтвердите загрузку.</li>
+        </ol>
+        <p>После установки откройте вкладку <strong>ResearchSignal</strong> на ленте и нажмите <strong>Open Table</strong>.</p>
+
+        <p class="note"><strong>Если пункта «Загрузить мою надстройку» нет:</strong> ваша организация могла отключить самостоятельную установку. Попросите администратора Microsoft 365 добавить надстройку из этого <a href="manifest.xml">манифеста</a> через раздел «Интегрированные приложения» в центре администрирования.</p>
+
+        <h2>Как удалить</h2>
+        <p>В Excel откройте <strong>Надстройки → Мои надстройки</strong>, найдите ResearchSignal Table и выберите меню надстройки, чтобы удалить её.</p>
+      </article>
+      <footer>ResearchSignal Table · Пилотная версия · <a href="privacy.html">Privacy Policy</a> · <a href="terms.html">Terms of Use</a> · <a href="support.html">Support</a> · <a href="https://github.com/hedgef0g/research-insights-toolkit">Проект на GitHub</a></footer>
+    </main>
+  </body>
+</html>

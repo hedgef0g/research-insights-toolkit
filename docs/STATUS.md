@@ -2,7 +2,14 @@
 
 ## Current status
 
-Research Insights Toolkit MVP functionality is implemented for the Excel-first workflow.
+Research Insights Toolkit is a platform-independent product. Excel is the first host implementation; Google Sheets is planned as another host. The current release branch contains the Excel MVP. The immediate product target is a pilot; a paid edition is out of scope and no delivery date is set.
+
+## Pilot install and support pages
+
+- The GitHub Pages build publishes the Excel install page at `/`, paired Windows installer files, and Marketplace preparation pages at `/privacy.html`, `/terms.html`, and `/support.html`.
+- The Windows helper downloads/checks the manifest and opens Excel; it still requires the user to upload the manifest in Excel. It is not a silent installer.
+- The support page submits tickets through Web3Forms. GitHub Actions uses the `WEB3FORMS_ACCESS_KEY` repository secret; the support inbox address is not embedded in public pages. Verify a browser submission after this release deploys before treating delivery as confirmed.
+- Support and privacy pages disclose that form contents go to Web3Forms. Workbook contents are not requested by the support form.
 
 The add-in currently supports:
 
