@@ -2,6 +2,11 @@
 
 Рабочий roadmap проекта. Это не публичное обещание сроков, а список направлений развития от текущего MVP к более стабильному продукту.
 
+## Pilot distribution
+- [x] Подготовить страницу установки Excel и Windows helper.
+- [x] Подготовить страницу поддержки с тикет-формой и disclosure об обработке Web3Forms.
+- [ ] После публикации подтвердить browser-side отправку тикета и доступность страниц на GitHub Pages.
+
 ## Phase 1 — Manual workflow stabilization (Completed)
 
 The manual selected-range workflow is stable. Run and Clear both go through

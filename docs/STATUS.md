@@ -7,6 +7,15 @@ For structural coverage (supported / partial / unsupported table shapes), see
 [TABLE_STRUCTURE_MATRIX.md](TABLE_STRUCTURE_MATRIX.md).
 For the manual smoke validation checklist, see [TEST_CASES.md](TEST_CASES.md).
 
+## Pilot install and support pages
+
+These pages were first published from the `release` branch (commit 3609c6c) and are carried in `main` so that the next `release` update keeps them.
+
+- The GitHub Pages build publishes the Excel install page at `/`, paired Windows installer files, and Marketplace preparation pages at `/privacy.html`, `/terms.html`, and `/support.html`.
+- The Windows helper downloads/checks the manifest and opens Excel; it still requires the user to upload the manifest in Excel. It is not a silent installer.
+- The support page submits tickets through Web3Forms. GitHub Actions uses the `WEB3FORMS_ACCESS_KEY` repository secret; the support inbox address is not embedded in public pages. A browser-side ticket submission from the deployed page has not been recorded as verified.
+- Support and privacy pages disclose that form contents go to Web3Forms. Workbook contents are not requested by the support form.
+
 ## Current phase
 
 Phase 1 — manual workflow stabilization — is complete. The manual

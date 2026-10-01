@@ -20,7 +20,9 @@ Agents must not decide that a task is complete without human review.
 
 ## Product context
 
-Research Insights Toolkit is an Excel-first Office Add-in for statistical significance in research tables.
+Research Insights Toolkit is a platform-independent product for statistical significance in research tables. Excel is the first host implementation; Google Sheets is planned as another host. The immediate target is a pilot release, a paid edition is out of scope, and no delivery date is set. Encrypted cloud settings synchronization by email is a near-term requirement, but it is not implemented yet.
+
+The GitHub Pages install/support surface is part of pilot readiness. The support form uses owner-approved Web3Forms; the inbox address must never appear in public HTML. The Pages workflow supplies `WEB3FORMS_ACCESS_KEY` from GitHub Actions secrets. Support/privacy copy must disclose third-party processing. Confirm a real browser-side submission before reporting ticket delivery as verified; the provider rejects server-side test submissions.
 
 The current stable workflow is manual selected-range:
 
