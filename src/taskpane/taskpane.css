@@ -117,9 +117,75 @@ b {
   line-height: 1.25;
 }
 
+.taskpane-brand-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lang-selector-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.lang-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 22px;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: var(--rs-radius-sm);
+  background: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+  opacity: 0.78;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(17, 24, 39, 0.06);
+  transition:
+    opacity 0.15s ease,
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+
+.lang-btn .lang-flag {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+  filter: saturate(1);
+}
+
+.lang-btn:hover {
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+.lang-btn.is-active {
+  border-color: rgba(22, 163, 74, 0.55);
+  opacity: 1;
+  background: var(--rs-color-bg);
+  box-shadow:
+    inset 0 0 0 1px rgba(22, 163, 74, 0.18),
+    0 0 0 2px rgba(34, 197, 94, 0.18);
+}
+
+.lang-btn:focus-visible {
+  outline: 2px solid rgba(22, 163, 74, 0.45);
+  outline-offset: 2px;
+}
+
 .settings-panel {
   width: 100%;
   box-sizing: border-box;
+  margin-top: 12px;
   margin-bottom: 0;
   padding: 10px 12px;
   border: 1px solid var(--rs-color-border);
@@ -215,13 +281,43 @@ b {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 0;
+  padding: 4px 0;
   border: none;
   background: transparent;
   color: var(--rs-color-text);
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
+  border-radius: var(--rs-radius-sm);
+}
+
+.settings-toggle:hover {
+  color: var(--rs-color-primary-dark);
+}
+
+.settings-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.45);
+}
+
+.settings-toggle-chevron {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  transition: transform 0.18s ease;
+  opacity: 0.7;
+}
+
+.settings-toggle[aria-expanded="false"] .settings-toggle-chevron {
+  transform: rotate(180deg);
+}
+
+.settings-panel-body {
+  margin-top: 6px;
+}
+
+.settings-panel-body.is-collapsed {
+  display: none;
 }
 
 .settings-content {
@@ -244,6 +340,10 @@ b {
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .primary-action-button:hover {
@@ -256,12 +356,31 @@ b {
   border-color: #14532d;
 }
 
+.primary-action-button:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px #fff,
+    0 0 0 4px rgba(22, 163, 74, 0.5);
+}
+
 .settings-warning {
   margin: 4px 0 8px 22px;
   color: #c00000;
   font-size: 12px;
   line-height: 1.3;
   font-weight: 600;
+}
+
+.action-warning-block {
+  margin: 6px 0 8px 0;
+  color: #c00000;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.action-warning-line + .action-warning-line {
+  margin-top: 3px;
 }
 
 .status-panel {
@@ -274,17 +393,40 @@ b {
   background: var(--rs-color-bg-soft);
 }
 
-.status-panel h4 {
-  margin: 0 0 8px 0;
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
 }
 
-#significance-result {
+.panel-header h4 {
+  margin: 0;
+}
+
+.panel-dismiss {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: none;
+  background: transparent;
+  color: var(--rs-color-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.panel-dismiss:hover {
+  color: var(--rs-color-text);
+}
+
+.status-panel pre {
   width: 100%;
   box-sizing: border-box;
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+  overflow-x: hidden;
   max-height: 180px;
   overflow-y: auto;
   font-family: inherit;
@@ -308,6 +450,10 @@ b {
 .primary-action-button {
   flex: 0 0 auto;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   padding: 10px 18px;
   border: 1px solid var(--rs-color-primary);
   border-radius: var(--rs-radius-md);
@@ -316,6 +462,10 @@ b {
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .primary-action-button:hover {
@@ -329,19 +479,31 @@ b {
 }
 
 .secondary-action-button {
-  flex: 0 1 140px;
+  flex: 0 1 160px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
   padding: 6px 8px;
   border: none;
+  border-radius: var(--rs-radius-sm);
   background: transparent;
   color: var(--rs-color-muted);
   font-size: 12px;
   font-weight: 600;
-  text-decoration: underline;
   cursor: pointer;
   word-break: normal;
   overflow-wrap: normal;
-  max-width: 140px;
+  max-width: 160px;
   line-height: 1.2;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.secondary-action-button > span {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .secondary-action-button:hover {
@@ -351,6 +513,13 @@ b {
 
 .secondary-action-button:active {
   color: #000;
+}
+
+.secondary-action-button:focus-visible {
+  outline: none;
+  background: var(--rs-color-bg-tint);
+  color: var(--rs-color-text);
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.35);
 }
 
 .action-panel {
@@ -466,4 +635,433 @@ b {
 
 .confidence-settings-row .inline-checkbox-label span {
   white-space: normal;
+}
+
+.check-buttons-row {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 0 0;
+}
+
+.check-action-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--rs-color-primary);
+  border-radius: var(--rs-radius-sm);
+  background: #fff;
+  color: var(--rs-color-primary-dark);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.check-action-button:hover {
+  background: var(--rs-color-bg-tint);
+}
+
+.check-action-button:active {
+  background: #dcfce7;
+}
+
+.check-action-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.35);
+}
+
+.inventory-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--rs-color-muted);
+}
+
+.inventory-mode-select {
+  flex: 1;
+  padding: 3px 6px;
+  border: 1px solid var(--rs-color-border);
+  border-radius: var(--rs-radius-sm);
+  font-size: 12px;
+  background: var(--rs-color-bg);
+  color: var(--rs-color-text);
+}
+
+.check-panel {
+  margin-top: 8px;
+  border-color: #bbf7d0;
+  background: var(--rs-color-bg-tint);
+}
+
+.inventory-backlink-row {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--rs-color-muted);
+}
+
+/* ── Action + Scope shell (PR1 / issue #167) ─────────────────────────────── */
+
+.action-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 3px;
+  background: var(--rs-color-bg-soft);
+  border: 1px solid var(--rs-color-border);
+  border-radius: var(--rs-radius-sm);
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.action-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 5px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--rs-color-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+.action-tab:hover {
+  background: var(--rs-color-border);
+  color: var(--rs-color-text);
+}
+
+.action-tab.is-active {
+  background: var(--rs-color-primary);
+  color: #fff;
+}
+
+/* Check tab gets a blue active state to signal read-only */
+.action-tab--readonly.is-active {
+  background: #2563eb;
+  color: #fff;
+}
+
+.scope-selector {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+
+.scope-btn {
+  flex: 1;
+  padding: 4px 2px;
+  border: 1px solid var(--rs-color-border);
+  border-radius: var(--rs-radius-sm);
+  background: var(--rs-color-bg);
+  color: var(--rs-color-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scope-btn:hover:not(:disabled) {
+  background: var(--rs-color-bg-tint);
+  color: var(--rs-color-text);
+}
+
+.scope-btn.is-active {
+  border-color: var(--rs-color-primary);
+  background: var(--rs-color-bg-tint);
+  color: var(--rs-color-primary-dark);
+}
+
+.scope-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.action-workspace {
+  margin-top: 4px;
+}
+
+.run-scope-fixed {
+  margin: 4px 0 4px;
+  font-size: 11px;
+  color: var(--rs-color-text-muted, #6b7280);
+}
+
+.scope-note {
+  margin: 6px 0 2px 0;
+  font-size: 12px;
+  color: var(--rs-color-muted);
+}
+
+.check-workspace-hint {
+  margin: 4px 0 2px 0;
+  font-size: 11px;
+  color: var(--rs-color-muted);
+  line-height: 1.35;
+}
+
+/* ── Settings tabbed navigation (issue #197) ─────────────────────────────── */
+
+.settings-tabbed-panel {
+  padding-top: 6px;
+}
+
+.settings-tab-nav {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 3px;
+  background: var(--rs-color-bg-soft);
+  border: 1px solid var(--rs-color-border);
+  border-radius: var(--rs-radius-sm);
+}
+
+.settings-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 4px 2px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--rs-color-muted);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+}
+
+.settings-tab:hover {
+  background: var(--rs-color-border);
+  color: var(--rs-color-text);
+}
+
+/* Active tab: expanded just enough for the full label; other tabs share the remaining width. */
+.settings-tab.is-active {
+  flex: 0.2 0 max-content;
+  min-width: max-content;
+  padding: 4px 0px;
+  background: var(--rs-color-bg);
+  color: var(--rs-color-primary-dark);
+  border: 1px solid var(--rs-color-border);
+  border-bottom: 2px solid var(--rs-color-primary);
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.settings-footer {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rs-color-border);
+}
+
+/* ── Utility footer (issue #235) ──────────────────────────────────────── */
+
+.utility-footer {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--rs-color-border);
+  border-radius: var(--rs-radius-md);
+  background: var(--rs-color-bg);
+}
+
+.utility-footer-storage {
+  margin-bottom: 6px;
+}
+
+.utility-footer-storage label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rs-color-text);
+}
+
+.utility-footer #help-link {
+  display: inline-block;
+  color: var(--rs-color-primary-dark);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── Shared Lucide-style icon helpers (issue #233) ───────────────────────── */
+
+.btn-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  vertical-align: middle;
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.primary-action-button .btn-icon {
+  width: 16px;
+  height: 16px;
+  opacity: 0.95;
+}
+
+.secondary-action-button .btn-icon,
+.check-action-button .btn-icon {
+  width: 13px;
+  height: 13px;
+}
+
+/* ── Focus, hover, and density polish (issue #233) ───────────────────────── */
+
+.action-tab:focus-visible,
+.scope-btn:focus-visible,
+.settings-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.45);
+}
+
+.panel-dismiss:focus-visible {
+  outline: 2px solid rgba(22, 163, 74, 0.45);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.action-tab,
+.scope-btn,
+.settings-tab,
+.action-tab.is-active,
+.scope-btn.is-active,
+.settings-tab.is-active {
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.panel-header {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--rs-color-border);
+}
+
+.panel-header h4 {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--rs-color-text);
+}
+
+.action-buttons-row {
+  margin-top: 2px;
+}
+
+.check-buttons-row {
+  margin-top: 6px;
+}
+
+.inventory-mode-row {
+  margin-top: 8px;
+}
+
+/* ── Marker-overflow modal (issue #312) ─────────────────────────────────── */
+.rs-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+  background: rgba(17, 24, 39, 0.45);
+}
+
+.rs-modal {
+  width: 100%;
+  max-width: 360px;
+  box-sizing: border-box;
+  padding: 18px 18px 16px;
+  border: 1px solid var(--rs-color-border);
+  border-radius: var(--rs-radius-lg);
+  background: var(--rs-color-bg);
+  box-shadow: 0 10px 30px rgba(17, 24, 39, 0.25);
+}
+
+.rs-modal-title {
+  margin: 0 0 10px 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--rs-color-text);
+}
+
+.rs-modal-body {
+  margin: 0 0 16px 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--rs-color-text);
+  white-space: pre-line;
+}
+
+.rs-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.rs-modal-button {
+  box-sizing: border-box;
+  padding: 8px 14px;
+  border-radius: var(--rs-radius-md);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.rs-modal-button-primary {
+  border: 1px solid var(--rs-color-primary);
+  background: var(--rs-color-primary);
+  color: #ffffff;
+}
+
+.rs-modal-button-primary:hover {
+  background: var(--rs-color-primary-dark);
+  border-color: var(--rs-color-primary-dark);
+}
+
+.rs-modal-button-secondary {
+  border: 1px solid var(--rs-color-border);
+  background: transparent;
+  color: var(--rs-color-text);
+}
+
+.rs-modal-button-secondary:hover {
+  background: var(--rs-color-bg-soft);
+}
+
+.rs-modal-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.35);
 }

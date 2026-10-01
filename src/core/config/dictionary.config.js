@@ -58,6 +58,7 @@ export const METRIC_DICTIONARY = [
     baseSubtype: "effective",
     keywords: [
       "effective base",
+      "base effective",
       "effective n",
       "эффективная база",
       "эффективное n",
@@ -68,6 +69,7 @@ export const METRIC_DICTIONARY = [
     baseSubtype: "unweighted",
     keywords: [
       "unweighted base",
+      "base unweighted",
       "unweighted n",
       "невзвешенная база",
       "невзвешенное n",
@@ -78,6 +80,7 @@ export const METRIC_DICTIONARY = [
     baseSubtype: "weighted",
     keywords: [
       "weighted base",
+      "base weighted",
       "weighted n",
       "взвешенная база",
       "взвешенное n",

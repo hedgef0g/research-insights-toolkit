@@ -14,13 +14,13 @@ Task-specific instructions, GitHub Issues, and direct user instructions override
 - Claude Code: primary coding agent.
 - Codex: coding/review fallback and regression-focused reviewer.
 - Jules: documentation and process PRs.
-- Human owner: final merge decision; Excel smoke testing is performed on `main` and used to validate behavior-preserving backports.
+- Human owner: final merge decision and Excel smoke testing.
 
 Agents must not decide that a task is complete without human review.
 
 ## Product context
 
-Research Insights Toolkit is a platform-independent product for statistical significance in research tables. Excel is the first host implementation; Google Sheets is planned as another host. The immediate target is a pilot release, a paid edition is out of scope, and no delivery date is set. Encrypted cloud settings synchronization by email is a near-term requirement, but it is not implemented in this release branch.
+Research Insights Toolkit is a platform-independent product for statistical significance in research tables. Excel is the first host implementation; Google Sheets is planned as another host. The immediate target is a pilot release, a paid edition is out of scope, and no delivery date is set. Encrypted cloud settings synchronization by email is a near-term requirement, but it is not implemented yet.
 
 The GitHub Pages install/support surface is part of pilot readiness. The support form uses owner-approved Web3Forms; the inbox address must never appear in public HTML. The Pages workflow supplies `WEB3FORMS_ACCESS_KEY` from GitHub Actions secrets. Support/privacy copy must disclose third-party processing. Confirm a real browser-side submission before reporting ticket delivery as verified; the provider rejects server-side test submissions.
 
@@ -42,14 +42,14 @@ Automatic worksheet/workbook scanning is not implemented and should not be added
 ## Core product rules
 
 - The user is expected to select the numeric data area.
-- Manual Run and Clear must stop with a clear message when Excel has a non-contiguous multi-area selection; they must not reach any worksheet mutation.
 - Row labels are read from cells to the left of the selection.
 - Banner/header rows are read from rows above the selection.
-- Clear must resolve the same data body as Run and leave row-label columns untouched.
 - Current Run behavior must remain stable unless the task explicitly changes it.
 - Preview/check-table features must remain read-only unless explicitly wired.
 - Warning-only guardrails must not block Run unless explicitly requested.
 - Do not auto-trim selected ranges unless explicitly requested.
+- Manual Run and Clear must stop with a clear message when Excel has a non-contiguous multi-area selection; they must not reach any worksheet mutation.
+- Clear must resolve the same data body as Run and leave row-label columns untouched.
 
 ## High-risk files
 
@@ -89,15 +89,36 @@ Only modify high-risk files when the task or issue explicitly allows it.
 - Clear significance should restore numeric-looking cleaned values where possible.
 - Do not change `src/core/excel-writer.js` without an explicit writer/output issue.
 
+## Selected-range normalization guardrail
+
+Run and Clear share a selected-range normalization step. Every selection
+must resolve into exactly one of three states before any Excel mutation:
+
+- **Pass-through** — the selection is already a clean numeric data area and
+  is used as-is.
+- **Normalized** — the selection includes safe-to-trim context (e.g. a
+  banner row, a label column, a full-table shape) and is reduced to a clean
+  numeric data area following the rules in
+  `docs/SELECTED_RANGE_NORMALIZATION.md`.
+- **Blocked** — the selection is unsafe (ambiguous boundaries, broad
+  sheet-wide or worksheet-wide selections, or otherwise outside the
+  supported shapes) and must stop before any Excel mutation, with a clear
+  user-facing message.
+
+Unsafe broad selections must not silently fall through to Run/Clear: they
+must be blocked at the normalization layer. Do not bypass this guardrail
+to "just make it work" — extend the normalization spec instead. See
+`docs/SELECTED_RANGE_NORMALIZATION.md` for the authoritative rules.
+
 ## Banner rules
 
 - Banner-aware comparisons must preserve the manual selected-range model.
 - Multi-row and merged-like banners are supported through banner detection and taskpane banner-letter placement logic.
 - Banner letters are separate from data-cell markers.
+- Do not change banner detection, banner-letter writing, or comparison pair logic unless the task explicitly allows it.
 - Automatic wave detection must recognize compact wave values such as `W18`, `w-18`, and `w18 (month)` in both the lower banner row and upper scan rows.
 - Before writing fresh banner letters, clear stale trailing markers from the banner rows above the write target so vertically merged headers do not retain letters from earlier runs.
 - Total-like labels in the nearest visible upper banner row must be classified as Total when the lower banner label is sparse or empty.
-- Do not change banner detection, banner-letter writing, or comparison pair logic unless the task explicitly allows it.
 
 ## NPS expectations
 

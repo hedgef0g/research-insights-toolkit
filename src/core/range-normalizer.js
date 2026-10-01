@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Selected range normalizer for Research Insights Toolkit.
  *
  * Analyzes a 2D grid (already loaded from Excel, markers already removed)
@@ -123,6 +123,24 @@ function isTextOnlyCell(cell) {
   // Using isNumericCell here keeps both functions consistent: anything that
   // isNumericCell rejects (e.g. "2025Q4", "(a)") is correctly treated as text.
   return !isNumericCell(cell);
+}
+
+function isLikelyOrdinalScaleLabelCell(cell) {
+  if (typeof cell === "number") {
+    return Number.isInteger(cell) && cell >= 0 && cell <= 10;
+  }
+
+  if (typeof cell !== "string") {
+    return false;
+  }
+
+  const trimmed = cell.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return false;
+  }
+
+  const value = Number(trimmed);
+  return Number.isInteger(value) && value >= 0 && value <= 10;
 }
 
 function cleanStructuralTextCell(cell) {
@@ -474,8 +492,13 @@ function detectLabelColumns(values, bodyStartRow, bodyEndRow, colCount) {
   }
 
   const col0Frac = computeTextFraction(values, bodyStartRow, bodyEndRow, 0, 0);
+  const col0LooksLikeRatingScale = isLikelyRatingScaleLabelColumn(
+    values,
+    bodyStartRow,
+    bodyEndRow
+  );
 
-  if (col0Frac < LABEL_NUMERIC_THRESHOLD) {
+  if (col0Frac < LABEL_NUMERIC_THRESHOLD && !col0LooksLikeRatingScale) {
     if (isExtendedNpsScaleLabelColumn(values, bodyStartRow, bodyEndRow, colCount)) {
       if (colCount >= 3 && isUniformUnitColumn(values, bodyStartRow, bodyEndRow)) {
         return { labelColCount: 2, labelSplitConfidence: "confident" };
@@ -485,7 +508,7 @@ function detectLabelColumns(values, bodyStartRow, bodyEndRow, colCount) {
     return { labelColCount: 0, labelSplitConfidence: "confident" };
   }
 
-  if (col0Frac < LABEL_TEXT_FRACTION_THRESHOLD) {
+  if (col0Frac < LABEL_TEXT_FRACTION_THRESHOLD && !col0LooksLikeRatingScale) {
     if (isExtendedNpsScaleLabelColumn(values, bodyStartRow, bodyEndRow, colCount)) {
       if (colCount >= 3 && isUniformUnitColumn(values, bodyStartRow, bodyEndRow)) {
         return { labelColCount: 2, labelSplitConfidence: "confident" };
@@ -609,6 +632,41 @@ function isExtendedNpsScaleLabelColumn(values, bodyStartRow, bodyEndRow, colCoun
     hasNps &&
     hasBase
   );
+}
+
+function isLikelyRatingScaleLabelColumn(values, bodyStartRow, bodyEndRow) {
+  let totalNonEmpty = 0;
+  let textOnlyCount = 0;
+  let ordinalScaleCount = 0;
+
+  for (let row = bodyStartRow; row <= bodyEndRow; row++) {
+    const rowArr = values[row];
+    if (!rowArr) continue;
+
+    const cell = rowArr[0];
+    if (isCellEmpty(cell)) continue;
+
+    totalNonEmpty++;
+
+    if (isTextOnlyCell(cell)) {
+      textOnlyCount++;
+      continue;
+    }
+
+    if (isLikelyOrdinalScaleLabelCell(cell)) {
+      ordinalScaleCount++;
+    }
+  }
+
+  if (totalNonEmpty === 0) {
+    return false;
+  }
+
+  const labelLikeFraction = (textOnlyCount + ordinalScaleCount) / totalNonEmpty;
+  const allCellsAreLabelLike = textOnlyCount + ordinalScaleCount === totalNonEmpty;
+  const minText = allCellsAreLabelLike ? 1 : 2;
+
+  return textOnlyCount >= minText && ordinalScaleCount >= 3 && labelLikeFraction >= 0.8;
 }
 
 // ─── Body validation ──────────────────────────────────────────────────────────
@@ -1107,4 +1165,71 @@ export function normalizeSelectedRange(rawValues, rawText, options = {}) {
     warnings,
     bodyEndRow   // full pre-trim end row — used only for trailingBodyRows
   );
+}
+
+/**
+ * Returns true when the values grid contains at least one group of non-empty rows,
+ * followed by one or more all-empty rows, followed by at least one more non-empty row.
+ *
+ * Leading and trailing all-empty rows are ignored, so a single-cell selection, a
+ * normal single-table selection, or a table with blank edge rows does not trigger
+ * the guard.
+ *
+ * Used as a pre-resolver sanity guard in runCheckTable() to detect a broad
+ * multi-table selection before the active-cell resolver runs.
+ *
+ * @param {Array} values - 2D array from selectedRange.values
+ * @returns {boolean}
+ */
+export function selectionHasMultiTableGap(values) {
+  if (!Array.isArray(values) || values.length === 0) return false;
+
+  function isRowBlank(row) {
+    return (
+      Array.isArray(row) &&
+      row.length > 0 &&
+      row.every((cell) => cell === "" || cell === null || cell === undefined)
+    );
+  }
+
+  let i = 0;
+
+  // Skip leading blank rows.
+  while (i < values.length && isRowBlank(values[i])) i++;
+
+  // Advance through the first non-blank group.
+  while (i < values.length && !isRowBlank(values[i])) i++;
+
+  if (i >= values.length) return false; // no gap follows the first group
+
+  // Advance through the gap (one or more blank rows).
+  while (i < values.length && isRowBlank(values[i])) i++;
+
+  // Multi-table gap detected if another non-blank row exists after the gap.
+  return i < values.length;
+}
+
+/**
+ * Returns true when any row of the values grid is entirely empty (all cells blank).
+ *
+ * An all-empty row inside a data body indicates the range likely spans multiple
+ * tables. Used by checkSelectedRangePreview as a guard for pass-through ranges
+ * that bypass normalizeSelectedRange's validateBody (which emits
+ * BODY_APPEARS_MULTI_TABLE for normalized ranges only).
+ *
+ * @param {Array} values  2D values grid (e.g. valuesForCalculation).
+ * @returns {boolean}
+ */
+export function hasEmptyDataRowGap(values) {
+  if (!Array.isArray(values)) return false;
+  for (const row of values) {
+    if (
+      Array.isArray(row) &&
+      row.length > 0 &&
+      row.every((cell) => cell === "" || cell === null || cell === undefined)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }

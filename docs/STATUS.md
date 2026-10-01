@@ -1,249 +1,61 @@
 # STATUS.md
 
-## Current status
+Technical health and status report for Research Insights Toolkit.
 
-Research Insights Toolkit is a platform-independent product. Excel is the first host implementation; Google Sheets is planned as another host. The current release branch contains the Excel MVP. The immediate product target is a pilot; a paid edition is out of scope and no delivery date is set.
+For the user-facing feature overview, see [../README.md](../README.md).
+For structural coverage (supported / partial / unsupported table shapes), see
+[TABLE_STRUCTURE_MATRIX.md](TABLE_STRUCTURE_MATRIX.md).
+For the manual smoke validation checklist, see [TEST_CASES.md](TEST_CASES.md).
 
 ## Pilot install and support pages
 
+These pages were first published from the `release` branch (commit 3609c6c) and are carried in `main` so that the next `release` update keeps them.
+
 - The GitHub Pages build publishes the Excel install page at `/`, paired Windows installer files, and Marketplace preparation pages at `/privacy.html`, `/terms.html`, and `/support.html`.
 - The Windows helper downloads/checks the manifest and opens Excel; it still requires the user to upload the manifest in Excel. It is not a silent installer.
-- The support page submits tickets through Web3Forms. GitHub Actions uses the `WEB3FORMS_ACCESS_KEY` repository secret; the support inbox address is not embedded in public pages. Verify a browser submission after this release deploys before treating delivery as confirmed.
+- The support page submits tickets through Web3Forms. GitHub Actions uses the `WEB3FORMS_ACCESS_KEY` repository secret; the support inbox address is not embedded in public pages. A browser-side ticket submission from the deployed page has not been recorded as verified.
 - Support and privacy pages disclose that form contents go to Web3Forms. Workbook contents are not requested by the support form.
 
-The release Run path clears old banner markers above the write target before writing new letters, preventing vertically merged headers from retaining stale markers after reruns. The behavior was smoke-tested on `main`; release build, manifest validation, and Pages deployment passed.
+## Current phase
 
-Manual Run and Clear catch Excel errors for non-contiguous selections and return before worksheet writes. Smoke testing was performed on `main`; release build, manifest validation, and Pages deployment passed.
+Phase 1 — manual workflow stabilization — is complete. The manual
+selected-range workflow is stable: Run and Clear both go through the shared
+selected-range normalization path with banner-aware and wave-aware behavior.
 
-Manual Clear excludes mixed text/numeric row-label columns using the same classifier as Run. This protects labels from marker stripping and formatting cleanup; smoke testing was performed on `main`, and the release build, manifest validation, and Pages deployment passed.
+Recent stabilization work landed in PRs #93, #94, #96, #97, #98, #100, #101.
 
-Banner detection now recognizes a Total label in a visible upper banner row when the lower label is empty or sparse, and associates local Totals with the adjacent named group. The change follows the banner smoke scenarios exercised on `main`; release build and manifest validation passed.
+## Next focus
 
-Automatic wave detection recognizes compact wave values (`W18`, `w-18`, `w18 (month)`) in upper banner scan rows as well as the lower row. The scenario was smoke-tested on `main`; release build and manifest validation passed.
+Check table / preview foundation: expose the normalized interpretation model
+to the user before Excel mutation, reusing the existing selected-range
+normalization output rather than introducing a separate parsing path. See
+[ROADMAP.md](ROADMAP.md) and [SELECTED_RANGE_NORMALIZATION.md](SELECTED_RANGE_NORMALIZATION.md).
 
-The add-in currently supports:
+## Engine health
 
-- automatic metric block detection;
-- proportions significance testing;
-- means significance testing with SD or variance;
-- NPS significance testing from promoters/detractors structure;
-- NPS significance testing from SD or variance;
-- confidence level selector;
-- one-tailed / two-tailed testing;
-- local settings persistence;
-- reset to default settings;
-- small-base exclusion and fill;
-- Total comparison modes;
-- previous-column comparison mode;
-- banner-aware structure detection;
-- banner-aware group comparisons;
-- banner-aware local and global Total logic;
-- wave banner auto previous-column mode;
-- banner-local marker indexing;
-- banner letter writing into the lowest banner level;
-- clean user-facing status messages.
+- Selected-range normalization is the shared entry point for Run and Clear.
+- Banner detection, banner-letter writing, and wave-aware behavior are
+  considered stable for the structures listed as supported in
+  [TABLE_STRUCTURE_MATRIX.md](TABLE_STRUCTURE_MATRIX.md).
+- Numeric output preservation and Clear-significance numeric restoration are
+  in place. Cells without marker text remain numeric where possible; display
+  conventions (`28`, `28%`, `0.28`) are preserved.
+- Statistical engine (pooled z-test for proportions, Welch's t-test for
+  means, NPS structure, NPS spread) is unchanged and remains under project
+  control; external libraries are used only for threshold quantiles.
 
-## Implemented UI settings
+## Validation surface
 
-### Significance settings
+- [TEST_CASES.md](TEST_CASES.md) — manual smoke checklist, refreshed in #101.
+- [TABLE_STRUCTURE_MATRIX.md](TABLE_STRUCTURE_MATRIX.md) — structure coverage source of truth.
+- [GOLD_STANDARD_TEST_SUITE.md](GOLD_STANDARD_TEST_SUITE.md) — validation planning source for non-trivial changes.
 
-Implemented:
+## Known limitations
 
-- `confidence-level`
-- `one-tailed-test`
-- `round-cell-values`
-
-### Previous-column comparison
-
-Implemented:
-
-- `compare-with-previous-column`
-- `apply-previous-column-fill`
-
-Behavior:
-
-- previous-column mode writes arrows instead of letter markers;
-- arrow is written only into the right/current column;
-- upward difference uses `↑`;
-- downward difference uses `↓`;
-- fill is enabled by default when previous-column mode is selected;
-- user may manually disable previous-column fill;
-- previous-column mode disables banner letter writing;
-- previous-column mode is incompatible with compare-only-with-Total.
-
-### Banner settings
-
-Implemented:
-
-- `write-banner-letters`
-- `respect-banner-structure`
-
-Behavior:
-
-- without banner structure, banner letters follow selected-column indexing;
-- with banner structure, banner letters are written only to the lowest banner level;
-- upper banner levels are not modified;
-- labels are local to each detected banner group;
-- Total columns never receive ordinary banner letters;
-- wave groups using auto previous-column mode do not receive banner letters.
-
-### Label detection
-
-Implemented:
-
-- default label lookup immediately to the left of selected range;
-- optional lookup from the left side of the sheet via `labels-on-left-side`;
-- numeric columns between selected data and real text labels are skipped.
-
-### Total comparison settings
-
-Implemented:
-
-- `compare-only-with-total`
-- `exclude-total-from-comparisons`
-- `first-column-is-total`
-- `total-in-each-banner`
-
-Current behavior:
-
-- without banner structure, supported manual Total mode is primarily `first-column-is-total`;
-- with banner structure enabled, manual Total placement checkboxes are disabled;
-- Total placement is then detected from banner structure;
-- compare-only-with-Total and exclude-Total remain meaningful with banner structure.
-
-### Fill settings
-
-Implemented:
-
-- `significant-fill-color`
-- `lower-than-total-fill-color`
-- `fill-only-total-comparisons`
-- `small-base-fill-color`
-
-Fill priority:
-
-1. small base fill
-2. lower than Total fill
-3. normal significance fill
-4. no fill
-
-### Small bases
-
-Implemented:
-
-- `exclude-small-bases`
-- `small-base-threshold`
-
-Behavior:
-
-- columns with base lower than threshold are excluded before significance calculation;
-- small-base fill is applied to the whole affected column within the calculation block;
-- the base row itself is also filled;
-- if a manual first-column Total has a small base, calculation stops with an error.
-
-### Settings storage
-
-Implemented:
-
-- `settings-storage-mode = none`
-- `settings-storage-mode = local`
-- reset button
-
-Behavior:
-
-- local settings are stored in `localStorage`;
-- reset restores default settings and clears saved local settings;
-- cloud storage remains reserved for future implementation.
-
-## Banner engine status
-
-Implemented MVP:
-
-- one-level banner detection;
-- two-level banner detection;
-- repeated group label detection;
-- reconstructed span detection for merged-like headers;
-- local Total detection;
-- global Total detection;
-- group-aware ordinary comparisons;
-- group-local cell markers;
-- local Total as group reference when no global Total exists;
-- global Total as the only Total reference when detected;
-- local Totals compared with global Total when global Total exists;
-- local Totals not used as group references when global Total exists;
-- Total columns excluded from ordinary group comparisons;
-- previous-column comparison inside banner groups;
-- automatic previous-column mode for wave groups;
-- banner-aware lower-level letter writing;
-- user-visible banner messages filtered to important events only.
-
-## Wave banner behavior
-
-Wave-like groups are detected from group labels such as:
-
-- `wave`
-- `waves`
-- `волна`
-- `волны`
-- `period`
-- `periods`
-- `период`
-- `периоды`
-- `замер`
-- `замеры`
-
-When a wave group is detected and global previous-column mode is not manually enabled:
-
-- previous-column comparison is applied only inside wave groups;
-- non-wave groups continue to use ordinary group comparisons;
-- UI checkbox state is not changed;
-- previous-column fill is applied automatically for wave groups;
-- banner letters are not written for wave groups;
-- status message explains that auto previous-column was applied.
-
-Plain numeric labels such as `1, 2, 3` are not used as wave signals.
-
-## Statistical engine status
-
-Implemented:
-
-- pooled z-test for proportions;
-- Welch’s t-test for means;
-- NPS from promoter/detractor structure;
-- NPS from spread;
-- one-tailed and two-tailed threshold modes;
-- modular threshold functions using distribution quantiles.
-
-Notes:
-
-- product-specific comparison routing remains custom;
-- external/statistical libraries are used only for threshold calculation;
-- formulas remain under project control.
-
-## User-facing status messages
-
-Implemented:
-
-- default success status is concise;
-- technical banner diagnostics are hidden;
-- only user-relevant banner messages are shown.
-
-Visible banner message types include:
-
-- global Total used;
-- auto previous-column applied for wave groups;
-- compare-only-with-Total produced no valid Total pairs;
-- multiple local Totals in one group;
-- malformed or unsupported banner structure;
-- no banner rows above selection.
-
-## Known technical debt
-
-- Some old diagnostic helpers for merge/span investigation may remain in `taskpane.js` behind no active call path.
-- `formatBannerDetectionDiagnostics()` remains useful for development diagnostics but should not be used in normal user status.
 - Google Sheets support is not implemented.
 - Cloud settings storage is not implemented.
-- Full multi-level banner support beyond MVP is not implemented.
+- Multi-level banner support is implemented for supported research-table shapes, but broader arbitrary header layouts remain out of scope.
 - Report-title detection and broader table-boundary detection are not fully implemented.
 - Total outside selection is specified but may need additional edge-case hardening.
-- The add-in remains Excel-first.
+- Some development-only diagnostic helpers remain in `taskpane.js` behind no active user-facing call path.
+- Runtime implementation remains Excel-first; new core behavior should still be designed platform-neutral where possible.

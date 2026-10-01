@@ -230,7 +230,7 @@ Planned base priority order (not fully implemented yet): Effective Base > Unweig
 | Automatic worksheet/workbook scanning | FUTURE | Not implemented. User must manually select the numeric data range and click Run. | Planned as automatic runner for the MVP path. Required pipeline: scan -> processing plan -> preview/warnings -> controlled write. Must not re-use repeated manual pipeline calls. |
 | Google Sheets (platform) | FUTURE | Excel-first only. See section 8. | Planned first-class platform after parity phase. |
 | Check-table / data quality validation mode | FUTURE | Not implemented. Specified in docs/table-preview-model.md. | -- |
-| Selected range normalization | FUTURE | Spec in docs/SELECTED_RANGE_NORMALIZATION.md; implementation not started. | -- |
+| Selected range normalization | PARTIAL | Phase 1 pure model implemented in src/core/range-normalizer.js. No runtime wiring yet. Spec in docs/SELECTED_RANGE_NORMALIZATION.md. | Blocked state must stop execution; must not fall back to strict Run on broad selection. |
 
 ---
 
@@ -240,7 +240,7 @@ Planned base priority order (not fully implemented yet): Effective Base > Unweig
 - **Automatic worksheet/workbook scanning** is not implemented. User must always select the numeric data range manually. Planned as automatic runner with a scan -> processing plan -> preview/warnings -> controlled write pipeline; must not repeat the existing manual pipeline.
 - **Total outside selection** is partially designed but may need edge-case hardening.
 - **Check-table / data quality validation** mode is specified in docs/table-preview-model.md but not yet implemented.
-- **Selected range normalization** spec is in docs/SELECTED_RANGE_NORMALIZATION.md; implementation not started.
+- **Selected range normalization** Phase 1 pure model is in src/core/range-normalizer.js. Spec in docs/SELECTED_RANGE_NORMALIZATION.md. No runtime wiring yet.
 - **Effective Base and Weighted Base** support are core correctness features. Planned base priority: Effective > Unweighted > plain Base > Weighted with warning. Full spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md.
 - **Multi-column label area** support is FUTURE. Spec: docs/MULTI_COLUMN_LABELS_AND_WEIGHTED_BASES.md. GST coverage: GST-068, GST-069.
 - This matrix reflects the current stabilization state. Update this document when new structures are implemented or when validation behavior changes.

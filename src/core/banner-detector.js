@@ -111,7 +111,8 @@ export function detectBannerStructure(bannerContext, settings = {}) {
   const columnDescriptors = buildColumnDescriptors({
     selectedColumnCount,
     lowerBannerRow: normalizedLowerBannerRow,
-    groupLevel: groupLevelResult.groupLevel,
+    upperScanRows,
+    fallbackGroupLevel: groupLevelResult.groupLevel,
   });
 
   markUpperLevelTotalsForSparseLowerLabels(columnDescriptors, upperScanRows);
@@ -188,65 +189,6 @@ export function detectBannerStructure(bannerContext, settings = {}) {
 }
 
 /**
- * Formats banner detection diagnostics for status output.
- */
-export function formatBannerDetectionDiagnostics(bannerStructure) {
-  if (!bannerStructure || !bannerStructure.isDetected) {
-    return "Баннер: структура не обнаружена.";
-  }
-
-  const lines = [];
-
-  lines.push("Баннер:");
-  lines.push(`- Режим: ${bannerStructure.mode}`);
-
-  if (bannerStructure.globalTotalColumnIndex !== null) {
-    lines.push(`- Глобальный Тотал: колонка ${bannerStructure.globalTotalColumnIndex + 1}`);
-  }
-
-  if (bannerStructure.totalColumnIndexes && bannerStructure.totalColumnIndexes.length > 0) {
-    lines.push(
-      `- Найденные Тоталы: ${bannerStructure.totalColumnIndexes
-        .map((columnIndex) => columnIndex + 1)
-        .join(", ")}`
-    );
-  } else {
-    lines.push("- Найденные Тоталы: нет");
-  }
-
-  if (bannerStructure.groups && bannerStructure.groups.length > 0) {
-    lines.push("- Группы:");
-
-    for (const group of bannerStructure.groups) {
-      const columnLabels = group.columnIndexes
-        .map((columnIndex) => {
-          const descriptor = bannerStructure.columnDescriptors.find(
-            (item) => item.columnIndex === columnIndex
-          );
-
-          return descriptor ? descriptor.lowerLabel || `Column ${columnIndex + 1}` : "";
-        })
-        .filter(Boolean)
-        .join(", ");
-
-      lines.push(`  - ${group.label}: ${columnLabels}`);
-    }
-  }
-
-  const bannerMessages = bannerStructure.messages || [];
-
-  if (bannerMessages.length > 0) {
-    lines.push("- Сообщения:");
-
-    for (const message of bannerMessages) {
-      lines.push(`  - ${message.text}`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
-/**
  * Returns lower banner row from context.
  */
 function getLowerBannerRow(bannerContext) {
@@ -268,22 +210,62 @@ function getLowerBannerRow(bannerContext) {
 /**
  * Builds column descriptors.
  */
-function buildColumnDescriptors({ selectedColumnCount, lowerBannerRow, groupLevel }) {
+function buildColumnDescriptors({
+  selectedColumnCount,
+  lowerBannerRow,
+  upperScanRows = [],
+  fallbackGroupLevel = null,
+}) {
   const descriptors = [];
+  const resolvedUpperRows = buildResolvedUpperBannerRows(
+    upperScanRows,
+    lowerBannerRow,
+    selectedColumnCount
+  );
 
   for (let columnIndex = 0; columnIndex < selectedColumnCount; columnIndex++) {
     const lowerLabel = normalizeRawBannerCellValue(lowerBannerRow[columnIndex]);
     const normalizedLowerLabel = normalizeBannerLabel(lowerLabel);
-
-    const groupLabel = groupLevel
-      ? normalizeRawBannerCellValue(groupLevel.labels[columnIndex])
+    const columnBannerEntries = buildColumnBannerEntries(
+      resolvedUpperRows,
+      lowerLabel,
+      normalizedLowerLabel,
+      columnIndex
+    );
+    const comparisonGroupEntries = deriveComparisonGroupEntries(
+      columnBannerEntries,
+      resolvedUpperRows.length > 0
+    );
+    const effectiveComparisonGroupEntries = shouldClearStandaloneSparseTotalGroupEntries(
+      columnBannerEntries,
+      comparisonGroupEntries,
+      lowerLabel
+    )
+      ? []
+      : comparisonGroupEntries;
+    const fallbackGroupLabel = fallbackGroupLevel
+      ? normalizeRawBannerCellValue(fallbackGroupLevel.labels[columnIndex])
       : DEFAULT_GROUP_LABEL;
-
-    const normalizedGroupLabel = normalizeBannerLabel(groupLabel);
-
-    const comparisonGroupKey = groupLevel
-      ? buildGroupKey(groupLabel, groupLevel.spansByColumnIndex[columnIndex])
-      : DEFAULT_GROUP_KEY;
+    const groupLabel =
+      effectiveComparisonGroupEntries.length > 0
+        ? effectiveComparisonGroupEntries[effectiveComparisonGroupEntries.length - 1].label
+        : fallbackGroupLabel;
+    const comparisonGroupKey =
+      effectiveComparisonGroupEntries.length > 0
+        ? buildHierarchicalGroupKey(effectiveComparisonGroupEntries)
+        : fallbackGroupLevel
+          ? buildGroupKey(
+              fallbackGroupLabel,
+              fallbackGroupLevel.spansByColumnIndex[columnIndex]
+            )
+          : DEFAULT_GROUP_KEY;
+    const comparisonGroupPath = effectiveComparisonGroupEntries.map((entry) => entry.label);
+    const groupLevelRowOffset =
+      effectiveComparisonGroupEntries.length > 0
+        ? effectiveComparisonGroupEntries[effectiveComparisonGroupEntries.length - 1].rowOffset
+        : fallbackGroupLevel
+          ? fallbackGroupLevel.rowOffset
+          : null;
 
     const isTotal = isTotalBannerLabel(normalizedLowerLabel);
 
@@ -293,11 +275,12 @@ function buildColumnDescriptors({ selectedColumnCount, lowerBannerRow, groupLeve
       lowerLabel,
       normalizedLowerLabel,
 
-      bannerPath: groupLevel ? [groupLabel, lowerLabel] : [lowerLabel],
-      displayLabel: groupLevel ? `${groupLabel} / ${lowerLabel}` : lowerLabel,
+      bannerPath: columnBannerEntries.map((entry) => entry.label),
+      displayLabel: formatColumnDisplayLabel(columnBannerEntries, lowerLabel),
 
       comparisonGroupKey,
-      comparisonGroupLabel: groupLevel ? groupLabel : DEFAULT_GROUP_LABEL,
+      comparisonGroupLabel: groupLabel,
+      comparisonGroupPath,
 
       isTotal,
       totalType: isTotal ? TOTAL_TYPE.LOCAL : null,
@@ -307,13 +290,194 @@ function buildColumnDescriptors({ selectedColumnCount, lowerBannerRow, groupLeve
 
       source: {
         lowerLevelRowOffset: 0,
-        groupLevelRowOffset: groupLevel ? groupLevel.rowOffset : null,
+        groupLevelRowOffset,
         mergeArea: null,
       },
     });
   }
 
   return descriptors;
+}
+
+function buildResolvedUpperBannerRows(upperScanRows, lowerBannerRow, selectedColumnCount) {
+  const resolvedRows = [];
+
+  for (let rowIndex = 0; rowIndex < upperScanRows.length; rowIndex++) {
+    const row = normalizeBannerRowLength(upperScanRows[rowIndex], selectedColumnCount);
+    const spans = selectBestResolvedUpperRowSpans(
+      row,
+      lowerBannerRow,
+      selectedColumnCount
+    );
+    const labels = Array(selectedColumnCount).fill("");
+    const spansByColumnIndex = {};
+
+    for (const span of spans) {
+      for (const columnIndex of span.columnIndexes) {
+        labels[columnIndex] = span.label;
+        spansByColumnIndex[columnIndex] = span;
+      }
+    }
+
+    resolvedRows.push({
+      rowOffset: -(rowIndex + 1),
+      labels,
+      spansByColumnIndex,
+    });
+  }
+
+  return resolvedRows;
+}
+
+function selectBestResolvedUpperRowSpans(row, lowerBannerRow, selectedColumnCount) {
+  const repeatedLabelResult = detectRepeatedLabelGroupLevelInRow(row, selectedColumnCount, 0);
+  const repeatedSpans = repeatedLabelResult.groupLevel ? repeatedLabelResult.groupLevel.spans : [];
+  const reconstructedSpans = buildResolvedReconstructedSpans(
+    row,
+    lowerBannerRow,
+    selectedColumnCount
+  );
+
+  if (scoreResolvedUpperRowSpans(repeatedSpans) > scoreResolvedUpperRowSpans(reconstructedSpans)) {
+    return repeatedSpans;
+  }
+
+  return reconstructedSpans;
+}
+
+function buildResolvedReconstructedSpans(row, lowerBannerRow, selectedColumnCount) {
+  const rawSpans = buildReconstructedSpansFromUpperRow(row, lowerBannerRow, selectedColumnCount);
+
+  return mergeAdjacentWaveValueSpans(rawSpans, lowerBannerRow);
+}
+
+function scoreResolvedUpperRowSpans(spans) {
+  if (!spans || spans.length === 0) {
+    return 0;
+  }
+
+  return spans.reduce((score, span) => {
+    if (!span || !span.label) {
+      return score;
+    }
+
+    return span.columnIndexes && span.columnIndexes.length > 1
+      ? score + span.columnIndexes.length
+      : score;
+  }, 0);
+}
+
+function buildColumnBannerEntries(
+  resolvedUpperRows,
+  lowerLabel,
+  normalizedLowerLabel,
+  columnIndex
+) {
+  const entries = [];
+
+  for (let rowIndex = resolvedUpperRows.length - 1; rowIndex >= 0; rowIndex--) {
+    const resolvedRow = resolvedUpperRows[rowIndex];
+    const label = normalizeRawBannerCellValue(resolvedRow.labels[columnIndex]);
+    const normalizedLabel = normalizeBannerLabel(label);
+    const span = resolvedRow.spansByColumnIndex[columnIndex] || null;
+
+    if (!label) {
+      continue;
+    }
+
+    if (
+      lowerLabel &&
+      span &&
+      span.startColumnIndex === span.endColumnIndex
+    ) {
+      continue;
+    }
+
+    const previousEntry = entries[entries.length - 1];
+
+    if (previousEntry && previousEntry.normalizedLabel === normalizedLabel) {
+      continue;
+    }
+
+    entries.push({
+      label,
+      normalizedLabel,
+      rowOffset: resolvedRow.rowOffset,
+      span,
+      source: "upper",
+    });
+  }
+
+  if (lowerLabel) {
+    const previousEntry = entries[entries.length - 1];
+
+    if (!previousEntry || previousEntry.normalizedLabel !== normalizedLowerLabel) {
+      entries.push({
+        label: lowerLabel,
+        normalizedLabel: normalizedLowerLabel,
+        rowOffset: 0,
+        span: {
+          startColumnIndex: columnIndex,
+          endColumnIndex: columnIndex,
+        },
+        source: "lower",
+      });
+    }
+  }
+
+  return entries;
+}
+
+function deriveComparisonGroupEntries(columnBannerEntries, hasUpperBannerRows) {
+  if (!columnBannerEntries || columnBannerEntries.length === 0) {
+    return [];
+  }
+
+  const upperEntries = columnBannerEntries.filter((entry) => entry.source === "upper");
+
+  if (!hasUpperBannerRows || upperEntries.length === 0) {
+    return [];
+  }
+
+  if (columnBannerEntries.length === 1) {
+    return [columnBannerEntries[0]];
+  }
+
+  const candidateAncestorEntries = columnBannerEntries.slice(0, -1);
+  const semanticAncestorEntries = candidateAncestorEntries.filter(
+    (entry) => !isTechnicalWaveOrValueLabel(entry.label)
+  );
+
+  if (semanticAncestorEntries.length > 0) {
+    return semanticAncestorEntries;
+  }
+
+  if (candidateAncestorEntries.length > 0) {
+    return candidateAncestorEntries;
+  }
+
+  return [columnBannerEntries[0]];
+}
+
+function shouldClearStandaloneSparseTotalGroupEntries(
+  columnBannerEntries,
+  comparisonGroupEntries,
+  lowerLabel
+) {
+  return (
+    columnBannerEntries.length === 1 &&
+    !lowerLabel &&
+    comparisonGroupEntries.length === 1 &&
+    isTotalBannerLabel(comparisonGroupEntries[0].normalizedLabel)
+  );
+}
+
+function formatColumnDisplayLabel(columnBannerEntries, lowerLabel) {
+  if (!columnBannerEntries || columnBannerEntries.length === 0) {
+    return lowerLabel;
+  }
+
+  return columnBannerEntries.map((entry) => entry.label).join(" / ");
 }
 
 /**
@@ -338,11 +502,8 @@ function buildGroupsFromColumnDescriptors(
 
       groupsByKey.set(descriptor.comparisonGroupKey, {
         groupKey: descriptor.comparisonGroupKey,
-        label: descriptor.comparisonGroupLabel,
-        bannerPath:
-          descriptor.comparisonGroupLabel === DEFAULT_GROUP_LABEL
-            ? []
-            : [descriptor.comparisonGroupLabel],
+        label: descriptor.comparisonGroupLabel || DEFAULT_GROUP_LABEL,
+        bannerPath: descriptor.comparisonGroupPath || [],
         columnIndexes: [],
         localTotalColumnIndexes: [],
         hasLocalTotal: false,
@@ -433,6 +594,130 @@ function detectMeaningfulGroupLevel(upperScanRows, lowerBannerRow, selectedColum
 }
 
 /**
+ * Picks the best upper banner level.
+ *
+ * Rows like "Wave" / "Wave (quarter)" are technical descriptors for the
+ * lower banner values. If a higher semantic group row exists, use that higher
+ * row as the comparison-group level instead of fragmenting every wave pair
+ * into its own group.
+ */
+function selectBestGroupLevelCandidate(candidates) {
+  const firstCandidate = candidates[0];
+
+  if (!isTechnicalWaveDescriptorGroupLevel(firstCandidate.groupLevel)) {
+    return firstCandidate;
+  }
+
+  const semanticCandidate = candidates.find(
+    (candidate) => !isTechnicalWaveDescriptorGroupLevel(candidate.groupLevel)
+  );
+
+  return semanticCandidate || firstCandidate;
+}
+
+/**
+ * Temporary diagnostic helper for Excel smoke debugging.
+ *
+ * Mirrors detectMeaningfulGroupLevel candidate discovery and explains which
+ * upper rows were candidate group levels before the final detector result is
+ * consumed by taskpane banner-letter writing.
+ */
+export function buildBannerDetectionDebugSummary(bannerContext) {
+  const selectedColumnCount = bannerContext ? bannerContext.selectedColumnCount || 0 : 0;
+  const lowerBannerRow = normalizeBannerRowLength(
+    getLowerBannerRow(bannerContext),
+    selectedColumnCount
+  );
+  const upperScanRows = bannerContext && bannerContext.upperScanRows ? bannerContext.upperScanRows : [];
+
+  const rows = [];
+  const candidates = [];
+
+  for (let rowIndex = 0; rowIndex < upperScanRows.length; rowIndex++) {
+    const row = normalizeBannerRowLength(upperScanRows[rowIndex], selectedColumnCount);
+    const reconstructedSpanResult = detectReconstructedSpanGroupLevel(
+      row,
+      lowerBannerRow,
+      selectedColumnCount,
+      rowIndex
+    );
+
+    let candidateResult = null;
+
+    if (reconstructedSpanResult.groupLevel) {
+      candidateResult = reconstructedSpanResult;
+    } else {
+      const repeatedLabelResult = detectRepeatedLabelGroupLevelInRow(
+        row,
+        selectedColumnCount,
+        rowIndex
+      );
+
+      if (repeatedLabelResult.groupLevel) {
+        candidateResult = repeatedLabelResult;
+      }
+    }
+
+    if (candidateResult) {
+      candidates.push(candidateResult);
+    }
+
+    const groupLevel = candidateResult ? candidateResult.groupLevel : null;
+    const spans = groupLevel && groupLevel.spans ? groupLevel.spans : [];
+    const labeledSpans = spans.filter((span) => span.label);
+    const isTechnicalWaveDescriptor = isTechnicalWaveDescriptorGroupLevel(groupLevel);
+
+    rows.push({
+      rowIndex,
+      bottomUpLevel: rowIndex + 2,
+      row,
+      isCandidate: Boolean(candidateResult),
+      detectionMethod: groupLevel ? groupLevel.detectionMethod : null,
+      isTechnicalWaveDescriptor,
+      spanCount: spans.length,
+      groupCount: labeledSpans.length,
+      score: groupLevel ? (isTechnicalWaveDescriptor ? 0 : 1) : null,
+      sampleSpans: labeledSpans.slice(0, 20).map((span) => ({
+        label: span.label,
+        startColumnIndex: span.startColumnIndex,
+        endColumnIndex: span.endColumnIndex,
+        columnIndexes: span.columnIndexes,
+      })),
+      messageCode: candidateResult && candidateResult.message ? candidateResult.message.code : null,
+    });
+  }
+
+  const selectedCandidate = candidates.length > 0 ? selectBestGroupLevelCandidate(candidates) : null;
+  const selectedGroupLevel = selectedCandidate ? selectedCandidate.groupLevel : null;
+
+  return {
+    selectedColumnCount,
+    lowerBannerRow,
+    upperScanRows,
+    upperScanRowsByBottomUpLevel: upperScanRows.map((row, index) => ({
+      level: index + 2,
+      row,
+    })),
+    candidateRows: rows,
+    selectedCandidate: selectedGroupLevel
+      ? {
+          bottomUpLevel: Math.abs(selectedGroupLevel.rowOffset) + 1,
+          rowOffset: selectedGroupLevel.rowOffset,
+          detectionMethod: selectedGroupLevel.detectionMethod,
+          isTechnicalWaveDescriptor: isTechnicalWaveDescriptorGroupLevel(selectedGroupLevel),
+          spanCount: selectedGroupLevel.spans ? selectedGroupLevel.spans.length : 0,
+          sampleSpans: (selectedGroupLevel.spans || []).slice(0, 20).map((span) => ({
+            label: span.label,
+            startColumnIndex: span.startColumnIndex,
+            endColumnIndex: span.endColumnIndex,
+            columnIndexes: span.columnIndexes,
+          })),
+        }
+      : null,
+  };
+}
+
+/**
  * Detects merged-like group level from upper row.
  *
  * Pattern:
@@ -449,7 +734,16 @@ function detectReconstructedSpanGroupLevel(
   selectedColumnCount,
   rowIndex
 ) {
-  const spans = buildReconstructedSpansFromUpperRow(upperRow, lowerBannerRow, selectedColumnCount);
+  const rawSpans = buildReconstructedSpansFromUpperRow(upperRow, lowerBannerRow, selectedColumnCount);
+
+  // Merge consecutive adjacent single-column wave-value spans whose lower-
+  // banner cell is blank.  Without this, quarter labels like "2025Q4" / "2026Q1"
+  // that appear without an explicit parent-group label (e.g., when the label
+  // column was stripped from a partial selection) each create a separate
+  // one-column group, which makes both data columns receive local label "a".
+  // After merging, the run forms one multi-column span whose columns get "a"
+  // and "b" respectively.
+  const spans = mergeAdjacentWaveValueSpans(rawSpans, lowerBannerRow);
 
   const meaningfulSpans = spans.filter((span) => span.label && span.columnIndexes.length >= 2);
 
@@ -675,6 +969,117 @@ function buildGroupKey(groupLabel, span) {
     span.startColumnIndex,
     span.endColumnIndex,
   ].join(":");
+}
+
+function buildHierarchicalGroupKey(groupEntries) {
+  if (!groupEntries || groupEntries.length === 0) {
+    return DEFAULT_GROUP_KEY;
+  }
+
+  return `group:${groupEntries
+    .map((entry) => {
+      const span = entry.span || {};
+
+      return [
+        entry.normalizedLabel || "unknown",
+        entry.rowOffset,
+        span.startColumnIndex ?? "unknown",
+        span.endColumnIndex ?? "unknown",
+      ].join(":");
+    })
+    .join(">")}`;
+}
+
+/**
+ * Merges consecutive adjacent single-column wave-value spans that have an
+ * empty lower-banner cell into a single multi-column span.
+ *
+ * PURPOSE:
+ * When a wave pair (e.g. "2025Q4" / "2026Q1") appears at the start of a
+ * stripped partial-selection banner without an explicit parent-group label,
+ * the upper scan row contains the quarter labels as consecutive single-column
+ * spans with blank lower-banner cells beneath them.
+ *
+ * Without merging, each column gets its own group key and is separately
+ * assigned local label "a", producing duplicate markers.  After merging, the
+ * run forms one multi-column span so its columns receive distinct labels
+ * ("a" and "b") exactly as wave pairs under an explicit "Волна (квартал)"
+ * parent do.
+ *
+ * RULE: a run is merged when every span in the run satisfies all of:
+ *   - exactly 1 column;
+ *   - label is a technical wave value label (e.g. "2025Q4", "2026Q1");
+ *   - the lower-banner cell at that column is blank;
+ *   - the span is immediately adjacent (no gap) to the previous one in the run.
+ * Runs of length 1 are left unchanged so the existing
+ * `hasMergedDownSingleColumnSpan` guard can still handle them.
+ */
+function mergeAdjacentWaveValueSpans(spans, lowerBannerRow) {
+  if (!spans || spans.length === 0) {
+    return spans;
+  }
+
+  const result = [];
+  let i = 0;
+
+  while (i < spans.length) {
+    const span = spans[i];
+
+    const isWaveValueSingleColBlankLower =
+      span.columnIndexes.length === 1 &&
+      isTechnicalWaveOrValueLabel(span.label) &&
+      !normalizeRawBannerCellValue((lowerBannerRow || [])[span.startColumnIndex]);
+
+    if (!isWaveValueSingleColBlankLower) {
+      result.push(span);
+      i++;
+      continue;
+    }
+
+    // Collect the full run of adjacent wave-value single-column spans.
+    const runSpans = [span];
+    let j = i + 1;
+
+    while (j < spans.length) {
+      const next = spans[j];
+
+      const nextIsWaveValueSingleColBlankLower =
+        next.columnIndexes.length === 1 &&
+        isTechnicalWaveOrValueLabel(next.label) &&
+        !normalizeRawBannerCellValue((lowerBannerRow || [])[next.startColumnIndex]);
+
+      const isAdjacent =
+        next.startColumnIndex === runSpans[runSpans.length - 1].startColumnIndex + 1;
+
+      if (!nextIsWaveValueSingleColBlankLower || !isAdjacent) {
+        break;
+      }
+
+      runSpans.push(next);
+      j++;
+    }
+
+    if (runSpans.length === 1) {
+      // Single span — keep as-is so hasMergedDownSingleColumnSpan can handle it.
+      result.push(span);
+    } else {
+      // Merge the run into one multi-column span.  Use the first span's label
+      // (position-based group key makes each merged run unique regardless of
+      // label choice; the label only affects the comparisonGroupLabel display).
+      const merged = {
+        label: runSpans[0].label,
+        normalizedLabel: runSpans[0].normalizedLabel,
+        startColumnIndex: runSpans[0].startColumnIndex,
+        endColumnIndex: runSpans[runSpans.length - 1].endColumnIndex,
+        columnIndexes: runSpans.flatMap((s) => s.columnIndexes),
+      };
+      result.push(merged);
+    }
+
+    i = j;
+  }
+
+  return result;
 }
 
 /**
@@ -1009,20 +1414,20 @@ function markGlobalTotalColumn(columnDescriptors, globalTotalColumnIndex) {
   descriptor.isLocalTotal = false;
 }
 
-function selectBestGroupLevelCandidate(candidates) {
-  const firstCandidate = candidates[0];
-
-  if (!isTechnicalWaveDescriptorGroupLevel(firstCandidate.groupLevel)) {
-    return firstCandidate;
-  }
-
-  const semanticCandidate = candidates.find(
-    (candidate) => !isTechnicalWaveDescriptorGroupLevel(candidate.groupLevel)
-  );
-
-  return semanticCandidate || firstCandidate;
-}
-
+/**
+ * Detects which comparison-group keys host a nested/repeated wave dimension
+ * inside the group rather than at the parent group label.
+ *
+ * Two signals promote a group to wave-aware:
+ * - lower banner labels in the group's columns look like concrete wave values
+ *   (e.g. 2025Q4, 2026Q1) for at least two columns;
+ * - any upper banner row other than the chosen group level row contains a
+ *   wave / period / quarter descriptor label (e.g. "Волна (квартал)") for at
+ *   least two of the group's columns.
+ *
+ * Single-column groups are never promoted because previous-column wave
+ * comparison only makes sense across two or more adjacent wave columns.
+ */
 function detectGroupKeysWithNestedWaveDimension({
   columnDescriptors,
   lowerBannerRow,
@@ -1200,6 +1605,11 @@ function isWaveGroupLabel(rawLabel) {
   );
 }
 
+/**
+ * Returns true when a detected group level is dominated by technical wave /
+ * period labels, not the semantic grouping row users expect comparisons to
+ * follow.
+ */
 function isTechnicalWaveDescriptorGroupLevel(groupLevel) {
   if (!groupLevel || !groupLevel.spans || groupLevel.spans.length === 0) {
     return false;
@@ -1218,10 +1628,17 @@ function isTechnicalWaveDescriptorGroupLevel(groupLevel) {
   return technicalWaveSpanCount / labeledSpans.length >= TECHNICAL_WAVE_LABEL_DOMINANCE_THRESHOLD;
 }
 
+/**
+ * Returns true if a label is either a generic wave descriptor or a concrete
+ * wave / quarter value.
+ */
 function isTechnicalWaveOrValueLabel(rawLabel) {
   return isTechnicalWaveDescriptorLabel(rawLabel) || isTechnicalWaveValueLabel(rawLabel);
 }
 
+/**
+ * Returns true if a label is a generic wave/period/quarter descriptor.
+ */
 function isTechnicalWaveDescriptorLabel(rawLabel) {
   const normalizedLabel = normalizeBannerLabel(rawLabel);
 
@@ -1242,6 +1659,9 @@ function isTechnicalWaveDescriptorLabel(rawLabel) {
   });
 }
 
+/**
+ * Returns true if a label looks like a concrete wave / quarter value.
+ */
 function isTechnicalWaveValueLabel(rawLabel) {
   const normalizedLabel = normalizeBannerLabel(rawLabel);
 

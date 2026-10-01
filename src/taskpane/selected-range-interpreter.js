@@ -1,4 +1,4 @@
-﻿/* global Excel */
+/* global Excel */
 
 /**
  * Excel/taskpane adapter for selected-range interpretation.
@@ -13,9 +13,13 @@
  * Office.js context for loading labels and banner rows from the sheet.
  */
 
-import { removeSignificanceMarkersFromMatrix, generateSignificanceLabels } from "../core/significance";
+import {
+  removeSignificanceMarkersFromMatrix,
+  isSignificanceMarkerLabel,
+} from "../core/significance";
 import { LABEL_SCAN_COLUMNS_LEFT } from "../core/metric-detector";
 import { normalizeSelectedRange } from "../core/range-normalizer";
+import { resolveAdjacentLabelColumnCount } from "../core/design-recolor";
 
 const SELECTED_RANGE_GUARDRAIL_WARNING_TEXT =
   "Похоже, вы выделили лейблы строк или шапку вместе с данными. Сейчас RIT ожидает выделение только числовой части таблицы.";
@@ -339,6 +343,132 @@ export function detectLeadingEmptyColumns(selectedText) {
   return emptyCols;
 }
 
+/**
+ * Resolves the selected-range sub-rectangle Clear should mutate.
+ *
+ * Pure geometry helper shared by manual Clear and auto Clear. It mirrors the
+ * current Clear behavior:
+ * - marker-strip values before selected-range normalization;
+ * - block unsafe broad selections before any writes;
+ * - for normalized full-table selections, target only the resolved data body;
+ * - apply the secondary embedded-label-column strip when the normalizer leaves
+ *   mixed label/data column 0 inside the body;
+ * - apply the leading-empty structural column strip where Clear already does;
+ * - keep strict numeric selections as pass-through.
+ *
+ * @param {Object} input
+ * @param {Array<Array<*>>} input.values Excel range values.
+ * @param {Array<Array<string>>} input.text Excel range display text.
+ * @returns {Object} Pure target result.
+ *   state: "passThrough" | "normalized" | "blocked" | "empty"
+ *   rowOffset/colOffset: relative start within the original selected range
+ *   rowCount/colCount: target body dimensions
+ *   usesFullSelection: true when callers can reuse the original range object
+ *   cleanedValues: marker-stripped values used for normalization
+ *   normalized: raw normalizeSelectedRange result
+ *   blockingMessage/blockingReasons: populated when state is "blocked"
+ */
+export function resolveClearTargetBodyRange({ values, text }) {
+  const cleanedValues = removeSignificanceMarkersFromMatrix(values);
+  const normalized = normalizeSelectedRange(cleanedValues, text);
+
+  if (normalized.normalizationNeeded && !normalized.normalizationApplied) {
+    return {
+      state: "blocked",
+      rowOffset: 0,
+      colOffset: 0,
+      rowCount: 0,
+      colCount: 0,
+      usesFullSelection: false,
+      cleanedValues,
+      normalized,
+      blockingMessage: normalized.blockingMessage,
+      blockingReasons: normalized.blockingReasons,
+    };
+  }
+
+  if (normalized.normalizationNeeded && normalized.normalizationApplied) {
+    const bodyRowCount = normalized.valuesForCalculation.length;
+    let bodyColCount = normalized.valuesForCalculation[0].length;
+    let effectiveClearColOffset = normalized.dataColOffset;
+    let textForLeadingEmptyCheck = normalized.textForCalculation;
+    let embeddedLabelColumnCount = 0;
+    let leadingEmptyColumnCount = 0;
+
+    if (normalized.dataColOffset === 0) {
+      embeddedLabelColumnCount = detectEmbeddedLabelColumns(normalized.valuesForCalculation);
+      if (embeddedLabelColumnCount > 0) {
+        effectiveClearColOffset += embeddedLabelColumnCount;
+        bodyColCount -= embeddedLabelColumnCount;
+        textForLeadingEmptyCheck = normalized.textForCalculation.map((row) =>
+          row.slice(embeddedLabelColumnCount)
+        );
+      }
+    }
+
+    leadingEmptyColumnCount = detectLeadingEmptyColumns(textForLeadingEmptyCheck);
+    if (leadingEmptyColumnCount > 0) {
+      bodyColCount -= leadingEmptyColumnCount;
+      effectiveClearColOffset += leadingEmptyColumnCount;
+    }
+
+    if (bodyRowCount < 1 || bodyColCount < 1) {
+      return {
+        state: "empty",
+        rowOffset: normalized.dataRowOffset,
+        colOffset: effectiveClearColOffset,
+        rowCount: bodyRowCount,
+        colCount: bodyColCount,
+        usesFullSelection: false,
+        cleanedValues,
+        normalized,
+        blockingMessage: "",
+        blockingReasons: [],
+        embeddedLabelColumnCount,
+        leadingEmptyColumnCount,
+      };
+    }
+
+    return {
+      state: "normalized",
+      rowOffset: normalized.dataRowOffset,
+      colOffset: effectiveClearColOffset,
+      rowCount: bodyRowCount,
+      colCount: bodyColCount,
+      usesFullSelection: false,
+      cleanedValues,
+      normalized,
+      blockingMessage: "",
+      blockingReasons: [],
+      embeddedLabelColumnCount,
+      leadingEmptyColumnCount,
+    };
+  }
+
+  const rowCount = Array.isArray(values) ? values.length : 0;
+  const colCount = rowCount > 0 && Array.isArray(values[0]) ? values[0].length : 0;
+  const embeddedLabelColumnCount = detectEmbeddedLabelColumns(cleanedValues);
+  const leadingEmptyColumnCount =
+    embeddedLabelColumnCount === 0 ? detectLeadingEmptyColumns(text) : 0;
+  const skipLeftCols =
+    embeddedLabelColumnCount > 0 ? embeddedLabelColumnCount : leadingEmptyColumnCount;
+
+  return {
+    state: "passThrough",
+    rowOffset: 0,
+    colOffset: skipLeftCols,
+    rowCount,
+    colCount: colCount - skipLeftCols,
+    usesFullSelection: skipLeftCols === 0,
+    cleanedValues,
+    normalized,
+    blockingMessage: "",
+    blockingReasons: [],
+    embeddedLabelColumnCount,
+    leadingEmptyColumnCount,
+  };
+}
+
 // ─── Banner context adapter ────────────────────────────────────────────────────
 
 /**
@@ -382,12 +512,11 @@ function buildRunBannerContext(bannerContext) {
  */
 function stripAllTrailingBannerMarkersFromCell(rawText) {
   if (rawText === null || rawText === undefined) return "";
-  const labels = generateSignificanceLabels();
   let result = String(rawText);
   for (;;) {
     const match = result.match(/(^|\s)\(([^()]*)\)\s*$/);
     if (!match) break;
-    if (!labels.includes(match[2])) break;
+    if (!isSignificanceMarkerLabel(match[2])) break;
     result = result.slice(0, match.index).trim();
   }
   return result;
@@ -651,6 +780,9 @@ export async function interpretSelectedRange(
       dataColOffset: 0,
       dataRowCount: 0,
       dataColCount: 0,
+      // Design-recolor geometry (issue #306): nothing safe to recolor when blocked.
+      adjacentLabelColumnCount: 0,
+      bannerRowsAboveData: 0,
       normalizationStatusLines: [],
       selectedRangeGuardrailWarnings: [],
       blockingMessage: normalized.blockingMessage,
@@ -827,6 +959,24 @@ export async function interpretSelectedRange(
       dataColOffset: effectiveDataColOffset,
       dataRowCount: valuesForCalculation.length,
       dataColCount: valuesForCalculation[0].length,
+      // Design-recolor / Check label geometry (issue #306). In a normalized
+      // selection every column left of the data body is label/structure, so the
+      // adjacent label AREA width is the data column offset — this keeps merged /
+      // left-stored two-column label headers (e.g. Mean + SD/Variance + Base)
+      // whose data-adjacent label column is blank from collapsing to one column.
+      // A stripped leading-empty column is therefore part of that area, not a gap;
+      // real gaps (labelsOnLeftSide) are still excluded by the shared resolver.
+      adjacentLabelColumnCount: resolveAdjacentLabelColumnCount({
+        state: "normalized",
+        labelsOnLeftSide: calculationSettings.labelsOnLeftSide,
+        dataColumnOffset: effectiveDataColOffset,
+        leftLabelValues,
+      }),
+      // Banner band the normalizer identified directly above the data body. This
+      // excludes title/subtitle rows, which are tracked separately.
+      bannerRowsAboveData: Array.isArray(normalized.bannerRows)
+        ? normalized.bannerRows.length
+        : 0,
       normalizationStatusLines: [
         "Диапазон нормализован: расчёт выполнен только по области данных.",
       ],
@@ -932,6 +1082,21 @@ export async function interpretSelectedRange(
     dataColOffset: embeddedLabelCols > 0 ? embeddedLabelCols : leadingEmptyCols,
     dataRowCount: valuesForCalculation.length,
     dataColCount,
+    // Design-recolor / Check label geometry (issue #306). leftLabelValues sit
+    // immediately left of the data body for embedded/external labels, so the
+    // shared resolver counts the adjacent label area (right-blank two-column
+    // layouts included). A stripped leading empty column means the externally
+    // loaded labels are separated from the data by a real gap — force 0.
+    adjacentLabelColumnCount: resolveAdjacentLabelColumnCount({
+      state: "passThrough",
+      labelsOnLeftSide: calculationSettings.labelsOnLeftSide,
+      leadingEmptyColumns: leadingEmptyCols,
+      leftLabelValues,
+    }),
+    // In pass-through the selection is the data body itself; any banner sits
+    // above the selection in the sheet, not inside it. The run flow recolors the
+    // single header row directly above the data body for this case.
+    bannerRowsAboveData: 0,
     normalizationStatusLines: [],
     selectedRangeGuardrailWarnings,
     blockingMessage: "",

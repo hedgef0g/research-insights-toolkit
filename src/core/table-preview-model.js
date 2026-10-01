@@ -22,6 +22,7 @@
 import {
   detectMetricRowsFromLeftLabels,
   buildCalculationBlocks,
+  classifyMetricLabel,
   normalizeLabelText,
 } from "./metric-detector";
 
@@ -34,6 +35,66 @@ import { normalizeShare, normalizeNpsValue } from "./normalizers";
 const NPS_MISMATCH_ROUNDING_TOLERANCE = 0.02;
 // Differences above this threshold are elevated from warning to critical.
 const NPS_MISMATCH_CRITICAL_THRESHOLD = 0.05;
+
+// All-100 row detection thresholds.
+const ALL_100_MIN_COLUMNS = 2;
+const ALL_100_MIN_FRACTION = 0.8;
+
+// Row types recognized as metric/service rows — exempt from the all-100 check.
+const METRIC_SERVICE_ROW_TYPES = new Set([
+  "base",
+  "nps",
+  "npsScore",
+  "mean",
+  "sd",
+  "standardDeviation",
+  "variance",
+]);
+
+// Spreadsheet formula errors and programming error strings that must not appear as
+// client-facing row labels.
+const ERROR_LABEL_PATTERNS = [
+  /^#(N\/A|VALUE!|REF!|DIV\/0!|NUM!|NAME\?|NULL!|GETTING_DATA)$/i,
+  /\bnull\b/i,
+  /\bnan\b/i,
+  /\bundefined\b/i,
+  /\[object\s+object\]/i,
+];
+
+// Placeholder and test-row keywords (English and Russian).
+//
+// "test" and "тест" are restricted to start-of-string to avoid false positives
+// on legitimate research concepts such as "Concept Test" or "Product Test".
+// "тестовая" is matched only when followed by "строка" (with space/dash/underscore)
+// to avoid flagging valid labels like "Тестовая концепция" or "Тестовая упаковка".
+// Cyrillic patterns use start-of-string anchors instead of \b because JavaScript
+// \b is ASCII-only and does not form word boundaries around Cyrillic characters.
+const PLACEHOLDER_LABEL_PATTERNS = [
+  /\btodo\b/i,
+  /\btbd\b/i,
+  /^test(?:[\s\-_]|$)/i,
+  /\bdummy\b/i,
+  /\bplaceholder\b/i,
+  /\btemp\b/i,
+  /\bdelete\b/i,
+  /\bremove\b/i,
+  /\bignore\b/i,
+  /\bxxx\b/i,
+  /\basdf\b/i,
+  /\bqwerty\b/i,
+  /lorem\s+ipsum/i,
+  /^тест(?:[\s\-_]|$)/i,
+  /^тестовая[\s\-_]строка/i,
+  /^удалить(?:[\s\-_]|$)/i,
+  /^не\s+использовать(?:[\s\-_]|$)/i,
+  /^заглушка(?:[\s\-_]|$)/i,
+  /^временно(?:[\s\-_]|$)/i,
+  /^черновик(?:[\s\-_]|$)/i,
+];
+
+const PREVIEW_NUMERIC_CELL_RE = /^[+-]?(\d+([.,]\d*)?|\d*[.,]\d+)%?$/;
+const PREVIEW_NUMERIC_WITH_MARKER_SUFFIX_RE =
+  /^([+-]?(\d+([.,]\d*)?|\d*[.,]\d+)%?)(\s+[\p{L}↑↓]+)+$/u;
 
 // ─── Main export ───────────────────────────────────────────────────────────
 
@@ -49,7 +110,7 @@ const NPS_MISMATCH_CRITICAL_THRESHOLD = 0.05;
  * @returns {object} Preview model — plain JSON-compatible object.
  */
 export function buildTablePreviewModel(input) {
-  const { values, leftLabelValues, bannerContext, settings } = input || {};
+  const { values, leftLabelValues, bannerContext, settings, trailingBodyRows } = input || {};
 
   const safeValues = Array.isArray(values) ? values : [];
   const safeLeft = Array.isArray(leftLabelValues) ? leftLabelValues : [];
@@ -63,18 +124,36 @@ export function buildTablePreviewModel(input) {
 
   // Enrich outputs for the preview layer.
   const rawRowDiagnostics = detectionResult?.rowDiagnostics || [];
-  const rawBlocks = buildCalculationBlocks(detectionResult);
+  const rawBlocks = buildCalculationBlocks(detectionResult, { preferredBase: safeSettings.preferredBase || "auto" });
   const rowDiagnostics = buildPreviewRowDiagnostics(rawRowDiagnostics, safeLeft);
-  const calculationBlocks = buildPreviewBlocks(rawBlocks, rawRowDiagnostics);
+  const calculationBlocks = buildPreviewBlocks(rawBlocks, rawRowDiagnostics, safeValues);
+  enrichBlocksWithBaseSelection(calculationBlocks, rowDiagnostics);
 
   // Data quality analysis.
   const dataQualityIssues = [
     ...checkNumericLikeLabels(rowDiagnostics),
+    ...checkSuspiciousNumericLabels(rowDiagnostics),
+    ...checkSuspiciousAll100Rows(safeValues, rowDiagnostics),
+    ...checkMissingRowLabelWithData(safeValues, rowDiagnostics),
+    ...checkSuspiciousErrorLabels(rowDiagnostics),
+    ...checkSuspiciousPlaceholderLabels(rowDiagnostics),
+    ...checkSuspiciousCodeLikeLabels(rowDiagnostics),
     ...checkBaseConsistency(safeValues, calculationBlocks, bannerStructure),
     ...checkNpsMismatch(safeValues, calculationBlocks),
+    ...checkWeightedBaseFallback(calculationBlocks),
+    // Inspect rawBlocks so that the preferred-base check covers blocks whose
+    // base row was dropped by blockHasPreviewEvidence.
+    ...checkPreferredBaseNotFound(rawBlocks, safeSettings),
+    // Inspect rawBlocks (pre-filter) so that blank/non-numeric base rows are
+    // flagged even when blockHasPreviewEvidence later drops the block from
+    // calculationBlocks.  Deduplication by base row index is done inside.
+    // trailingBodyRows covers base rows the normalizer stripped entirely because
+    // their data was all-blank — they never appear in rawBlocks at all.
+    ...checkSelectedBaseValidity(safeValues, rawBlocks, safeSettings, trailingBodyRows),
   ];
 
   const qualitySummary = buildQualitySummary(dataQualityIssues);
+  const userVisibleIssues = buildUserVisibleIssues(dataQualityIssues);
   const summary = buildSummary(safeValues, rowDiagnostics, calculationBlocks, bannerStructure);
 
   // Flat warnings array — a convenience alias for UI compatibility.
@@ -92,6 +171,7 @@ export function buildTablePreviewModel(input) {
     bannerStructure,
     dataQualityIssues,
     qualitySummary,
+    userVisibleIssues,
     summary,
     warnings,
   };
@@ -116,7 +196,7 @@ function buildBannerPreview(bannerContext, settings) {
     };
   }
 
-  const detected = detectBannerStructure(bannerContext, settings);
+  const detected = detectBannerStructure(adaptBannerContextForDetection(bannerContext), settings);
 
   return {
     isEnabled,
@@ -131,6 +211,37 @@ function buildBannerPreview(bannerContext, settings) {
   };
 }
 
+// Accept both normalizer-style banner context ({ scanRows, columnCount })
+// and detector-style banner context ({ selectedColumnCount, lowerBannerRow, upperScanRows }).
+function adaptBannerContextForDetection(bannerContext) {
+  if (!bannerContext) {
+    return null;
+  }
+
+  if (bannerContext.selectedColumnCount !== undefined) {
+    return bannerContext;
+  }
+
+  const scanRows = Array.isArray(bannerContext.scanRows) ? bannerContext.scanRows : [];
+  const selectedColumnCount = bannerContext.columnCount || 0;
+
+  if (!selectedColumnCount || scanRows.length === 0) {
+    return {
+      selectedColumnCount,
+      lowerBannerRow: [],
+      upperScanRows: [],
+      messages: bannerContext.messages || [],
+    };
+  }
+
+  return {
+    selectedColumnCount,
+    lowerBannerRow: scanRows[scanRows.length - 1],
+    upperScanRows: scanRows.slice(0, -1).reverse(),
+    messages: bannerContext.messages || [],
+  };
+}
+
 // ─── Row diagnostics ───────────────────────────────────────────────────────
 
 function buildPreviewRowDiagnostics(rawDiagnostics, leftLabelValues) {
@@ -138,8 +249,15 @@ function buildPreviewRowDiagnostics(rawDiagnostics, leftLabelValues) {
     const leftRow = leftLabelValues[diag.rowIndex] || [];
     const labelParts = extractLabelPartsFromRow(leftRow);
 
-    // Rightmost part is closest to the data column and treated as the primary label.
-    const primaryLabel = labelParts.length > 0 ? labelParts[labelParts.length - 1] : "";
+    // Rightmost meaningful part (non-symbol-only) is closest to the data column
+    // and treated as the primary label. Symbol-only trailing parts like "%" are
+    // skipped so a unit column never shadows the real descriptive label.
+    // Falls back to the actual rightmost part when all parts are symbol-only.
+    const primaryLabel =
+      labelParts.length > 0
+        ? ([...labelParts].reverse().find((p) => !isEmptyOrSymbolOnlyLabel(p)) ||
+            labelParts[labelParts.length - 1])
+        : "";
     const secondaryLabel = labelParts.length > 1 ? labelParts[labelParts.length - 2] : null;
     // Future: combinedLabel may join hierarchical parts (e.g. "Gender / Male").
     const combinedLabel = labelParts.length > 1 ? labelParts.join(" / ") : primaryLabel;
@@ -158,8 +276,8 @@ function buildPreviewRowDiagnostics(rawDiagnostics, leftLabelValues) {
 
       // Classification.
       rowType: diag.rowType,
-      // rowSubtype is reserved for future weighted/unweighted/effective base variants.
-      rowSubtype: null,
+      // rowSubtype carries base variant for base rows (effective/unweighted/weighted); null otherwise.
+      rowSubtype: diag.baseSubtype ?? null,
       confidence: inferRowTypeConfidence(diag.rowType),
       notes: [],
     };
@@ -191,10 +309,123 @@ function inferRowTypeConfidence(rowType) {
 
 // ─── Calculation blocks ────────────────────────────────────────────────────
 
-function buildPreviewBlocks(rawBlocks, rowDiagnostics) {
-  const blocks = (rawBlocks || []).map(normalizeBlockShape);
+function buildPreviewBlocks(rawBlocks, rowDiagnostics, values) {
+  const blocks = (rawBlocks || [])
+    .map(normalizeBlockShape)
+    .filter((block) => blockHasPreviewEvidence(block, rowDiagnostics, values));
   enrichNpsBlocksWithNeutralRow(blocks);
   return blocks;
+}
+
+function blockHasPreviewEvidence(block, rowDiagnostics, values) {
+  const valueRowIndexes = Array.isArray(block.valueRowIndexes) ? block.valueRowIndexes : [];
+
+  switch (block.metricType) {
+    case "proportion":
+      if (valueRowIndexes.length === 0) return false;
+      if (!valueRowIndexes.some((rowIndex) => rowHasNumericEvidence(values, rowIndex))) return false;
+      if (!rowHasNumericEvidence(values, block.baseRowIndex)) return false;
+      if (isFallbackOnlyUnknownBlock(block, rowDiagnostics) && !hasNonHeaderLikeValueLabel(block, rowDiagnostics)) {
+        return false;
+      }
+      return true;
+
+    case "mean":
+      return (
+        rowHasNumericEvidence(values, block.valueRowIndex) &&
+        rowHasNumericEvidence(values, block.baseRowIndex)
+      );
+
+    case "npsStructure":
+      return (
+        rowHasNumericEvidence(values, block.valueRowIndex) &&
+        rowHasNumericEvidence(values, block.promotersRowIndex) &&
+        rowHasNumericEvidence(values, block.detractorsRowIndex) &&
+        rowHasNumericEvidence(values, block.baseRowIndex)
+      );
+
+    case "npsSpread":
+      return (
+        rowHasNumericEvidence(values, block.valueRowIndex) &&
+        (rowHasNumericEvidence(values, block.sdRowIndex) ||
+          rowHasNumericEvidence(values, block.varianceRowIndex)) &&
+        rowHasNumericEvidence(values, block.baseRowIndex)
+      );
+
+    default:
+      return false;
+  }
+}
+
+function rowHasNumericEvidence(values, rowIndex) {
+  if (rowIndex === null || rowIndex === undefined) return false;
+  const row = Array.isArray(values) ? values[rowIndex] : null;
+  if (!Array.isArray(row)) return false;
+  return row.some((cell) => isPreviewNumericCellValue(cell));
+}
+
+function isFallbackOnlyUnknownBlock(block, rowDiagnostics) {
+  if (block.metricType !== "proportion") return false;
+
+  const rowIndexes = [...(block.valueRowIndexes || []), block.baseRowIndex].filter(
+    (rowIndex) => rowIndex !== null && rowIndex !== undefined
+  );
+
+  if (rowIndexes.length < 2) return false;
+
+  return rowIndexes.every((rowIndex) => {
+    const rowType = rowDiagnostics[rowIndex]?.rowType;
+    return rowType === "unknownText" || rowType === "empty";
+  });
+}
+
+function hasNonHeaderLikeValueLabel(block, rowDiagnostics) {
+  return (block.valueRowIndexes || []).some((rowIndex) => {
+    const row = rowDiagnostics[rowIndex];
+    const label = row?.primaryLabel || row?.label || "";
+    return !!label && !looksLikePreviewHeaderLabel(label);
+  });
+}
+
+function looksLikePreviewHeaderLabel(label) {
+  const text = String(label || "").trim();
+  if (!text) return true;
+
+  const normalized = normalizeLabelText(text);
+  if (!normalized) return true;
+
+  if (
+    normalized.includes("wave") ||
+    normalized.includes("quarter") ||
+    normalized.includes("period") ||
+    normalized.includes("volna") ||
+    normalized.includes("kvartal") ||
+    normalized.includes("period")
+  ) {
+    return true;
+  }
+
+  return /^(\d{4}q[1-4]|q[1-4]\d{4})$/i.test(normalized);
+}
+
+function isPreviewNumericCellValue(cell) {
+  if (typeof cell === "number") {
+    return !Number.isNaN(cell);
+  }
+
+  if (typeof cell !== "string") {
+    return false;
+  }
+
+  const trimmed = cell.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  return (
+    PREVIEW_NUMERIC_CELL_RE.test(trimmed) ||
+    PREVIEW_NUMERIC_WITH_MARKER_SUFFIX_RE.test(trimmed)
+  );
 }
 
 /**
@@ -209,6 +440,8 @@ function normalizeBlockShape(block) {
     valueRowIndexes: null,
     valueRowIndex: null,
     baseRowIndex: block.baseRowIndex ?? null,
+    baseSubtype: block.baseSubtype ?? null,
+    baseSelection: null,
     promotersRowIndex: null,
     detractorsRowIndex: null,
     neutralRowIndex: null,
@@ -298,27 +531,58 @@ function enrichNpsBlocksWithNeutralRow(previewBlocks) {
   }
 }
 
+/**
+ * Fills in baseSelection on each block using the enriched preview row diagnostics
+ * (which carry primaryLabel and other label metadata).
+ *
+ * Mutates blocks in place. Called after buildPreviewRowDiagnostics and buildPreviewBlocks.
+ */
+function enrichBlocksWithBaseSelection(blocks, previewRowDiagnostics) {
+  for (const block of blocks) {
+    if (block.baseRowIndex === null) {
+      block.baseSelection = null;
+      continue;
+    }
+    const baseDiag = previewRowDiagnostics[block.baseRowIndex];
+    const selectedBaseLabel = baseDiag
+      ? (baseDiag.primaryLabel || baseDiag.label || null)
+      : null;
+    block.baseSelection = {
+      selectedBaseRowIndex: block.baseRowIndex,
+      selectedBaseSubtype: block.baseSubtype,
+      selectedBaseLabel,
+      isWeightedFallback: block.baseSubtype === "weighted",
+    };
+  }
+}
+
 // ─── Data quality checks ───────────────────────────────────────────────────
 
 /**
- * Flags row labels that look purely numeric or like numeric ranges and were not
- * classified as a known metric type.
+ * Flags row labels that look like a numeric range and were not classified as a
+ * known metric type.
  *
- * Note: numeric labels can be valid in NPS 1–10 scales, age groups (18–24),
- * or wave numbers. This check produces warnings, not errors.
+ * Ordered category blocks (e.g. "20-29" / "30-39" / "40-49") are suppressed:
+ * when at least one neighbor within ±2 rows also has a range-like label the
+ * row is treated as part of a category block and no warning is emitted.
+ *
+ * Note: isolated range labels can still be valid for NPS scale rows or wave
+ * labels — this check produces warnings, not errors.
  */
 function checkNumericLikeLabels(rowDiagnostics) {
   const issues = [];
 
-  for (const row of rowDiagnostics) {
+  for (let i = 0; i < rowDiagnostics.length; i++) {
+    const row = rowDiagnostics[i];
     if (!row.label) continue;
     if (row.rowType !== "unknownText" && row.rowType !== "empty") continue;
-    if (!looksNumericOrRange(row.label)) continue;
+    if (!looksLikeNumericRange(row.label)) continue;
+    if (isInNumericRangeCategoryBlock(rowDiagnostics, i)) continue;
 
     issues.push({
       code: "NUMERIC_LIKE_LABEL",
       severity: "warning",
-      message: `Row ${row.rowIndex + 1}: label "${row.label}" looks numeric but was not matched to a known metric type. May be valid for NPS scales, age groups, or wave numbers.`,
+      message: `Row ${row.rowIndex + 1}: label "${row.label}" looks like a numeric range but was not matched to a known metric type. May be valid for NPS scales, age groups, or wave numbers.`,
       rowIndex: row.rowIndex,
       columnIndex: null,
       relatedRowIndexes: [],
@@ -330,12 +594,339 @@ function checkNumericLikeLabels(rowDiagnostics) {
   return issues;
 }
 
-/** Returns true for purely numeric labels and simple numeric ranges (e.g. "1", "18–24"). */
-function looksNumericOrRange(label) {
+/**
+ * Flags row labels that look like a single numeric value (integer or decimal)
+ * on rows that are not recognized service/metric types.
+ *
+ * Examples: "42", "3.5", "61,00" — may be uncoded values or export artifacts.
+ * Fires for any non-service row type including "proportion", because the metric
+ * detector may classify unknown rows as proportion rows by default.
+ *
+ * Does not fire when the row sits within a numeric category block — i.e. when
+ * nearby rows also carry numeric range or single-numeric category labels
+ * (NPS/rating scales such as 1 / 2 / 3 / 4 are suppressed this way).
+ */
+function checkSuspiciousNumericLabels(rowDiagnostics) {
+  const issues = [];
+
+  for (let i = 0; i < rowDiagnostics.length; i++) {
+    const row = rowDiagnostics[i];
+    if (!row.label) continue;
+    if (row.rowType === "empty") continue;
+    if (METRIC_SERVICE_ROW_TYPES.has(row.rowType)) continue;
+    if (!looksLikeSingleNumericValue(row.label)) continue;
+    if (isInNumericRangeCategoryBlock(rowDiagnostics, i)) continue;
+
+    issues.push({
+      code: "SUSPICIOUS_NUMERIC_LABEL",
+      severity: "warning",
+      message: `Row ${row.rowIndex + 1}: label "${row.label}" looks like a numeric value and may be an uncoded value or export/labeling issue.`,
+      rowIndex: row.rowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: { label: row.label, rowType: row.rowType },
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Flags rows where all or most non-empty numeric cells are 100% or equivalent,
+ * unless the row is a recognized metric/service row type.
+ *
+ * Uses cellLooksLike100Percent() so that percent-string cells ("100%", "1%")
+ * are evaluated in their display scale, not converted to a bare number first.
+ *
+ * Such rows may be service rows, test rows, or uncoded rows that should not
+ * appear in client-facing tables.
+ */
+function checkSuspiciousAll100Rows(values, rowDiagnostics) {
+  const issues = [];
+
+  for (const row of rowDiagnostics) {
+    if (row.rowType === "empty") continue;
+    if (METRIC_SERVICE_ROW_TYPES.has(row.rowType)) continue;
+
+    const rawRow = values && values[row.rowIndex];
+    if (!rawRow) continue;
+
+    let nonEmptyCount = 0;
+    let all100Count = 0;
+
+    for (const v of rawRow) {
+      if (v === null || v === undefined || v === "") continue;
+      const s = String(v).trim();
+      const numStr = s.endsWith("%")
+        ? s.slice(0, -1).trim().replace(",", ".")
+        : s.replace(",", ".");
+      if (Number.isNaN(Number(numStr))) continue;
+      nonEmptyCount++;
+      if (cellLooksLike100Percent(v)) all100Count++;
+    }
+
+    if (nonEmptyCount < ALL_100_MIN_COLUMNS) continue;
+    if (all100Count / nonEmptyCount < ALL_100_MIN_FRACTION) continue;
+
+    issues.push({
+      code: "SUSPICIOUS_ALL_100_ROW",
+      severity: "warning",
+      message:
+        `Row ${row.rowIndex + 1}: label "${row.label || "(no label)"}" contains 100% or equivalent ` +
+        `across ${all100Count} of ${nonEmptyCount} column(s). ` +
+        `May be a service, test, or uncoded row that should be checked before client delivery.`,
+      rowIndex: row.rowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: {
+        label: row.label,
+        all100Count,
+        totalNonEmpty: nonEmptyCount,
+        rowType: row.rowType,
+      },
+    });
+  }
+
+  return issues;
+}
+
+/** Returns true for labels that look like a numeric range: "20-29", "18–24", "25—34". */
+function looksLikeNumericRange(label) {
+  const s = String(label).trim();
+  return /^\d+[\-–—]\d+$/.test(s);
+}
+
+/** Returns true for labels that look like a single numeric value: "42", "3.5", "61,00". */
+function looksLikeSingleNumericValue(label) {
   const s = String(label).trim();
   if (/^\d+$/.test(s)) return true;
-  if (/^\d+[.,]\d+$/.test(s)) return true;
-  if (/^\d+[\-–—]\d+$/.test(s)) return true;
+  if (/^\d+\.\d+$/.test(s)) return true;
+  if (/^\d+,\d+$/.test(s)) return true;
+  return false;
+}
+
+/**
+ * Returns true if rawValue looks like 100%, respecting the storage scale.
+ *
+ * Percent-string cells (e.g. "100%", "100,0%"):
+ *   Strip "%" and check the display number is approximately 100 (99.5–100.5).
+ *   "1%" → display value 1 → false.  "100%" → display value 100 → true.
+ *
+ * Numeric values (plain numbers or numeric strings without "%"):
+ *   Check percent scale (≈100) OR share scale (≈1.0).
+ *   1 → true (Excel stores 100% as 1.0 in share/decimal scale).
+ *   100 → true.  0.5 → false.  1 from "1%" is never reached here.
+ */
+function cellLooksLike100Percent(rawValue) {
+  if (rawValue === null || rawValue === undefined || rawValue === "") return false;
+  const s = String(rawValue).trim();
+  if (s.endsWith("%")) {
+    const n = Number(s.slice(0, -1).trim().replace(",", "."));
+    return !Number.isNaN(n) && n >= 99.5 && n <= 100.5;
+  }
+  const n = Number(s.replace(",", "."));
+  if (Number.isNaN(n)) return false;
+  return (n >= 99.5 && n <= 100.5) || (n >= 0.995 && n <= 1.005);
+}
+
+/**
+ * Returns true if the row at arrayIndex sits within a numeric category block.
+ *
+ * A category block is detected when at least one neighbor within ±2 positions
+ * has a label that looks like either:
+ * - a numeric range ("20-29", "30-39") — age/category ranges, or
+ * - a single numeric value ("1", "2", "3.5") — NPS/rating scale rows.
+ *
+ * Used to suppress NUMERIC_LIKE_LABEL and SUSPICIOUS_NUMERIC_LABEL for labels
+ * that are part of an ordered scale or category group.
+ */
+function isInNumericRangeCategoryBlock(rowDiagnostics, arrayIndex) {
+  for (let delta = -2; delta <= 2; delta++) {
+    if (delta === 0) continue;
+    const ni = arrayIndex + delta;
+    if (ni < 0 || ni >= rowDiagnostics.length) continue;
+    const neighbor = rowDiagnostics[ni];
+    if (!neighbor || !neighbor.label) continue;
+    if (looksLikeNumericRange(neighbor.label)) return true;
+    if (looksLikeSingleNumericValue(neighbor.label)) return true;
+  }
+  return false;
+}
+
+/**
+ * Flags rows that contain at least 2 non-empty numeric cells but have no meaningful
+ * row label — i.e. the label is empty, whitespace-only, or composed entirely of
+ * symbol-only placeholder characters such as "-", "—", ".", "*".
+ *
+ * Skips recognized metric/service rows to avoid noise on intentionally label-free
+ * support rows.
+ */
+function checkMissingRowLabelWithData(values, rowDiagnostics) {
+  const issues = [];
+
+  for (const row of rowDiagnostics) {
+    if (METRIC_SERVICE_ROW_TYPES.has(row.rowType)) continue;
+    if (!isEmptyOrSymbolOnlyLabel(row.primaryLabel)) continue;
+
+    const rowNumbers = extractRowNumbers(values, row.rowIndex);
+    if (rowNumbers.filter((v) => v !== null).length < 2) continue;
+
+    const displayLabel = row.primaryLabel || row.label || "(empty)";
+    issues.push({
+      code: "MISSING_ROW_LABEL_WITH_DATA",
+      severity: "warning",
+      message: `Row ${row.rowIndex + 1}: row has data values but no meaningful label (label: "${displayLabel}"). Check that this row is not missing a category label.`,
+      rowIndex: row.rowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: { primaryLabel: row.primaryLabel, label: row.label, rowType: row.rowType },
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Flags rows whose label contains obvious spreadsheet formula errors (#N/A, #VALUE!,
+ * etc.) or programming error strings (null, NaN, undefined, [object Object]).
+ *
+ * Applies to all non-empty rows regardless of rowType — an error artifact as a
+ * label is always suspicious.
+ */
+function checkSuspiciousErrorLabels(rowDiagnostics) {
+  const issues = [];
+
+  for (const row of rowDiagnostics) {
+    if (row.rowType === "empty") continue;
+    if (!row.label) continue;
+
+    const s = String(row.label).trim();
+    if (!ERROR_LABEL_PATTERNS.some((p) => p.test(s))) continue;
+
+    issues.push({
+      code: "SUSPICIOUS_ERROR_LABEL",
+      severity: "warning",
+      message: `Row ${row.rowIndex + 1}: label "${row.label}" looks like a spreadsheet or programming error value and is almost certainly not a client-facing category.`,
+      rowIndex: row.rowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: { label: row.label, rowType: row.rowType },
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Flags rows whose label matches a known placeholder or test-row keyword in
+ * English or Russian.
+ *
+ * Uses word-boundary matching to avoid catching the keyword as part of a longer
+ * legitimate label (e.g. "placeholder" fires, "placeholder value" also fires,
+ * but "temperature" does not fire on "temp").
+ *
+ * Skips recognized metric/service rows.
+ */
+function checkSuspiciousPlaceholderLabels(rowDiagnostics) {
+  const issues = [];
+
+  for (const row of rowDiagnostics) {
+    if (row.rowType === "empty") continue;
+    if (!row.label) continue;
+    if (METRIC_SERVICE_ROW_TYPES.has(row.rowType)) continue;
+
+    const s = String(row.label).trim();
+    if (!PLACEHOLDER_LABEL_PATTERNS.some((p) => p.test(s))) continue;
+
+    issues.push({
+      code: "SUSPICIOUS_PLACEHOLDER_LABEL",
+      severity: "warning",
+      message: `Row ${row.rowIndex + 1}: label "${row.label}" looks like a test or placeholder row. Check that this row has not been accidentally left in the client table.`,
+      rowIndex: row.rowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: { label: row.label, rowType: row.rowType },
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Flags rows whose label looks like a raw variable or code name rather than a
+ * human-readable category label.
+ *
+ * Heuristic:
+ * - label contains an underscore (strong code-naming signal), OR
+ * - label starts with 1–4 letters followed by 2+ digits (e.g. q12, var005), OR
+ * - label follows an alternating letter-digit-letter-digit pattern (e.g. d1r3).
+ * - label must have no spaces (code names do not have spaces).
+ *
+ * Skips recognized metric/service rows (their labels are already validated by
+ * the detector) and rows with empty labels.
+ */
+function checkSuspiciousCodeLikeLabels(rowDiagnostics) {
+  const issues = [];
+
+  for (const row of rowDiagnostics) {
+    if (row.rowType === "empty") continue;
+    if (METRIC_SERVICE_ROW_TYPES.has(row.rowType)) continue;
+    if (!row.label) continue;
+    if (!looksLikeCodeLabel(row.label)) continue;
+
+    issues.push({
+      code: "SUSPICIOUS_CODE_LIKE_LABEL",
+      severity: "warning",
+      message: `Row ${row.rowIndex + 1}: label "${row.label}" looks like a variable or code name rather than a client-facing category. Check that this row label has not been left uncoded.`,
+      rowIndex: row.rowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: { label: row.label, rowType: row.rowType },
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Returns true when the label has no meaningful alphanumeric content.
+ * Catches empty strings, whitespace-only strings, and symbol-only placeholders
+ * such as "-", "—", ".", "*", "---", "?".
+ */
+function isEmptyOrSymbolOnlyLabel(label) {
+  if (!label || !String(label).trim()) return true;
+  return !/[a-zA-Zа-яА-ЯёЁ0-9]/.test(String(label).trim());
+}
+
+/**
+ * Returns true when the label looks like a variable or code name.
+ * No spaces are allowed (code names don't have spaces).
+ *
+ * Triggers on:
+ * - underscore AND a code-like digit pattern:
+ *     ends with _digits  → q1_1, Q12_3, var_005, brand_99
+ *     starts with ≤3 letters + digits + underscore  → q1_, Q12_
+ *   Underscore alone is NOT enough — labels like Top_2_Box, No_answer, Brand_A
+ *   do not end with digits or start with a short letter+digit prefix.
+ * - 1–4 letters + 2+ digits (no underscore): q12, var005, brand99
+ * - alternating letter-digit-letter-digit: d1r3, b2c4
+ */
+function looksLikeCodeLabel(label) {
+  const s = String(label).trim();
+  if (/\s/.test(s)) return false;
+  if (s.length < 2) return false;
+  if (/_/.test(s)) {
+    // Require a code-like digit pattern alongside the underscore.
+    return /_\d+$/.test(s) || /^[a-zA-Z]{1,3}\d+_/.test(s);
+  }
+  if (/^[a-zA-Z]{1,4}\d{2,}/.test(s)) return true;
+  if (/^[a-zA-Z]\d[a-zA-Z]\d/.test(s)) return true;
   return false;
 }
 
@@ -562,6 +1153,280 @@ function checkNpsMismatch(values, calculationBlocks) {
   return issues;
 }
 
+/**
+ * Flags calculation blocks where only a Weighted Base was available.
+ *
+ * Weighted base is the lowest-priority fallback in the selection order:
+ * Effective > Unweighted > plain Base > Weighted.
+ * When it is the selected base, the analyst should verify no better base exists.
+ */
+function checkWeightedBaseFallback(calculationBlocks) {
+  const issues = [];
+  const seenBaseRows = new Set();
+
+  for (const block of calculationBlocks) {
+    if (block.baseSubtype !== "weighted") continue;
+    if (block.baseRowIndex === null) continue;
+    if (seenBaseRows.has(block.baseRowIndex)) continue;
+    seenBaseRows.add(block.baseRowIndex);
+
+    issues.push({
+      code: "WEIGHTED_BASE_FALLBACK",
+      severity: "warning",
+      message:
+        `Row ${block.baseRowIndex + 1}: Weighted Base selected as fallback — ` +
+        `no Effective or Unweighted Base was found. ` +
+        `Verify that this is the intended base for significance testing.`,
+      rowIndex: block.baseRowIndex,
+      columnIndex: null,
+      relatedRowIndexes: [],
+      relatedColumnIndexes: [],
+      evidence: { baseRowIndex: block.baseRowIndex, baseSubtype: "weighted" },
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Emits PREFERRED_BASE_NOT_FOUND when the user requested a specific base type
+ * (preferredBase !== "auto") but no matching base was found in the table, so
+ * the code fell back to auto-priority selection.
+ *
+ * Runs against rawBlocks (pre-filter) to cover blocks where the base row is
+ * present but has no usable numeric data (those blocks are dropped from
+ * calculationBlocks by blockHasPreviewEvidence but the fallback still occurred).
+ * Deduplicates by base row index.
+ */
+function checkPreferredBaseNotFound(rawBlocks, settings) {
+  const issues = [];
+  const preferredBase = settings?.preferredBase;
+
+  // Only relevant when the user has picked a specific type.
+  if (!preferredBase || preferredBase === "auto") return issues;
+
+  const seenBaseRows = new Set();
+
+  for (const block of rawBlocks || []) {
+    if (block.baseRowIndex == null) continue;
+    if (seenBaseRows.has(block.baseRowIndex)) continue;
+    seenBaseRows.add(block.baseRowIndex);
+
+    // Determine whether the auto-selected base matches the preference.
+    const subtype = block.baseSubtype; // undefined = plain Base
+    const matches =
+      preferredBase === "plain"
+        ? subtype === undefined || subtype === null
+        : subtype === preferredBase;
+
+    if (!matches) {
+      const actualLabel = subtype ? `${subtype} Base` : "plain Base";
+      issues.push({
+        code: "PREFERRED_BASE_NOT_FOUND",
+        severity: "warning",
+        message:
+          `Row ${block.baseRowIndex + 1}: preferred base type '${preferredBase}' not found — ` +
+          `using auto-selected base (${actualLabel}) instead.`,
+        rowIndex: block.baseRowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: {
+          preferredBase,
+          actualBaseSubtype: subtype ?? null,
+          baseRowIndex: block.baseRowIndex,
+        },
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Checks that the selected base row for each raw block candidate contains usable values.
+ *
+ * Runs against rawBlocks (before blockHasPreviewEvidence filtering) so that a
+ * blank or non-numeric base row is flagged even when the block is later dropped
+ * from the final calculationBlocks list.
+ *
+ * Deduplicates by base row index — a shared base row is only inspected once.
+ *
+ * Issue codes and severities:
+ *   BASE_NO_VALID_VALUES     — critical: row has no numeric positive values at all
+ *   BASE_BLANK_VALUES        — warning: some cells are blank (other columns still valid)
+ *   BASE_NON_NUMERIC_VALUES  — warning: some cells are non-numeric (other columns still valid)
+ *   BASE_NON_POSITIVE_VALUES — warning: some cells are zero or negative (other columns still valid)
+ *   BASE_BELOW_THRESHOLD     — warning: some cells are below settings.smallBaseThreshold
+ */
+function checkSelectedBaseValidity(values, blocks, settings, trailingBodyRows) {
+  const issues = [];
+  const seenBaseRows = new Set();
+
+  const threshold =
+    settings && typeof settings.smallBaseThreshold === "number"
+      ? settings.smallBaseThreshold
+      : null;
+
+  for (const block of blocks || []) {
+    // Use == null to handle both null and undefined — raw blocks are not yet
+    // normalised so baseRowIndex may be undefined rather than null.
+    if (block.baseRowIndex == null) continue;
+    if (seenBaseRows.has(block.baseRowIndex)) continue;
+    seenBaseRows.add(block.baseRowIndex);
+
+    const rowIndex = block.baseRowIndex;
+    const rawRow = Array.isArray(values) ? values[rowIndex] : null;
+    if (!Array.isArray(rawRow) || rawRow.length === 0) continue;
+
+    let blankCount = 0;
+    let nonNumericCount = 0;
+    let nonPositiveCount = 0;
+    let belowThresholdCount = 0;
+
+    for (const cell of rawRow) {
+      if (cell === null || cell === undefined || cell === "") {
+        blankCount++;
+        continue;
+      }
+      const s = String(cell).trim();
+      if (!s) {
+        blankCount++;
+        continue;
+      }
+      const n = Number(s.replace(",", "."));
+      if (Number.isNaN(n)) {
+        nonNumericCount++;
+        continue;
+      }
+      if (n <= 0) {
+        nonPositiveCount++;
+        continue;
+      }
+      // n is positive numeric
+      if (threshold !== null && n < threshold) {
+        belowThresholdCount++;
+      }
+    }
+
+    const totalCount = rawRow.length;
+    const invalidCount = blankCount + nonNumericCount + nonPositiveCount;
+    const rowLabel = `Row ${rowIndex + 1}`;
+
+    if (invalidCount === totalCount) {
+      // No usable base value in any column — significance is impossible.
+      issues.push({
+        code: "BASE_NO_VALID_VALUES",
+        severity: "critical",
+        message:
+          `${rowLabel}: selected base row has no valid numeric positive values ` +
+          `across all ${totalCount} column(s). Significance cannot be calculated.`,
+        rowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: { blankCount, nonNumericCount, nonPositiveCount, totalCount },
+      });
+      continue;
+    }
+
+    // Partial issues — some valid columns remain.
+    if (blankCount > 0) {
+      issues.push({
+        code: "BASE_BLANK_VALUES",
+        severity: "warning",
+        message:
+          `${rowLabel}: selected base row has ${blankCount} blank cell(s) out of ${totalCount}. ` +
+          `Significance cannot be calculated for those columns.`,
+        rowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: { blankCount, totalCount },
+      });
+    }
+
+    if (nonNumericCount > 0) {
+      issues.push({
+        code: "BASE_NON_NUMERIC_VALUES",
+        severity: "warning",
+        message:
+          `${rowLabel}: selected base row has ${nonNumericCount} non-numeric cell(s) out of ${totalCount}. ` +
+          `Significance cannot be calculated for those columns.`,
+        rowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: { nonNumericCount, totalCount },
+      });
+    }
+
+    if (nonPositiveCount > 0) {
+      issues.push({
+        code: "BASE_NON_POSITIVE_VALUES",
+        severity: "warning",
+        message:
+          `${rowLabel}: selected base row has ${nonPositiveCount} zero or negative value(s) out of ${totalCount}. ` +
+          `Significance cannot be calculated for those columns.`,
+        rowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: { nonPositiveCount, totalCount },
+      });
+    }
+
+    if (belowThresholdCount > 0) {
+      issues.push({
+        code: "BASE_BELOW_THRESHOLD",
+        severity: "warning",
+        message:
+          `${rowLabel}: selected base row has ${belowThresholdCount} column(s) with base below ` +
+          `the small-base threshold (${threshold}). Results for those columns may be unreliable.`,
+        rowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: { belowThresholdCount, threshold, totalCount },
+      });
+    }
+  }
+
+  // Secondary scan: trailing rows stripped by the normalizer.
+  // findLastDataBodyRow trims rows whose data is all-blank or all-non-numeric,
+  // so an invalid base row may not appear in values or rawBlocks at all.
+  // trailingBodyRows.leftLabelValues exposes those rows for label-based detection.
+  const trailingLeft = trailingBodyRows?.leftLabelValues;
+  if (Array.isArray(trailingLeft) && trailingLeft.length > 0) {
+    const valuesLength = Array.isArray(values) ? values.length : 0;
+    for (let i = 0; i < trailingLeft.length; i++) {
+      const labelRow = trailingLeft[i];
+      const rawLabel = Array.isArray(labelRow) ? labelRow[0] : undefined;
+      const classification = classifyMetricLabel(rawLabel);
+      if (classification?.rowType !== "base") continue;
+      const virtualRowIndex = valuesLength + i;
+      if (seenBaseRows.has(virtualRowIndex)) continue;
+      seenBaseRows.add(virtualRowIndex);
+      const trailingDataRow = trailingBodyRows.values?.[i];
+      const colCount = Array.isArray(trailingDataRow) ? trailingDataRow.length : 0;
+      issues.push({
+        code: "BASE_NO_VALID_VALUES",
+        severity: "critical",
+        message:
+          `Row ${virtualRowIndex + 1}: selected base row has no valid numeric positive values ` +
+          `across all ${colCount} column(s). Significance cannot be calculated.`,
+        rowIndex: virtualRowIndex,
+        columnIndex: null,
+        relatedRowIndexes: [],
+        relatedColumnIndexes: [],
+        evidence: { blankCount: colCount, nonNumericCount: 0, nonPositiveCount: 0, totalCount: colCount },
+      });
+    }
+  }
+
+  return issues;
+}
+
 /** Reads a row from values as an array of numbers (null for non-numeric cells). */
 function extractRowNumbers(values, rowIndex) {
   if (!values || rowIndex == null || !values[rowIndex]) return [];
@@ -587,6 +1452,34 @@ function buildQualitySummary(issues) {
   };
 }
 
+function buildUserVisibleIssues(issues) {
+  return [...(issues || [])]
+    .filter((issue) => issue?.severity === "critical" || issue?.severity === "warning")
+    .sort((left, right) => {
+      const severityRank = { critical: 0, warning: 1 };
+      const severityDelta =
+        (severityRank[left.severity] ?? Number.MAX_SAFE_INTEGER) -
+        (severityRank[right.severity] ?? Number.MAX_SAFE_INTEGER);
+      if (severityDelta !== 0) {
+        return severityDelta;
+      }
+
+      const leftRow = left.rowIndex ?? Number.MAX_SAFE_INTEGER;
+      const rightRow = right.rowIndex ?? Number.MAX_SAFE_INTEGER;
+      if (leftRow !== rightRow) {
+        return leftRow - rightRow;
+      }
+
+      const leftCol = left.columnIndex ?? Number.MAX_SAFE_INTEGER;
+      const rightCol = right.columnIndex ?? Number.MAX_SAFE_INTEGER;
+      if (leftCol !== rightCol) {
+        return leftCol - rightCol;
+      }
+
+      return String(left.code || "").localeCompare(String(right.code || ""));
+    });
+}
+
 // ─── Summary ───────────────────────────────────────────────────────────────
 
 function buildSummary(values, rowDiagnostics, calculationBlocks, bannerStructure) {
@@ -599,10 +1492,24 @@ function buildSummary(values, rowDiagnostics, calculationBlocks, bannerStructure
 
   const baseRows = rowDiagnostics.filter((r) => r.rowType === "base").length;
 
-  const hasNps = calculationBlocks.some(
-    (b) => b.metricType === "npsStructure" || b.metricType === "npsSpread"
-  );
-  const hasMeans = calculationBlocks.some((b) => b.metricType === "mean");
+  // Metric-type flags: rowDiagnostics-first so that detected rows with no
+  // accompanying base still surface in Full Check reporting.  calculationBlocks
+  // serves as fallback for edge cases where block assembly succeeds without an
+  // explicitly-typed diagnostic row (e.g. unknownText value rows that assemble
+  // into a proportion block when a base row is present).
+  const hasProportions =
+    rowDiagnostics.some(
+      (r) => r.rowType === "proportion" || r.rowType === "promoters" || r.rowType === "detractors"
+    ) ||
+    calculationBlocks.some((b) => b.metricType === "proportion");
+
+  const hasNps =
+    rowDiagnostics.some((r) => r.rowType === "nps") ||
+    calculationBlocks.some((b) => b.metricType === "npsStructure" || b.metricType === "npsSpread");
+
+  const hasMeans =
+    rowDiagnostics.some((r) => r.rowType === "mean") ||
+    calculationBlocks.some((b) => b.metricType === "mean");
 
   const hasBanner = !!(bannerStructure && bannerStructure.isDetected);
   const hasGlobalTotal = !!(bannerStructure && bannerStructure.globalTotalColumnIndex !== null);
@@ -614,6 +1521,7 @@ function buildSummary(values, rowDiagnostics, calculationBlocks, bannerStructure
     detectedMetricRows,
     detectedBlocks: calculationBlocks.length,
     baseRows,
+    hasProportions,
     hasNps,
     hasMeans,
     hasBanner,
