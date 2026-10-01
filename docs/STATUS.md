@@ -15,6 +15,8 @@ The release Run path now clears old banner markers above the write target before
 
 Manual Run and Clear now catch Excel errors for non-contiguous selections and return before worksheet writes. Automated build/manifest checks passed; the unsupported-selection behavior still needs Excel smoke verification.
 
+Manual Clear now excludes mixed text/numeric row-label columns using the same classifier as Run. This protects labels from marker stripping and formatting cleanup; Excel smoke verification remains pending.
+
 The add-in currently supports:
 
 - automatic metric block detection;

@@ -15,6 +15,7 @@
 - [x] banner-aware stabilization
 - [x] Clear stale banner markers before writing fresh Run letters; Excel smoke verification pending
 - [x] Guard manual Run and Clear against non-contiguous selections; Excel smoke verification pending
+- [x] Keep mixed row-label columns outside the manual Clear target; Excel smoke verification pending
 - [x] numeric output preservation
 - [x] Clear significance numeric restoration
 - [x] taskpane primary action layout improvement

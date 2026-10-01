@@ -45,6 +45,7 @@ Automatic worksheet/workbook scanning is not implemented and should not be added
 - Manual Run and Clear must stop with a clear message when Excel has a non-contiguous multi-area selection; they must not reach any worksheet mutation.
 - Row labels are read from cells to the left of the selection.
 - Banner/header rows are read from rows above the selection.
+- Clear must resolve the same data body as Run and leave row-label columns untouched.
 - Current Run behavior must remain stable unless the task explicitly changes it.
 - Preview/check-table features must remain read-only unless explicitly wired.
 - Warning-only guardrails must not block Run unless explicitly requested.

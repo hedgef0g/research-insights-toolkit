@@ -34,7 +34,11 @@ import { detectBannerStructure, formatBannerDetectionDiagnostics } from "../core
 
 import { normalizeSelectedRange } from "../core/range-normalizer";
 
-import { interpretSelectedRange, detectLeadingEmptyColumns } from "./selected-range-interpreter";
+import {
+  interpretSelectedRange,
+  detectEmbeddedLabelColumns,
+  detectLeadingEmptyColumns,
+} from "./selected-range-interpreter";
 
 
 const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
@@ -958,15 +962,29 @@ async function clearSignificanceFromSelection() {
       const bodyRowCount = normalized.valuesForCalculation.length;
       let bodyColCount = normalized.valuesForCalculation[0].length;
       let effectiveClearColOffset = normalized.dataColOffset;
+      let textForLeadingEmptyCheck = normalized.textForCalculation;
+
+      // Match Run's secondary label-column detection when the normalizer
+      // leaves a mixed text/numeric row-label column inside the data body.
+      if (normalized.dataColOffset === 0) {
+        const additionalLabelCols = detectEmbeddedLabelColumns(
+          normalized.valuesForCalculation
+        );
+        if (additionalLabelCols > 0) {
+          effectiveClearColOffset += additionalLabelCols;
+          bodyColCount -= additionalLabelCols;
+          textForLeadingEmptyCheck = normalized.textForCalculation.map((row) =>
+            row.slice(additionalLabelCols)
+          );
+        }
+      }
 
       // Mirror the tertiary strip in interpretSelectedRange State 2: the
       // normalizer may leave leading all-blank helper columns (e.g. column B
       // in a mean-only table) inside the normalized body.  Clear must exclude
       // those same columns so it does not widen the clear target beyond the
       // real data body.
-      const clearLeadingEmptyCols = detectLeadingEmptyColumns(
-        normalized.textForCalculation
-      );
+      const clearLeadingEmptyCols = detectLeadingEmptyColumns(textForLeadingEmptyCheck);
       if (clearLeadingEmptyCols > 0) {
         bodyColCount -= clearLeadingEmptyCols;
         effectiveClearColOffset += clearLeadingEmptyCols;
@@ -986,14 +1004,18 @@ async function clearSignificanceFromSelection() {
       // clear target so that Clear does not remove fill/formatting from helper
       // cells.  Uses the same detectLeadingEmptyColumns function as Run's
       // interpretSelectedRange passThrough path.
-      const leadingBlankColsForClear = detectLeadingEmptyColumns(selectedText);
+      const embeddedLabelColsForClear = detectEmbeddedLabelColumns(cleanedValues);
+      const leadingBlankColsForClear =
+        embeddedLabelColsForClear === 0 ? detectLeadingEmptyColumns(selectedText) : 0;
+      const skipLeftCols =
+        embeddedLabelColsForClear > 0 ? embeddedLabelColsForClear : leadingBlankColsForClear;
 
-      if (leadingBlankColsForClear > 0) {
+      if (skipLeftCols > 0) {
         clearTargetRange = selectedRange
-          .getCell(0, leadingBlankColsForClear)
+          .getCell(0, skipLeftCols)
           .getResizedRange(
             selectedRange.rowCount - 1,
-            selectedRange.columnCount - leadingBlankColsForClear - 1
+            selectedRange.columnCount - skipLeftCols - 1
           );
       } else {
         clearTargetRange = selectedRange;
