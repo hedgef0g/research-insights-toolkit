@@ -14,7 +14,7 @@ Task-specific instructions, GitHub Issues, and direct user instructions override
 - Claude Code: primary coding agent.
 - Codex: coding/review fallback and regression-focused reviewer.
 - Jules: documentation and process PRs.
-- Human owner: final merge decision and Excel smoke testing.
+- Human owner: final merge decision; Excel smoke testing is performed on `main` and used to validate behavior-preserving backports.
 
 Agents must not decide that a task is complete without human review.
 
@@ -95,6 +95,7 @@ Only modify high-risk files when the task or issue explicitly allows it.
 - Multi-row and merged-like banners are supported through banner detection and taskpane banner-letter placement logic.
 - Banner letters are separate from data-cell markers.
 - Before writing fresh banner letters, clear stale trailing markers from the banner rows above the write target so vertically merged headers do not retain letters from earlier runs.
+- Total-like labels in the nearest visible upper banner row must be classified as Total when the lower banner label is sparse or empty.
 - Do not change banner detection, banner-letter writing, or comparison pair logic unless the task explicitly allows it.
 
 ## NPS expectations

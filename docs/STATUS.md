@@ -11,11 +11,13 @@ Research Insights Toolkit is a platform-independent product. Excel is the first 
 - The support page submits tickets through Web3Forms. GitHub Actions uses the `WEB3FORMS_ACCESS_KEY` repository secret; the support inbox address is not embedded in public pages. Verify a browser submission after this release deploys before treating delivery as confirmed.
 - Support and privacy pages disclose that form contents go to Web3Forms. Workbook contents are not requested by the support form.
 
-The release Run path now clears old banner markers above the write target before writing new letters, preventing vertically merged headers from retaining stale markers after reruns. Webpack build and manifest validation passed; Excel smoke verification remains pending.
+The release Run path clears old banner markers above the write target before writing new letters, preventing vertically merged headers from retaining stale markers after reruns. The behavior was smoke-tested on `main`; release build, manifest validation, and Pages deployment passed.
 
-Manual Run and Clear now catch Excel errors for non-contiguous selections and return before worksheet writes. Automated build/manifest checks passed; the unsupported-selection behavior still needs Excel smoke verification.
+Manual Run and Clear catch Excel errors for non-contiguous selections and return before worksheet writes. Smoke testing was performed on `main`; release build, manifest validation, and Pages deployment passed.
 
-Manual Clear now excludes mixed text/numeric row-label columns using the same classifier as Run. This protects labels from marker stripping and formatting cleanup; Excel smoke verification remains pending.
+Manual Clear excludes mixed text/numeric row-label columns using the same classifier as Run. This protects labels from marker stripping and formatting cleanup; smoke testing was performed on `main`, and the release build, manifest validation, and Pages deployment passed.
+
+Banner detection now recognizes a Total label in a visible upper banner row when the lower label is empty or sparse, and associates local Totals with the adjacent named group. The change follows the banner smoke scenarios exercised on `main`; release build and manifest validation passed.
 
 The add-in currently supports:
 

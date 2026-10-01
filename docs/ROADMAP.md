@@ -13,9 +13,10 @@
 - [x] read-only table preview model exists as a core model but is not yet wired into UI
 - [x] shared text normalization utilities exist
 - [x] banner-aware stabilization
-- [x] Clear stale banner markers before writing fresh Run letters; Excel smoke verification pending
-- [x] Guard manual Run and Clear against non-contiguous selections; Excel smoke verification pending
-- [x] Keep mixed row-label columns outside the manual Clear target; Excel smoke verification pending
+- [x] Clear stale banner markers before writing fresh Run letters (smoke-tested on `main`)
+- [x] Guard manual Run and Clear against non-contiguous selections (smoke-tested on `main`)
+- [x] Keep mixed row-label columns outside the manual Clear target (smoke-tested on `main`)
+- [x] Recognize sparse upper-level Total labels in banner detection (smoke-tested on `main`)
 - [x] numeric output preservation
 - [x] Clear significance numeric restoration
 - [x] taskpane primary action layout improvement
