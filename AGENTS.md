@@ -48,6 +48,8 @@ Automatic worksheet/workbook scanning is not implemented and should not be added
 - Preview/check-table features must remain read-only unless explicitly wired.
 - Warning-only guardrails must not block Run unless explicitly requested.
 - Do not auto-trim selected ranges unless explicitly requested.
+- Manual Run and Clear must stop with a clear message when Excel has a non-contiguous multi-area selection; they must not reach any worksheet mutation.
+- Clear must resolve the same data body as Run and leave row-label columns untouched.
 
 ## High-risk files
 
@@ -114,6 +116,9 @@ to "just make it work" — extend the normalization spec instead. See
 - Multi-row and merged-like banners are supported through banner detection and taskpane banner-letter placement logic.
 - Banner letters are separate from data-cell markers.
 - Do not change banner detection, banner-letter writing, or comparison pair logic unless the task explicitly allows it.
+- Automatic wave detection must recognize compact wave values such as `W18`, `w-18`, and `w18 (month)` in both the lower banner row and upper scan rows.
+- Before writing fresh banner letters, clear stale trailing markers from the banner rows above the write target so vertically merged headers do not retain letters from earlier runs.
+- Total-like labels in the nearest visible upper banner row must be classified as Total when the lower banner label is sparse or empty.
 
 ## NPS expectations
 
