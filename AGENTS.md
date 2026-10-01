@@ -92,6 +92,7 @@ Only modify high-risk files when the task or issue explicitly allows it.
 - Banner-aware comparisons must preserve the manual selected-range model.
 - Multi-row and merged-like banners are supported through banner detection and taskpane banner-letter placement logic.
 - Banner letters are separate from data-cell markers.
+- Before writing fresh banner letters, clear stale trailing markers from the banner rows above the write target so vertically merged headers do not retain letters from earlier runs.
 - Do not change banner detection, banner-letter writing, or comparison pair logic unless the task explicitly allows it.
 
 ## NPS expectations

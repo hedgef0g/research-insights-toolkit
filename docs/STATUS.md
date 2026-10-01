@@ -11,6 +11,8 @@ Research Insights Toolkit is a platform-independent product. Excel is the first 
 - The support page submits tickets through Web3Forms. GitHub Actions uses the `WEB3FORMS_ACCESS_KEY` repository secret; the support inbox address is not embedded in public pages. Verify a browser submission after this release deploys before treating delivery as confirmed.
 - Support and privacy pages disclose that form contents go to Web3Forms. Workbook contents are not requested by the support form.
 
+The release Run path now clears old banner markers above the write target before writing new letters, preventing vertically merged headers from retaining stale markers after reruns. Webpack build and manifest validation passed; Excel smoke verification remains pending.
+
 The add-in currently supports:
 
 - automatic metric block detection;

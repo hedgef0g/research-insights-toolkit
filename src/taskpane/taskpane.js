@@ -789,6 +789,11 @@ async function runSignificanceFromSelection() {
         writeTargetRange.columnIndex
       );
 
+      // Remove prior banner markers before writing fresh ones. Vertically
+      // merged header cells can otherwise retain markers from an earlier run
+      // when the current banner structure targets different cells.
+      await clearBannerMarkersAboveRange(context, writeTargetRange);
+
       if (calculationSettings.respectBannerStructure && bannerStructure) {
         await writeBannerMarkersAboveSelectedRangeUsingBannerStructure(
           context,

@@ -13,6 +13,7 @@
 - [x] read-only table preview model exists as a core model but is not yet wired into UI
 - [x] shared text normalization utilities exist
 - [x] banner-aware stabilization
+- [x] Clear stale banner markers before writing fresh Run letters; Excel smoke verification pending
 - [x] numeric output preservation
 - [x] Clear significance numeric restoration
 - [x] taskpane primary action layout improvement
