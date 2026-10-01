@@ -49,6 +49,9 @@ const USER_VISIBLE_BANNER_MESSAGE_CODES = new Set([
 
 const SELECTED_RANGE_GUARDRAIL_WARNING_TEXT =
   "Похоже, вы выделили лейблы строк или шапку вместе с данными. Сейчас RIT ожидает выделение только числовой части таблицы.";
+const NON_CONTIGUOUS_SELECTION_MESSAGE =
+  "Выделение состоит из нескольких несмежных областей. " +
+  "Для этой операции выберите один непрерывный диапазон или поставьте курсор внутри одной таблицы.";
 
 function formatBannerUserMessages(bannerStructure) {
   if (!bannerStructure || !bannerStructure.messages) {
@@ -544,7 +547,13 @@ function roundGuardrailRatio(value) {
  */
 async function runSignificanceFromSelection() {
   await Excel.run(async (context) => {
-    let selectedRange = context.workbook.getSelectedRange();
+    let selectedRange;
+    try {
+      selectedRange = context.workbook.getSelectedRange();
+    } catch (_selectionErr) {
+      setStatusMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      return;
+    }
 
     const outputElement = document.getElementById("significance-result");
     const calculationSettings = readCalculationSettingsFromPanel();
@@ -579,9 +588,13 @@ async function runSignificanceFromSelection() {
       return;
     }
 
-    selectedRange.load(["address", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
-
-    await context.sync();
+    try {
+      selectedRange.load(["address", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+      await context.sync();
+    } catch (_selectionErr) {
+      setStatusMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      return;
+    }
 
     if (
       calculationSettings.compareWithPreviousColumn &&
@@ -896,14 +909,18 @@ function calculateBlockResults(cleanedValues, calculationBlock, calculationSetti
  */
 async function clearSignificanceFromSelection() {
   await Excel.run(async (context) => {
-    const selectedRange = context.workbook.getSelectedRange();
-
     // Read-only load: needed to decide whether to operate on the whole
     // selection (strict numeric case) or only on the detected data body
     // (forgiving full-table case). No writes happen before the target is known.
-    selectedRange.load(["values", "text"]);
-
-    await context.sync();
+    let selectedRange;
+    try {
+      selectedRange = context.workbook.getSelectedRange();
+      selectedRange.load(["values", "text"]);
+      await context.sync();
+    } catch (_selectionErr) {
+      setStatusMessage(NON_CONTIGUOUS_SELECTION_MESSAGE);
+      return;
+    }
 
     const selectedValues = selectedRange.values;
     const selectedText = selectedRange.text;

@@ -13,6 +13,8 @@ Research Insights Toolkit is a platform-independent product. Excel is the first 
 
 The release Run path now clears old banner markers above the write target before writing new letters, preventing vertically merged headers from retaining stale markers after reruns. Webpack build and manifest validation passed; Excel smoke verification remains pending.
 
+Manual Run and Clear now catch Excel errors for non-contiguous selections and return before worksheet writes. Automated build/manifest checks passed; the unsupported-selection behavior still needs Excel smoke verification.
+
 The add-in currently supports:
 
 - automatic metric block detection;
