@@ -19,6 +19,8 @@ Manual Clear excludes mixed text/numeric row-label columns using the same classi
 
 Banner detection now recognizes a Total label in a visible upper banner row when the lower label is empty or sparse, and associates local Totals with the adjacent named group. The change follows the banner smoke scenarios exercised on `main`; release build and manifest validation passed.
 
+Automatic wave detection recognizes compact wave values (`W18`, `w-18`, `w18 (month)`) in upper banner scan rows as well as the lower row. The scenario was smoke-tested on `main`; release build and manifest validation passed.
+
 The add-in currently supports:
 
 - automatic metric block detection;

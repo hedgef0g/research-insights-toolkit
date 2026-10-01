@@ -94,6 +94,7 @@ Only modify high-risk files when the task or issue explicitly allows it.
 - Banner-aware comparisons must preserve the manual selected-range model.
 - Multi-row and merged-like banners are supported through banner detection and taskpane banner-letter placement logic.
 - Banner letters are separate from data-cell markers.
+- Automatic wave detection must recognize compact wave values such as `W18`, `w-18`, and `w18 (month)` in both the lower banner row and upper scan rows.
 - Before writing fresh banner letters, clear stale trailing markers from the banner rows above the write target so vertically merged headers do not retain letters from earlier runs.
 - Total-like labels in the nearest visible upper banner row must be classified as Total when the lower banner label is sparse or empty.
 - Do not change banner detection, banner-letter writing, or comparison pair logic unless the task explicitly allows it.

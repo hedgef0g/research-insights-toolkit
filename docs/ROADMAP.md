@@ -17,6 +17,7 @@
 - [x] Guard manual Run and Clear against non-contiguous selections (smoke-tested on `main`)
 - [x] Keep mixed row-label columns outside the manual Clear target (smoke-tested on `main`)
 - [x] Recognize sparse upper-level Total labels in banner detection (smoke-tested on `main`)
+- [x] Recognize compact wave-value labels in upper banner rows (smoke-tested on `main`)
 - [x] numeric output preservation
 - [x] Clear significance numeric restoration
 - [x] taskpane primary action layout improvement
