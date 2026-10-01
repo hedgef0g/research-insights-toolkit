@@ -73,6 +73,34 @@ module.exports = async (env, options) => {
               }
             },
           },
+          {
+            from: "docs/install.html",
+            to: "index.html",
+          },
+          {
+            from: "install-windows.ps1",
+            to: "install-windows.ps1",
+          },
+          {
+            from: "install-windows.cmd",
+            to: "install-windows.cmd",
+          },
+          {
+            from: "docs/marketplace/privacy.html",
+            to: "privacy.html",
+          },
+          {
+            from: "docs/marketplace/terms.html",
+            to: "terms.html",
+          },
+          {
+            from: "docs/marketplace/support.html",
+            to: "support.html",
+            transform(content) {
+              const accessKey = process.env.WEB3FORMS_ACCESS_KEY || "";
+              return content.toString().replace("__WEB3FORMS_ACCESS_KEY__", accessKey);
+            },
+          },
         ],
       }),
       new HtmlWebpackPlugin({
